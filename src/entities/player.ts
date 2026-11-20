@@ -11,6 +11,7 @@ import {
   type AABB,
 } from '../core/math';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
+import { createContactShadowTexture } from '../world/textures';
 import type { VehicleState } from './vehicle';
 
 export interface PlayerState {
@@ -23,13 +24,13 @@ export interface PlayerState {
   grounded: boolean;
   sprinting: boolean;
   walkPhase: number;
-  vehicleId: string | null; // null = on foot
+  vehicleId: string | null;
   walkedMeters: number;
 }
 
 export interface FootMoveInput {
-  forward: number; // -1..+1 relative to cameraYaw
-  right: number; // -1..+1 relative to cameraYaw
+  forward: number;
+  right: number;
   sprint: boolean;
   jump: boolean;
   cameraYaw: number;
@@ -66,10 +67,6 @@ export function createInitialPlayerState(startingVehicle: VehicleState | null): 
   };
 }
 
-/**
- * Updates on-foot character locomotion (camera-relative walk/sprint, jump/gravity,
- * terrain height, smooth building collision, and shoreline water safety).
- */
 export function stepPlayerOnFoot(
   p: PlayerState,
   input: FootMoveInput,
@@ -114,7 +111,6 @@ export function stepPlayerOnFoot(
     }
   }
 
-  // Keep player from clipping inside parked cars
   for (const v of vehicles) {
     const d = distXZ(nextX, nextZ, v.x, v.z);
     const minDist = 1.95;
@@ -125,7 +121,6 @@ export function stepPlayerOnFoot(
     }
   }
 
-  // Keep on-foot character safely out of deep ocean water
   if (isDeepWater(nextX, nextZ)) {
     if (!isDeepWater(nextX, prevZ)) {
       nextZ = prevZ;
@@ -140,7 +135,6 @@ export function stepPlayerOnFoot(
   p.x = nextX;
   p.z = nextZ;
 
-  // Jump & gravity
   const groundY = getGroundHeight(p.x, p.z);
   if (p.grounded && input.jump) {
     p.vy = 8.4;
@@ -179,10 +173,6 @@ export function findNearestVehicle(
   return best ? { vehicle: best, dist: bestDist } : null;
 }
 
-/**
- * Finds a clean, collision-free exit point beside a vehicle (driver side first,
- * then passenger side, then rear).
- */
 export function computeSafeExitPosition(
   v: VehicleState,
   colliders: AABB[],
@@ -215,84 +205,217 @@ export function computeSafeExitPosition(
 
 export interface PlayerMeshHandles {
   root: THREE.Group;
-  syncFromState: (state: PlayerState) => void;
+  syncFromState: (state: PlayerState, elapsed?: number) => void;
 }
 
+/**
+ * Anatomically proportioned smooth articulated humanoid character with
+ * capsule/ellipsoid limbs, elbow & knee joints, tailored Miami linen jacket,
+ * reflective aviator sunglasses, and soft ground contact shadow.
+ */
 export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
 
-  // Stylish Miami look: white/coral coastal jacket, dark shades, cyan sneakers
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xe6b593, roughness: 0.72 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xff5e8e, roughness: 0.6 });
-  const jacketMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fc, roughness: 0.55 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1f283d, roughness: 0.75 });
-  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x2cf3ff, roughness: 0.4 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: 0x221b18, roughness: 0.85 });
-  const shadesMat = new THREE.MeshPhysicalMaterial({ color: 0x0a0d14, roughness: 0.1, clearcoat: 1.0 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xdda985, roughness: 0.62 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xe64878, roughness: 0.78 });
+  const jacketMat = new THREE.MeshStandardMaterial({ color: 0xf1efe9, roughness: 0.72 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1e2738, roughness: 0.8 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.45 });
+  const shoeAccentMat = new THREE.MeshStandardMaterial({ color: 0x1dd8eb, roughness: 0.35 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: 0x241a15, roughness: 0.85 });
+  const shadesMat = new THREE.MeshPhysicalMaterial({
+    color: 0x09101a,
+    roughness: 0.06,
+    metalness: 0.4,
+    clearcoat: 1.0,
+    envMapIntensity: 2.0,
+  });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0xd9b36c, metalness: 0.9, roughness: 0.2 });
 
-  // Torso
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.68, 0.3), jacketMat);
-  torso.position.y = 1.16;
-  torso.castShadow = true;
-  root.add(torso);
+  // Soft ground contact shadow
+  const contactShadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.15, 1.15),
+    new THREE.MeshBasicMaterial({
+      map: createContactShadowTexture(),
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.7,
+    }),
+  );
+  contactShadow.rotation.x = -Math.PI * 0.5;
+  contactShadow.position.y = 0.03;
+  root.add(contactShadow);
 
-  const tee = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.62, 0.315), shirtMat);
-  tee.position.y = 1.15;
-  root.add(tee);
+  // Pelvis / hips
+  const pelvis = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.14, 6, 12), pantsMat);
+  pelvis.rotation.z = Math.PI * 0.5;
+  pelvis.position.y = 0.92;
+  pelvis.castShadow = true;
+  body.add(pelvis);
 
-  // Head + sunglasses
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.34, 0.32), skinMat);
-  head.position.y = 1.69;
-  head.castShadow = true;
-  root.add(head);
+  // Upper body group (subtle breathing & lean when sprinting)
+  const upperBody = new THREE.Group();
+  upperBody.position.y = 0.96;
+  body.add(upperBody);
 
-  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.34), hairMat);
-  hair.position.y = 1.86;
-  root.add(hair);
+  // Tapered athletic torso + open tailored blazer panels + inner crew tee
+  const torsoCore = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.165, 0.52, 14), shirtMat);
+  torsoCore.scale.set(1.08, 1, 0.68);
+  torsoCore.position.y = 0.26;
+  torsoCore.castShadow = true;
+  upperBody.add(torsoCore);
 
-  const shades = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.08), shadesMat);
-  shades.position.set(0, 1.71, -0.15);
-  root.add(shades);
+  // Left & right jacket panels + collar
+  for (const side of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.40, 6, 12), jacketMat);
+    panel.scale.set(0.92, 1.0, 0.96);
+    panel.position.set(side * 0.13, 0.25, 0.01);
+    panel.castShadow = true;
+    upperBody.add(panel);
+  }
+  const jacketBack = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.175, 0.50, 14), jacketMat);
+  jacketBack.scale.set(1.1, 1, 0.62);
+  jacketBack.position.set(0, 0.26, 0.03);
+  jacketBack.castShadow = true;
+  upperBody.add(jacketBack);
 
-  // Articulated arms & legs
-  const makeLimb = (w: number, h: number, d: number, mat: THREE.Material, py: number, x: number) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, py, 0);
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    mesh.position.y = -h * 0.5;
-    mesh.castShadow = true;
-    pivot.add(mesh);
-    root.add(pivot);
-    return pivot;
+  // Shoulders
+  const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.34, 6, 12), jacketMat);
+  shoulders.rotation.z = Math.PI * 0.5;
+  shoulders.position.y = 0.49;
+  shoulders.castShadow = true;
+  upperBody.add(shoulders);
+
+  // Neck + sculpted oval head + styled hair + aviator sunglasses
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.068, 0.12, 10), skinMat);
+  neck.position.y = 0.58;
+  upperBody.add(neck);
+
+  const headGroup = new THREE.Group();
+  headGroup.position.y = 0.72;
+  upperBody.add(headGroup);
+
+  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 14), skinMat);
+  cranium.scale.set(0.92, 1.08, 0.98);
+  cranium.castShadow = true;
+  headGroup.add(cranium);
+
+  const hairCrown = new THREE.Mesh(new THREE.SphereGeometry(0.142, 14, 12), hairMat);
+  hairCrown.scale.set(0.95, 0.85, 1.04);
+  hairCrown.position.set(0, 0.055, 0.02);
+  headGroup.add(hairCrown);
+
+  const hairSweep = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.11, 5, 10), hairMat);
+  hairSweep.rotation.z = Math.PI * 0.42;
+  hairSweep.position.set(0.02, 0.12, -0.05);
+  headGroup.add(hairSweep);
+
+  // Aviator sunglasses with gold bridge
+  for (const side of [-0.052, 0.052]) {
+    const lens = new THREE.Mesh(new THREE.SphereGeometry(0.044, 10, 8), shadesMat);
+    lens.scale.set(1.15, 0.78, 0.35);
+    lens.position.set(side, 0.015, -0.125);
+    headGroup.add(lens);
+  }
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.012, 0.02), frameMat);
+  bridge.position.set(0, 0.032, -0.13);
+  headGroup.add(bridge);
+
+  // Articulated Arms (upper arm + elbow pivot + forearm + hand)
+  const makeArm = (side: number) => {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * 0.27, 0.47, 0);
+    upperBody.add(shoulder);
+
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.21, 6, 10), jacketMat);
+    upper.position.y = -0.14;
+    upper.castShadow = true;
+    shoulder.add(upper);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.28;
+    shoulder.add(elbow);
+
+    const lower = new THREE.Mesh(new THREE.CapsuleGeometry(0.052, 0.2, 6, 10), jacketMat);
+    lower.position.y = -0.13;
+    lower.castShadow = true;
+    elbow.add(lower);
+
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 8), skinMat);
+    hand.position.y = -0.27;
+    elbow.add(hand);
+
+    return { shoulder, elbow };
   };
 
-  const leftArm = makeLimb(0.16, 0.58, 0.16, jacketMat, 1.44, -0.36);
-  const rightArm = makeLimb(0.16, 0.58, 0.16, jacketMat, 1.44, 0.36);
-  const leftLeg = makeLimb(0.2, 0.72, 0.2, pantsMat, 0.82, -0.15);
-  const rightLeg = makeLimb(0.2, 0.72, 0.2, pantsMat, 0.82, 0.15);
+  const leftArm = makeArm(-1);
+  const rightArm = makeArm(1);
 
-  const shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.12, 0.28), shoeMat);
-  shoeL.position.set(0, -0.74, -0.04);
-  leftLeg.add(shoeL);
+  // Articulated Legs (thigh + knee pivot + calf + sculpted sneaker)
+  const makeLeg = (side: number) => {
+    const hip = new THREE.Group();
+    hip.position.set(side * 0.115, 0.90, 0);
+    body.add(hip);
 
-  const shoeR = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.12, 0.28), shoeMat);
-  shoeR.position.set(0, -0.74, -0.04);
-  rightLeg.add(shoeR);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.29, 6, 12), pantsMat);
+    thigh.position.y = -0.2;
+    thigh.castShadow = true;
+    hip.add(thigh);
+
+    const knee = new THREE.Group();
+    knee.position.y = -0.42;
+    hip.add(knee);
+
+    const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.064, 0.3, 6, 12), pantsMat);
+    calf.position.y = -0.2;
+    calf.castShadow = true;
+    knee.add(calf);
+
+    // Sculpted sneaker with sole accent
+    const shoeUpper = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.12, 5, 10), shoeMat);
+    shoeUpper.rotation.x = Math.PI * 0.5;
+    shoeUpper.position.set(0, -0.43, -0.045);
+    shoeUpper.castShadow = true;
+    knee.add(shoeUpper);
+
+    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.032, 0.25), shoeAccentMat);
+    sole.position.set(0, -0.465, -0.045);
+    knee.add(sole);
+
+    return { hip, knee };
+  };
+
+  const leftLeg = makeLeg(-1);
+  const rightLeg = makeLeg(1);
 
   scene.add(root);
 
-  const syncFromState = (s: PlayerState) => {
+  const syncFromState = (s: PlayerState, elapsed = 0) => {
     root.visible = s.vehicleId === null;
     if (!root.visible) return;
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
 
-    const swingAmp = clamp(s.speed / 8, 0, 1) * (s.sprinting ? 0.82 : 0.52);
-    const swing = Math.sin(s.walkPhase) * swingAmp;
-    leftLeg.rotation.x = swing;
-    rightLeg.rotation.x = -swing;
-    leftArm.rotation.x = -swing * 0.85;
-    rightArm.rotation.x = swing * 0.85;
+    const moveNorm = clamp(s.speed / 8, 0, 1);
+    const amp = moveNorm * (s.sprinting ? 0.85 : 0.55);
+    const sinP = Math.sin(s.walkPhase);
+
+    // Natural stride with bent knees & swinging elbows
+    leftLeg.hip.rotation.x = sinP * amp;
+    rightLeg.hip.rotation.x = -sinP * amp;
+    leftLeg.knee.rotation.x = Math.max(0, -sinP) * amp * 0.95;
+    rightLeg.knee.rotation.x = Math.max(0, sinP) * amp * 0.95;
+
+    leftArm.shoulder.rotation.x = -sinP * amp * 0.85;
+    rightArm.shoulder.rotation.x = sinP * amp * 0.85;
+    leftArm.elbow.rotation.x = -0.18 - Math.max(0, sinP) * amp * 0.65;
+    rightArm.elbow.rotation.x = -0.18 - Math.max(0, -sinP) * amp * 0.65;
+
+    // Subtle forward lean when sprinting + gentle vertical cadence bounce + idle breath
+    upperBody.rotation.x = s.sprinting ? -0.16 : -moveNorm * 0.05;
+    body.position.y = moveNorm > 0.05 ? Math.abs(Math.cos(s.walkPhase)) * 0.055 : Math.sin(elapsed * 2.2) * 0.012;
   };
 
   return { root, syncFromState };

@@ -48,7 +48,6 @@ function bootstrap(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   const minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
 
-  // Renderer with ACES Filmic tone mapping & soft shadows
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -59,45 +58,44 @@ function bootstrap(): void {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 1.04;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1300);
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1350);
 
-  // Post-processing pipeline with subtle UnrealBloom so Miami neon & car LEDs glow
+  // Subtle cinematic bloom so daylight PBR surfaces stay crisp while neon/LEDs & sun speculars glow
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.42, // strength
-    0.55, // radius
-    0.82, // threshold
+    0.28, // strength
+    0.45, // radius
+    0.94, // threshold
   );
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
 
-  // Build deterministic coastal Miami world
+  // Build deterministic coastal Miami world + live PMREM sky reflection environment
   const blueprint = createCityBlueprint();
-  const sky = new SkySystem(scene);
+  const sky = new SkySystem(scene, renderer);
   const cityHandles = buildCityScene(scene, blueprint);
   const beaconRenderer = createMissionBeacons(scene);
 
-  // Create player-drivable modern cars
+  // Create sculpted clearcoat modern vehicles
   const vehicles: VehicleState[] = DEFAULT_VEHICLES.map(createVehicleState);
   const vehicleMeshes = new Map<string, VehicleMeshHandles>();
   for (const v of vehicles) {
     vehicleMeshes.set(v.id, createVehicleMesh(v, scene));
   }
 
-  // Create player & missions & persistent state
+  // Player, missions & persistent world state
   const missions = new MissionManager();
   let cash = 1500;
-  let timeOfDayHours = TIME_PRESETS[0].hour; // Iconic Miami Golden Hour
+  let timeOfDayHours = TIME_PRESETS[0].hour;
   let timePresetIdx = 0;
   const discoveredDistricts = new Set<DistrictId>(['ocean-drive']);
   let player: PlayerState = createInitialPlayerState(vehicles[0]);
 
-  // Restore persisted world state if available
   const saved = loadWorld();
   let restoredSave = false;
   if (saved) {
@@ -129,11 +127,9 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Ambient AI traffic cars cruising the avenues
   const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
 
-  // Systems & UI
   const input = new InputManager(canvas);
   const cameraCtrl = new CameraController();
   cameraCtrl.yaw = player.yaw;
@@ -165,7 +161,6 @@ function bootstrap(): void {
     return vehicles.find((v) => v.id === player.vehicleId) ?? null;
   };
 
-  // Unlock Web Audio on first user interaction
   const unlockAudioOnce = () => {
     sound.unlock();
     window.removeEventListener('keydown', unlockAudioOnce);
@@ -174,7 +169,6 @@ function bootstrap(): void {
   window.addEventListener('keydown', unlockAudioOnce);
   window.addEventListener('mousedown', unlockAudioOnce);
 
-  // Pause menu buttons
   const setPaused = (next: boolean) => {
     paused = next;
     hud.setPauseMenu(paused, missions);
@@ -217,7 +211,6 @@ function bootstrap(): void {
     window.location.reload();
   });
 
-  // Auto-save when closing tab
   window.addEventListener('beforeunload', () => persistNow(false));
 
   window.addEventListener('resize', () => {
@@ -263,7 +256,6 @@ function bootstrap(): void {
     }
 
     elapsed += dt;
-    // Gentle Miami time-of-day flow (~1 game minute per 2.5 real seconds)
     timeOfDayHours = (timeOfDayHours + dt * (1 / 150)) % 24;
 
     if (snap.timeCyclePressed) {
@@ -300,7 +292,6 @@ function bootstrap(): void {
 
     let activeVehicle = getActiveVehicle();
 
-    // Repaint or toggle headlights when inside a vehicle
     if (activeVehicle) {
       if (snap.paintCyclePressed) {
         activeVehicle.paintIndex = (activeVehicle.paintIndex + 1) % PAINT_FINISHES.length;
@@ -315,8 +306,6 @@ function bootstrap(): void {
       }
     }
 
-    // Context-sensitive [E] Interact: Mission start takes priority if standing in a start beacon,
-    // otherwise enter/exit vehicle!
     const nearbyMission = missions.findNearbyStartBeacon(player.x, player.z);
     const nearbyCar = activeVehicle ? null : findNearestVehicle(player.x, player.z, vehicles);
 
@@ -367,7 +356,6 @@ function bootstrap(): void {
       }
     }
 
-    // Step active vehicle & parked vehicles (gentle coasting for unoccupied cars)
     for (const v of vehicles) {
       if (activeVehicle && v.id === activeVehicle.id) {
         stepVehiclePhysics(
@@ -385,7 +373,6 @@ function bootstrap(): void {
       }
     }
 
-    // Step player (either synced with driven vehicle or walking/sprinting on foot)
     if (activeVehicle) {
       player.x = activeVehicle.x;
       player.y = activeVehicle.y;
@@ -408,10 +395,8 @@ function bootstrap(): void {
       );
     }
 
-    // Step AI traffic
     stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
 
-    // Step mission state machine
     const missionEvent = missions.update(dt, player.x, player.z, player.vehicleId);
     if (missionEvent) {
       if (missionEvent.type === 'complete') {
@@ -428,7 +413,6 @@ function bootstrap(): void {
       }
     }
 
-    // District discovery check
     const district = getDistrictAt(player.x, player.z);
     if (district.id !== lastDistrictId) {
       lastDistrictId = district.id;
@@ -443,9 +427,8 @@ function bootstrap(): void {
       }
     }
 
-    // Update sky, lighting, water shader, neon glow, vehicles, player, traffic, beacons
     focusVec.set(player.x, player.y, player.z);
-    const skyRes = sky.update(timeOfDayHours, focusVec);
+    const skyRes = sky.update(timeOfDayHours, elapsed, focusVec);
     cityHandles.updateAnimation(
       elapsed,
       skyRes.nightFactor,
@@ -455,16 +438,14 @@ function bootstrap(): void {
     );
 
     for (const v of vehicles) {
-      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor);
+      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt);
     }
-    playerMesh.syncFromState(player);
+    playerMesh.syncFromState(player, elapsed);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
     beaconRenderer.update(elapsed, missions);
 
-    // Camera follow
     cameraCtrl.update(camera, dt, player, activeVehicle);
 
-    // Procedural Web Audio engine / drift / horn
     if (activeVehicle) {
       const speedNorm = Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed;
       const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
@@ -473,14 +454,12 @@ function bootstrap(): void {
       sound.updateDriving(false, 0, 0, 0, false);
     }
 
-    // Periodic persistent auto-save every 15 seconds
     autoSaveTimer += dt;
     if (autoSaveTimer >= 15) {
       autoSaveTimer = 0;
       persistNow(true);
     }
 
-    // HUD + Minimap
     hud.update({
       timeLabel: skyRes.timeLabel,
       district,
