@@ -1,5 +1,7 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
+  computeCharacterPose,
   computeSafeExitPosition,
   createInitialPlayerState,
   findNearestVehicle,
@@ -108,5 +110,51 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       (c, i) => Math.hypot(c.x - initialPositions[i].x, c.z - initialPositions[i].z) > 2,
     ).length;
     expect(movedCount).toBeGreaterThanOrEqual(8);
+  });
+
+  it('bends character knees strictly backward (+Z) and elbows strictly forward (-Z) across walk, sprint, and jump', () => {
+    const xAxis = new THREE.Vector3(1, 0, 0);
+    const downLimb = new THREE.Vector3(0, -1, 0);
+
+    const states = [
+      { speed: 0, sprinting: false, grounded: true },
+      { speed: 6.4, sprinting: false, grounded: true },
+      { speed: 12.2, sprinting: true, grounded: true },
+      { speed: 8.0, sprinting: true, grounded: false },
+    ];
+
+    for (const cfg of states) {
+      for (let step = 0; step < 32; step++) {
+        const phase = (step / 32) * Math.PI * 2;
+        const player = createInitialPlayerState(null);
+        player.speed = cfg.speed;
+        player.sprinting = cfg.sprinting;
+        player.grounded = cfg.grounded;
+        player.walkPhase = phase;
+
+        const pose = computeCharacterPose(player, step * 0.1);
+
+        // Knees must ALWAYS bend backward (rotation.x <= 0 -> hanging calf rotates to +Z)
+        expect(pose.leftKneeX).toBeLessThanOrEqual(0);
+        expect(pose.rightKneeX).toBeLessThanOrEqual(0);
+        const leftShinDir = downLimb.clone().applyAxisAngle(xAxis, pose.leftKneeX);
+        const rightShinDir = downLimb.clone().applyAxisAngle(xAxis, pose.rightKneeX);
+        expect(leftShinDir.z).toBeGreaterThanOrEqual(0);
+        expect(rightShinDir.z).toBeGreaterThanOrEqual(0);
+
+        // Elbows must ALWAYS bend forward (rotation.x >= 0 -> hanging forearm rotates to -Z)
+        expect(pose.leftElbowX).toBeGreaterThanOrEqual(0);
+        expect(pose.rightElbowX).toBeGreaterThanOrEqual(0);
+        const leftForearmDir = downLimb.clone().applyAxisAngle(xAxis, pose.leftElbowX);
+        const rightForearmDir = downLimb.clone().applyAxisAngle(xAxis, pose.rightElbowX);
+        expect(leftForearmDir.z).toBeLessThanOrEqual(0);
+        expect(rightForearmDir.z).toBeLessThanOrEqual(0);
+
+        // Torso must lean forward (-Z) when moving
+        if (cfg.speed > 1) {
+          expect(pose.torsoPitchX).toBeLessThan(0);
+        }
+      }
+    }
   });
 });
