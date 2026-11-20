@@ -413,15 +413,42 @@ function buildBuildingMesh(
     step.castShadow = true;
     group.add(step);
 
-    // Classic horizontal Art Deco sun-visor eyebrows every ~6m
-    for (let ey = 4.0; ey < b.height - 2; ey += 6.2) {
+    // Classic horizontal Art Deco sun-visor eyebrows & 3D balconies with glass railings
+    const balconyGlass = new THREE.MeshPhysicalMaterial({
+      color: 0x3ec8e8,
+      roughness: 0.08,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.55,
+      clearcoat: 1.0,
+    });
+    for (let ey = 4.2; ey < b.height - 2; ey += 5.4) {
       const visor = new THREE.Mesh(
-        new THREE.BoxGeometry(b.width + 1.1, 0.34, b.depth + 1.1),
+        new THREE.BoxGeometry(b.width + 1.35, 0.34, b.depth + 1.35),
         accentMat,
       );
       visor.position.y = ey;
+      visor.castShadow = true;
       group.add(visor);
+
+      if (ey > 5.0) {
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(b.width + 1.26, 0.92, b.depth + 1.26),
+          balconyGlass,
+        );
+        rail.position.y = ey + 0.62;
+        group.add(rail);
+      }
     }
+
+    // Ground-floor sloped boutique storefront canopy awning
+    const canopy = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width + 2.2, 0.18, b.depth + 2.2),
+      accentMat,
+    );
+    canopy.position.y = 3.7;
+    canopy.castShadow = true;
+    group.add(canopy);
   } else if (b.style === 'skyscraper') {
     // Architectural setback tier + mechanical penthouse + spire
     const setback = new THREE.Mesh(

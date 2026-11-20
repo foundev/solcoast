@@ -207,10 +207,10 @@ export class SkySystem {
 
     this.sunLight = new THREE.DirectionalLight(0xffe1b8, 2.7);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.mapSize.set(4096, 4096);
     this.sunLight.shadow.camera.near = 10;
     this.sunLight.shadow.camera.far = 320;
-    const d = 105;
+    const d = 110;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;

@@ -8,6 +8,11 @@ import { SoundEngine } from './core/audio';
 import { InputManager } from './core/input';
 import { clamp } from './core/math';
 import {
+  createPedestrianMeshes,
+  createPedestrians,
+  stepPedestrians,
+} from './entities/pedestrians';
+import {
   computeSafeExitPosition,
   createInitialPlayerState,
   createPlayerMesh,
@@ -41,7 +46,9 @@ import {
   getDistrictAt,
   getGroundHeight,
 } from './world/cityData';
+import { createCinematicGradePass } from './world/postfx';
 import { SkySystem, TIME_PRESETS } from './world/sky';
+import { buildStreetProps } from './world/streetProps';
 import type { DistrictId } from './world/types';
 
 function bootstrap(): void {
@@ -58,30 +65,33 @@ function bootstrap(): void {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.04;
+  renderer.toneMappingExposure = 1.06;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1350);
 
-  // Subtle cinematic bloom so daylight PBR surfaces stay crisp while neon/LEDs & sun speculars glow
+  // Full cinematic post-processing pipeline: PBR Render -> Unreal Bloom -> Tone Mapping -> Miami Color Grade
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.28, // strength
-    0.45, // radius
-    0.94, // threshold
+    0.26, // strength
+    0.46, // radius
+    0.92, // threshold
   );
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
+  const gradePass = createCinematicGradePass();
+  composer.addPass(gradePass);
 
-  // Build deterministic coastal Miami world + live PMREM sky reflection environment
+  // Build deterministic coastal Miami world + live PMREM reflections + street props
   const blueprint = createCityBlueprint();
   const sky = new SkySystem(scene, renderer);
   const cityHandles = buildCityScene(scene, blueprint);
+  const streetProps = buildStreetProps(scene, blueprint);
   const beaconRenderer = createMissionBeacons(scene);
 
-  // Create sculpted clearcoat modern vehicles
+  // Create sculpted multi-station lofted modern vehicles
   const vehicles: VehicleState[] = DEFAULT_VEHICLES.map(createVehicleState);
   const vehicleMeshes = new Map<string, VehicleMeshHandles>();
   for (const v of vehicles) {
@@ -127,8 +137,11 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
+  // Ambient AI traffic cars + strolling sidewalk pedestrians
   const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
+  const pedestrians = createPedestrians(26);
+  const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
 
   const input = new InputManager(canvas);
   const cameraCtrl = new CameraController();
@@ -396,6 +409,7 @@ function bootstrap(): void {
     }
 
     stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
+    stepPedestrians(pedestrians, vehicles, dt);
 
     const missionEvent = missions.update(dt, player.x, player.z, player.vehicleId);
     if (missionEvent) {
@@ -436,18 +450,26 @@ function bootstrap(): void {
       skyRes.sunColor,
       skyRes.fogColor,
     );
+    streetProps.update(elapsed, skyRes.nightFactor);
 
     for (const v of vehicles) {
-      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt);
+      const occupied = activeVehicle !== null && activeVehicle.id === v.id;
+      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
     }
     playerMesh.syncFromState(player, elapsed);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
+    pedestrianMeshes.syncFromState(pedestrians, elapsed);
     beaconRenderer.update(elapsed, missions);
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
 
+    const speedNorm = activeVehicle
+      ? clamp(Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed, 0, 1)
+      : 0;
+    gradePass.uniforms.uNightFactor.value = skyRes.nightFactor;
+    gradePass.uniforms.uSpeedNorm.value = speedNorm;
+
     if (activeVehicle) {
-      const speedNorm = Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed;
       const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
       sound.updateDriving(true, speedNorm, snap.forward, driftAmt, snap.horn);
     } else {

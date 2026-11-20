@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { clamp, createRng, distXZ, lerp, lerpAngle, yawFromDir } from '../core/math';
 import { getGroundHeight } from '../world/cityData';
+import { createLightGlowTexture } from '../world/postfx';
 import { createContactShadowTexture } from '../world/textures';
 import type { TrafficNode } from '../world/types';
+import { createSculptedTrafficBodyGeometry } from './carGeometry';
 import type { VehicleState } from './vehicle';
 
 export interface TrafficCarState {
@@ -20,7 +22,7 @@ export interface TrafficCarState {
 }
 
 const TRAFFIC_COLORS = [
-  0xeef2f7, 0x2658a8, 0xd95f18, 0x168f68, 0xc82b4b, 0xd4a428, 0x5d46a8, 0x1f7f8c, 0x3b4554,
+  0xeef2f7, 0x2254a4, 0xd85c18, 0x158a64, 0xc42848, 0xd1a024, 0x5842a4, 0x1c7a88, 0x36404f,
 ];
 
 export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarState[] {
@@ -142,64 +144,6 @@ export function stepTraffic(
   }
 }
 
-function createTrafficExtrusion(isSuv: boolean): {
-  bodyGeo: THREE.BufferGeometry;
-  cabinGeo: THREE.BufferGeometry;
-} {
-  const b = new THREE.Shape();
-  if (isSuv) {
-    b.moveTo(-2.05, 0.36);
-    b.lineTo(2.10, 0.36);
-    b.quadraticCurveTo(2.22, 0.56, 2.12, 0.84);
-    b.lineTo(1.08, 0.96);
-    b.lineTo(-2.08, 0.98);
-    b.quadraticCurveTo(-2.18, 0.72, -2.05, 0.36);
-  } else {
-    b.moveTo(-2.10, 0.30);
-    b.lineTo(2.14, 0.29);
-    b.quadraticCurveTo(2.26, 0.44, 2.18, 0.66);
-    b.quadraticCurveTo(1.72, 0.84, 1.05, 0.88);
-    b.lineTo(-1.95, 0.90);
-    b.quadraticCurveTo(-2.22, 0.72, -2.10, 0.30);
-  }
-
-  const c = new THREE.Shape();
-  if (isSuv) {
-    c.moveTo(-1.82, 0.94);
-    c.lineTo(0.96, 0.92);
-    c.quadraticCurveTo(0.56, 1.56, 0.24, 1.62);
-    c.lineTo(-1.46, 1.60);
-    c.quadraticCurveTo(-1.76, 1.38, -1.82, 0.94);
-  } else {
-    c.moveTo(-1.48, 0.86);
-    c.lineTo(0.92, 0.84);
-    c.quadraticCurveTo(0.45, 1.36, 0.02, 1.40);
-    c.lineTo(-0.78, 1.38);
-    c.quadraticCurveTo(-1.26, 1.18, -1.48, 0.86);
-  }
-
-  const extrude = (shape: THREE.Shape, w: number, bevel: number) => {
-    const depth = w - bevel * 2;
-    const g = new THREE.ExtrudeGeometry(shape, {
-      depth,
-      bevelEnabled: true,
-      bevelSize: bevel,
-      bevelThickness: bevel,
-      bevelSegments: 3,
-      curveSegments: 10,
-    });
-    g.translate(0, 0, -depth * 0.5);
-    g.rotateY(Math.PI * 0.5);
-    g.computeVertexNormals();
-    return g;
-  };
-
-  return {
-    bodyGeo: extrude(b, isSuv ? 1.94 : 1.86, 0.1),
-    cabinGeo: extrude(c, isSuv ? 1.58 : 1.48, 0.08),
-  };
-}
-
 export interface TrafficRenderer {
   syncFromState: (cars: TrafficCarState[], nightFactor: number) => void;
 }
@@ -207,33 +151,35 @@ export interface TrafficRenderer {
 export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene): TrafficRenderer {
   const root = new THREE.Group();
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0b1929,
-    roughness: 0.06,
-    metalness: 0.2,
+    color: 0x0a1726,
+    roughness: 0.04,
+    metalness: 0.22,
     clearcoat: 1.0,
-    envMapIntensity: 1.8,
+    envMapIntensity: 2.0,
   });
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x16181f, roughness: 0.88 });
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0xd0d8e4, metalness: 0.88, roughness: 0.18 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0xd8e0ec, metalness: 0.9, roughness: 0.16 });
   const headMat = new THREE.MeshStandardMaterial({ color: 0xfff8dc, emissive: 0xffe8a3, emissiveIntensity: 1.0 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xff1e3e, emissive: 0xff1133, emissiveIntensity: 1.0 });
   const shadowMat = new THREE.MeshBasicMaterial({
     map: createContactShadowTexture(),
     transparent: true,
     depthWrite: false,
-    opacity: 0.72,
+    opacity: 0.76,
   });
+  const glowTex = createLightGlowTexture();
 
-  const sedanGeos = createTrafficExtrusion(false);
-  const suvGeos = createTrafficExtrusion(true);
-  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 14);
+  const sedanGeos = createSculptedTrafficBodyGeometry('sedan');
+  const suvGeos = createSculptedTrafficBodyGeometry('suv');
+  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 16);
   wheelGeo.rotateZ(Math.PI * 0.5);
-  const hubGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.26, 10);
+  const hubGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.26, 12);
   hubGeo.rotateZ(Math.PI * 0.5);
-  const shadowGeo = new THREE.PlaneGeometry(2.6, 5.1);
+  const shadowGeo = new THREE.PlaneGeometry(2.7, 5.2);
   shadowGeo.rotateX(-Math.PI * 0.5);
 
   const groups: THREE.Group[] = [];
+  const headGlows: THREE.Sprite[] = [];
 
   for (const c of cars) {
     const isSuv = c.id % 3 === 0;
@@ -242,33 +188,49 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     const g = new THREE.Group();
     const paint = new THREE.MeshPhysicalMaterial({
       color: c.color,
-      metalness: 0.48,
-      roughness: 0.22,
-      clearcoat: 0.9,
-      clearcoatRoughness: 0.08,
-      envMapIntensity: 1.35,
+      metalness: 0.54,
+      roughness: 0.19,
+      clearcoat: 0.95,
+      clearcoatRoughness: 0.07,
+      envMapIntensity: 1.55,
     });
 
     const shadow = new THREE.Mesh(shadowGeo, shadowMat);
     shadow.position.y = 0.04;
     g.add(shadow);
 
-    const body = new THREE.Mesh(geos.bodyGeo, paint);
+    const body = new THREE.Mesh(geos.body, paint);
     body.castShadow = true;
     body.receiveShadow = true;
     g.add(body);
 
-    const cabin = new THREE.Mesh(geos.cabinGeo, glassMat);
+    const cabin = new THREE.Mesh(geos.cabin, glassMat);
     cabin.castShadow = true;
     g.add(cabin);
 
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.11, 0.08), headMat);
-    hl.position.set(0, isSuv ? 0.68 : 0.58, -2.22);
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.11, 0.08), headMat);
+    hl.position.set(0, isSuv ? 0.68 : 0.56, -2.18);
     g.add(hl);
 
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.11, 0.08), tailMat);
-    tl.position.set(0, isSuv ? 0.76 : 0.66, 2.2);
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.11, 0.08), tailMat);
+    tl.position.set(0, isSuv ? 0.76 : 0.66, 2.16);
     g.add(tl);
+
+    // Subtle additive headlight glare halo at night
+    const hGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowTex,
+        color: 0xffeeb8,
+        transparent: true,
+        opacity: 0.25,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    hGlow.position.set(0, isSuv ? 0.68 : 0.56, -2.3);
+    hGlow.scale.set(2.0, 0.9, 1);
+    g.add(hGlow);
+    headGlows.push(hGlow);
 
     for (const wx of [-0.94, 0.94]) {
       for (const wz of [-1.28, 1.28]) {
@@ -293,6 +255,9 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     syncFromState(stateCars: TrafficCarState[], nightFactor: number) {
       headMat.emissiveIntensity = 0.6 + nightFactor * 2.5;
       tailMat.emissiveIntensity = 0.7 + nightFactor * 2.1;
+      for (const sp of headGlows) {
+        sp.material.opacity = 0.08 + nightFactor * 0.45;
+      }
       for (let i = 0; i < stateCars.length && i < groups.length; i++) {
         const c = stateCars[i];
         groups[i].position.set(c.x, c.y, c.z);

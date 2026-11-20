@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
+import { createPedestrians, stepPedestrians } from '../src/entities/pedestrians';
 import {
   computeCharacterPose,
   computeSafeExitPosition,
@@ -156,5 +158,24 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
         }
       }
     }
+  });
+
+  it('builds valid curved lofted car geometries and strolls sidewalk pedestrians cleanly', () => {
+    for (const style of ['supercar', 'sedan', 'spyder', 'coupe'] as const) {
+      const bodyGeo = createSculptedCarBodyGeometry(style);
+      expect(bodyGeo.attributes.position.count).toBeGreaterThan(80);
+      expect(bodyGeo.attributes.normal.count).toBe(bodyGeo.attributes.position.count);
+      const cabinGeo = createSculptedCabinGeometry(style);
+      expect(cabinGeo.attributes.position.count).toBeGreaterThan(50);
+    }
+
+    const vehicles = DEFAULT_VEHICLES.map(createVehicleState);
+    const peds = createPedestrians(12);
+    const startPos = peds.map((p) => ({ x: p.x, z: p.z }));
+    for (let i = 0; i < 90; i++) {
+      stepPedestrians(peds, vehicles, 1 / 60);
+    }
+    const walked = peds.filter((p, i) => Math.hypot(p.x - startPos[i].x, p.z - startPos[i].z) > 1.2).length;
+    expect(walked).toBeGreaterThanOrEqual(8);
   });
 });
