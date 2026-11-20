@@ -1,8 +1,4 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { SoundEngine } from './core/audio';
 import { InputManager } from './core/input';
@@ -47,7 +43,6 @@ import {
   getDistrictAt,
   getGroundHeight,
 } from './world/cityData';
-import { createCinematicGradePass } from './world/postfx';
 import { SkySystem, TIME_PRESETS } from './world/sky';
 import { buildStreetProps } from './world/streetProps';
 import type { DistrictId } from './world/types';
@@ -61,34 +56,16 @@ function bootstrap(): void {
     antialias: true,
     powerPreference: 'high-performance',
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // Cap DPR at 1.5 for razor-sharp Retina visuals at a fraction of 2x Retina pixel fillrate
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.94;
+  renderer.toneMappingExposure = 0.96;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 2200);
-
-  // MSAA HDR render target + tight high-threshold bloom (only bright night neon/LEDs glow,
-  // keeping daytime sky, buildings, road, and cars razor-sharp with zero fuzzy washout!)
-  const composerTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
-    type: THREE.HalfFloatType,
-    samples: 4,
-  });
-  const composer = new EffectComposer(renderer, composerTarget);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.08, // subtle strength (scales up gently only at night)
-    0.22, // tight radius (no full-screen haze)
-    2.6, // high HDR threshold so sunlit surfaces & sky NEVER bloom
-  );
-  composer.addPass(bloomPass);
-  composer.addPass(new OutputPass());
-  const gradePass = createCinematicGradePass();
-  composer.addPass(gradePass);
 
   // Build deterministic coastal Miami world + live PMREM reflections + street props
   const blueprint = createCityBlueprint();
@@ -143,10 +120,10 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Ambient AI traffic cars + strolling sidewalk pedestrians (upgraded to real rigged CC0 humans on load)
-  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
+  // Ambient AI traffic cars + nearby strolling sidewalk pedestrians (distance-culled for 60-120 FPS)
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 14);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
-  const pedestrians = createPedestrians(16);
+  const pedestrians = createPedestrians(8);
   const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
 
   // Stream local photorealistic GLB models (Ferrari 458, 4 CC0 civilian mocap humans),
@@ -267,8 +244,6 @@ function bootstrap(): void {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
-    composer.setSize(w, h);
-    bloomPass.setSize(w, h);
   });
 
   if (restoredSave) {
@@ -278,12 +253,25 @@ function bootstrap(): void {
   }
 
   let lastTime = performance.now();
+  let fpsFrames = 0;
+  let fpsTimer = 0;
+  let currentFps = 60;
+  let lastDrawCalls = 0;
   const focusVec = new THREE.Vector3();
 
   const tick = (now: number) => {
     requestAnimationFrame(tick);
-    const dt = clamp((now - lastTime) / 1000, 0.001, 0.05);
+    const rawDt = (now - lastTime) / 1000;
+    const dt = clamp(rawDt, 0.001, 0.05);
     lastTime = now;
+
+    fpsFrames += 1;
+    fpsTimer += rawDt;
+    if (fpsTimer >= 0.5) {
+      currentFps = Math.round(fpsFrames / fpsTimer);
+      fpsFrames = 0;
+      fpsTimer = 0;
+    }
 
     const snap = input.poll();
 
@@ -299,7 +287,7 @@ function bootstrap(): void {
     }
 
     if (paused) {
-      composer.render();
+      renderer.render(scene, camera);
       return;
     }
 
@@ -493,7 +481,7 @@ function bootstrap(): void {
     }
     playerMesh.syncFromState(player, elapsed, dt);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
-    pedestrianMeshes.syncFromState(pedestrians, dt);
+    pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z);
     beaconRenderer.update(elapsed, missions);
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
@@ -501,10 +489,6 @@ function bootstrap(): void {
     const speedNorm = activeVehicle
       ? clamp(Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed, 0, 1)
       : 0;
-    // Keep bloom almost off in daylight (crisp & sharp), subtle glow on neon/headlights at night
-    bloomPass.strength = 0.04 + skyRes.nightFactor * 0.18;
-    gradePass.uniforms.uNightFactor.value = skyRes.nightFactor;
-    gradePass.uniforms.uSpeedNorm.value = speedNorm;
 
     if (activeVehicle) {
       const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
@@ -529,10 +513,13 @@ function bootstrap(): void {
       vehicles,
       missions,
       promptText,
+      fps: currentFps,
+      drawCalls: lastDrawCalls,
     });
     minimap.render(blueprint, player, vehicles, trafficCars, missions);
 
-    composer.render();
+    renderer.render(scene, camera);
+    lastDrawCalls = renderer.info.render.calls;
   };
 
   requestAnimationFrame(tick);

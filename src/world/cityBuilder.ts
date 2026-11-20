@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LoadedGameAssets } from './assets';
 import {
   CAUSEWAY,
@@ -172,84 +173,78 @@ function createArchedFrondGeometry(length = 3.8, width = 1.65): THREE.BufferGeom
   return geo;
 }
 
-function createPalmTreeMesh(
-  height: number,
-  leanX: number,
-  leanZ: number,
-  trunkMat: THREE.MeshStandardMaterial,
-  frondMat: THREE.MeshStandardMaterial,
-  frondGeo: THREE.BufferGeometry,
-  coconutMat: THREE.MeshStandardMaterial,
-): { tree: THREE.Group; crown: THREE.Group } {
-  const tree = new THREE.Group();
-
-  // Smooth curved ringed trunk built via TubeGeometry along a quadratic Bezier!
-  const endX = leanX * height * 1.45;
-  const endZ = leanZ * height * 1.45;
-  const curve = new THREE.QuadraticBezierCurve3(
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(endX * 0.35, height * 0.55, endZ * 0.35),
-    new THREE.Vector3(endX, height, endZ),
-  );
-  const tubeSegs = 12;
-  const radialSegs = 8;
-  const trunkGeo = new THREE.TubeGeometry(curve, tubeSegs, 0.24, radialSegs, false);
-
-  // Taper radius smoothly from thicker base to slender crown neck
-  const pos = trunkGeo.attributes.position;
-  for (let i = 0; i <= tubeSegs; i++) {
-    const t = i / tubeSegs;
-    const center = curve.getPointAt(t);
-    const scaleR = (1.55 - t * 0.78) * (1 + (t < 0.08 ? (0.08 - t) * 2.5 : 0));
-    for (let j = 0; j <= radialSegs; j++) {
-      const idx = i * (radialSegs + 1) + j;
-      const vx = pos.getX(idx) - center.x;
-      const vy = pos.getY(idx) - center.y;
-      const vz = pos.getZ(idx) - center.z;
-      pos.setXYZ(idx, center.x + vx * scaleR, center.y + vy * scaleR, center.z + vz * scaleR);
-    }
-  }
-  trunkGeo.computeVertexNormals();
-
-  const trunkMesh = new THREE.Mesh(trunkGeo, trunkMat);
-  trunkMesh.castShadow = true;
-  trunkMesh.receiveShadow = true;
-  tree.add(trunkMesh);
-
-  // Crown group with 11 feathered arched fronds in 2 natural tiers + coconut cluster
-  const crown = new THREE.Group();
-  crown.position.set(endX, height - 0.1, endZ);
+/**
+ * Builds a single merged BufferGeometry for a complete 11-frond palm crown
+ * so ALL palm crowns across the city render in 1 InstancedMesh draw call!
+ */
+function createMergedPalmCrownGeometry(): THREE.BufferGeometry {
+  const baseFrond = createArchedFrondGeometry(3.8, 1.65);
+  const parts: THREE.BufferGeometry[] = [];
+  const mat = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const pos = new THREE.Vector3();
+  const scale = new THREE.Vector3();
+  const euler = new THREE.Euler();
 
   const lowerCount = 7;
   for (let f = 0; f < lowerCount; f++) {
-    const frond = new THREE.Mesh(frondGeo, frondMat);
-    frond.rotation.y = (f / lowerCount) * Math.PI * 2;
-    frond.rotation.x = 0.16;
-    frond.scale.setScalar(0.95 + (f % 2) * 0.15);
-    frond.castShadow = true;
-    crown.add(frond);
+    const g = baseFrond.clone();
+    euler.set(0.16, (f / lowerCount) * Math.PI * 2, 0);
+    quat.setFromEuler(euler);
+    const sc = 0.95 + (f % 2) * 0.15;
+    scale.set(sc, sc, sc);
+    mat.compose(pos, quat, scale);
+    g.applyMatrix4(mat);
+    parts.push(g);
   }
   const upperCount = 4;
   for (let f = 0; f < upperCount; f++) {
-    const frond = new THREE.Mesh(frondGeo, frondMat);
-    frond.rotation.y = ((f + 0.45) / upperCount) * Math.PI * 2;
-    frond.rotation.x = -0.34;
-    frond.scale.setScalar(0.76);
-    frond.castShadow = true;
-    crown.add(frond);
+    const g = baseFrond.clone();
+    euler.set(-0.34, ((f + 0.45) / upperCount) * Math.PI * 2, 0);
+    quat.setFromEuler(euler);
+    scale.set(0.76, 0.76, 0.76);
+    mat.compose(pos, quat, scale);
+    g.applyMatrix4(mat);
+    parts.push(g);
   }
+  baseFrond.dispose();
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((p) => p.dispose());
+  return merged;
+}
 
-  // Cluster of coconuts tucked beneath crown
-  const cocoGeo = new THREE.SphereGeometry(0.16, 8, 6);
-  for (let c = 0; c < 3; c++) {
-    const ang = (c / 3) * Math.PI * 2;
-    const coco = new THREE.Mesh(cocoGeo, coconutMat);
-    coco.position.set(Math.cos(ang) * 0.22, -0.25, Math.sin(ang) * 0.22);
-    crown.add(coco);
+/**
+ * Builds one canonical gently-curved tapered palm trunk (height = 10m, tip at (1.1, 10, 0))
+ * instanced across every palm tree in Sol Coast!
+ */
+function createCanonicalPalmTrunkGeometry(): { geo: THREE.BufferGeometry; tipOffset: THREE.Vector3 } {
+  const height = 10;
+  const tipOffset = new THREE.Vector3(1.1, height, 0);
+  const curve = new THREE.QuadraticBezierCurve3(
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0.38, height * 0.55, 0),
+    tipOffset,
+  );
+  const tubeSegs = 10;
+  const radialSegs = 7;
+  const trunkGeo = new THREE.TubeGeometry(curve, tubeSegs, 0.24, radialSegs, false);
+  const posAttr = trunkGeo.attributes.position;
+  for (let i = 0; i <= tubeSegs; i++) {
+    const t = i / tubeSegs;
+    const center = curve.getPointAt(t);
+    const scaleR = (1.52 - t * 0.76) * (1 + (t < 0.08 ? (0.08 - t) * 2.4 : 0));
+    for (let j = 0; j <= radialSegs; j++) {
+      const idx = i * (radialSegs + 1) + j;
+      posAttr.setXYZ(
+        idx,
+        center.x + (posAttr.getX(idx) - center.x) * scaleR,
+        center.y + (posAttr.getY(idx) - center.y) * scaleR,
+        center.z + (posAttr.getZ(idx) - center.z) * scaleR,
+      );
+    }
   }
-
-  tree.add(crown);
-  return { tree, crown };
+  trunkGeo.computeVertexNormals();
+  return { geo: trunkGeo, tipOffset };
 }
 
 function buildArchedCauseway(
@@ -419,28 +414,19 @@ function buildBuildingMesh(
     step.castShadow = true;
     group.add(step);
 
-    // Classic horizontal Art Deco sun-visor eyebrows & 3D balconies with glass railings
-    const balconyGlass = new THREE.MeshPhysicalMaterial({
-      color: 0x3ec8e8,
-      roughness: 0.08,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.55,
-      clearcoat: 1.0,
-    });
+    // Classic horizontal Art Deco sun-visor eyebrows & shared lightweight glass balcony railings
     for (let ey = 4.2; ey < b.height - 2; ey += 5.4) {
       const visor = new THREE.Mesh(
         new THREE.BoxGeometry(b.width + 1.35, 0.34, b.depth + 1.35),
         accentMat,
       );
       visor.position.y = ey;
-      visor.castShadow = true;
       group.add(visor);
 
       if (ey > 5.0) {
         const rail = new THREE.Mesh(
           new THREE.BoxGeometry(b.width + 1.26, 0.92, b.depth + 1.26),
-          balconyGlass,
+          lobbyGlassMat,
         );
         rail.position.y = ey + 0.62;
         group.add(rail);
@@ -453,7 +439,6 @@ function buildBuildingMesh(
       accentMat,
     );
     canopy.position.y = 3.7;
-    canopy.castShadow = true;
     group.add(canopy);
   } else if (b.style === 'skyscraper') {
     // Architectural setback tier + mechanical penthouse + spire
@@ -644,7 +629,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     uFogColor: { value: new THREE.Color(0xd78f8c) },
     uNightFactor: { value: 0.15 },
   };
-  const oceanGeo = new THREE.PlaneGeometry(4200, 4200, 140, 140);
+  const oceanGeo = new THREE.PlaneGeometry(4200, 4200, 64, 64);
   oceanGeo.rotateX(-Math.PI * 0.5);
   const oceanMat = new THREE.ShaderMaterial({
     vertexShader: OCEAN_VERTEX_SHADER,
@@ -825,31 +810,45 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
   root.add(roadMarkingsGroup);
 
+  // Instanced intersection pads & crosswalk stripes (275 meshes -> 2 draw calls!)
   const stripeMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf5, roughness: 0.65 });
+  const totalIntersections = blueprint.avenueXs.length * blueprint.streetZs.length;
+  const padGeo = new THREE.PlaneGeometry(blueprint.roadWidth + 0.6, blueprint.roadWidth + 0.6);
+  padGeo.rotateX(-Math.PI * 0.5);
+  const padInst = new THREE.InstancedMesh(padGeo, intersectionMat, totalIntersections);
+  padInst.receiveShadow = true;
+
+  const barGeo = new THREE.PlaneGeometry(1.05, 2.8);
+  barGeo.rotateX(-Math.PI * 0.5);
+  const barInst = new THREE.InstancedMesh(barGeo, stripeMat, totalIntersections * 10);
+
+  const tmpObj = new THREE.Object3D();
+  let padIdx = 0;
+  let barIdx = 0;
   for (const ax of blueprint.avenueXs) {
     for (const sz of blueprint.streetZs) {
-      const pad = new THREE.Mesh(
-        new THREE.PlaneGeometry(blueprint.roadWidth + 0.6, blueprint.roadWidth + 0.6),
-        intersectionMat,
-      );
-      pad.rotation.x = -Math.PI * 0.5;
-      pad.position.set(ax, 0.04, sz);
-      pad.receiveShadow = true;
-      root.add(pad);
+      tmpObj.position.set(ax, 0.04, sz);
+      tmpObj.rotation.set(0, 0, 0);
+      tmpObj.scale.set(1, 1, 1);
+      tmpObj.updateMatrix();
+      padInst.setMatrixAt(padIdx++, tmpObj.matrix);
 
       for (let s = -5; s <= 5; s += 2.5) {
-        const barN = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 2.8), stripeMat);
-        barN.rotation.x = -Math.PI * 0.5;
-        barN.position.set(ax + s, 0.052, sz - 9.4);
-        root.add(barN);
+        tmpObj.position.set(ax + s, 0.052, sz - 9.4);
+        tmpObj.rotation.set(0, 0, 0);
+        tmpObj.updateMatrix();
+        barInst.setMatrixAt(barIdx++, tmpObj.matrix);
 
-        const barE = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 1.05), stripeMat);
-        barE.rotation.x = -Math.PI * 0.5;
-        barE.position.set(ax + 9.4, 0.052, sz + s);
-        root.add(barE);
+        tmpObj.position.set(ax + 9.4, 0.052, sz + s);
+        tmpObj.rotation.set(0, Math.PI * 0.5, 0);
+        tmpObj.updateMatrix();
+        barInst.setMatrixAt(barIdx++, tmpObj.matrix);
       }
     }
   }
+  padInst.instanceMatrix.needsUpdate = true;
+  barInst.instanceMatrix.needsUpdate = true;
+  root.add(padInst, barInst);
 
   // 7. Key Sol Causeway Arch Bridge
   root.add(buildArchedCauseway(asphaltPbr, neonMaterials));
@@ -981,7 +980,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     root.add(buildBuildingMesh(b, facadeCache, neonMaterials, windowMaterials, lobbyGlassMat, hvacMat));
   }
 
-  // 12. Realistic Swaying Feathered-Frond Palm Trees
+  // 12. Instanced Feathered-Frond Palm Trees (~1,275 meshes -> 2 InstancedMesh draw calls!)
   const palmTrunkMat = new THREE.MeshStandardMaterial({
     map: palmBarkPbr.map,
     normalMap: palmBarkPbr.normalMap,
@@ -995,53 +994,73 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     metalness: 0.04,
     side: THREE.DoubleSide,
   });
-  const coconutMat = new THREE.MeshStandardMaterial({ color: 0x5d4329, roughness: 0.8 });
-  const frondGeo = createArchedFrondGeometry(3.8, 1.65);
+  const { geo: trunkGeo, tipOffset } = createCanonicalPalmTrunkGeometry();
+  const crownGeo = createMergedPalmCrownGeometry();
 
-  for (const p of blueprint.palms) {
-    const { tree, crown } = createPalmTreeMesh(
-      p.height,
-      p.leanX,
-      p.leanZ,
-      palmTrunkMat,
-      palmFrondMat,
-      frondGeo,
-      coconutMat,
-    );
-    tree.position.set(p.x, p.y, p.z);
-    tree.rotation.y = p.seed;
-    root.add(tree);
-    palmCrowns.push({ group: crown, phase: p.seed });
-  }
+  const palmCount = blueprint.palms.length;
+  const trunkInst = new THREE.InstancedMesh(trunkGeo, palmTrunkMat, palmCount);
+  trunkInst.castShadow = true;
+  trunkInst.receiveShadow = true;
+  const crownInst = new THREE.InstancedMesh(crownGeo, palmFrondMat, palmCount);
+  crownInst.castShadow = false; // Avoid costly alpha-tested shadow passes on Apple Metal / WebGL!
 
-  // 13. Streetlights
+  const palmTip = new THREE.Vector3();
+  blueprint.palms.forEach((p, idx) => {
+    const hScale = p.height / 10;
+    tmpObj.position.set(p.x, p.y, p.z);
+    tmpObj.rotation.set(0, p.seed, 0);
+    tmpObj.scale.set(hScale, hScale, hScale);
+    tmpObj.updateMatrix();
+    trunkInst.setMatrixAt(idx, tmpObj.matrix);
+
+    palmTip.copy(tipOffset).multiplyScalar(hScale).applyAxisAngle(new THREE.Vector3(0, 1, 0), p.seed);
+    tmpObj.position.set(p.x + palmTip.x, p.y + palmTip.y - 0.1, p.z + palmTip.z);
+    tmpObj.rotation.set(0, p.seed, 0);
+    tmpObj.scale.set(hScale, hScale, hScale);
+    tmpObj.updateMatrix();
+    crownInst.setMatrixAt(idx, tmpObj.matrix);
+  });
+  trunkInst.instanceMatrix.needsUpdate = true;
+  crownInst.instanceMatrix.needsUpdate = true;
+  root.add(trunkInst, crownInst);
+
+  // 13. Instanced Streetlights (~240 meshes -> 2 InstancedMesh poles/arms + light bulbs)
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a3342, metalness: 0.75, roughness: 0.32 });
-  const lampMatByColor = new Map<number, THREE.MeshStandardMaterial>();
-  for (const sl of blueprint.streetLights) {
-    let lampMat = lampMatByColor.get(sl.color);
-    if (!lampMat) {
-      lampMat = new THREE.MeshStandardMaterial({
-        color: sl.color,
-        emissive: sl.color,
-        emissiveIntensity: 1.5,
-      });
-      lampMatByColor.set(sl.color, lampMat);
-      streetLampMaterials.push(lampMat);
-    }
-    const g = new THREE.Group();
-    g.position.set(sl.x, sl.y, sl.z);
-    g.rotation.y = sl.yaw;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 6.8, 8), poleMat);
-    pole.position.y = 3.4;
-    g.add(pole);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.65), poleMat);
-    arm.position.set(0, 6.72, 0.72);
-    g.add(arm);
-    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.72), lampMat);
-    bulb.position.set(0, 6.6, 1.38);
-    g.add(bulb);
-    root.add(g);
-  }
+  const slCount = blueprint.streetLights.length;
+  const poleGeo = new THREE.CylinderGeometry(0.1, 0.16, 6.8, 7);
+  poleGeo.translate(0, 3.4, 0);
+  const armGeo = new THREE.BoxGeometry(0.12, 0.12, 1.65);
+  armGeo.translate(0, 6.72, 0.72);
+  const bulbGeo = new THREE.BoxGeometry(0.42, 0.14, 0.72);
+  bulbGeo.translate(0, 6.6, 1.38);
+
+  const poleInst = new THREE.InstancedMesh(poleGeo, poleMat, slCount);
+  const armInst = new THREE.InstancedMesh(armGeo, poleMat, slCount);
+  const lampMat = new THREE.MeshStandardMaterial({
+    color: 0xffe4b5,
+    emissive: 0xffd28a,
+    emissiveIntensity: 1.5,
+  });
+  streetLampMaterials.push(lampMat);
+  const bulbInst = new THREE.InstancedMesh(bulbGeo, lampMat, slCount);
+  const tmpColor = new THREE.Color();
+
+  blueprint.streetLights.forEach((sl, idx) => {
+    tmpObj.position.set(sl.x, sl.y, sl.z);
+    tmpObj.rotation.set(0, sl.yaw, 0);
+    tmpObj.scale.set(1, 1, 1);
+    tmpObj.updateMatrix();
+    poleInst.setMatrixAt(idx, tmpObj.matrix);
+    armInst.setMatrixAt(idx, tmpObj.matrix);
+    bulbInst.setMatrixAt(idx, tmpObj.matrix);
+    tmpColor.setHex(sl.color);
+    bulbInst.setColorAt(idx, tmpColor);
+  });
+  poleInst.instanceMatrix.needsUpdate = true;
+  armInst.instanceMatrix.needsUpdate = true;
+  bulbInst.instanceMatrix.needsUpdate = true;
+  if (bulbInst.instanceColor) bulbInst.instanceColor.needsUpdate = true;
+  root.add(poleInst, armInst, bulbInst);
 
   // 14. Beach Lifeguard Towers & Umbrellas
   for (const prop of blueprint.beachProps) {

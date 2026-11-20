@@ -151,7 +151,7 @@ export function stepPedestrians(
 
 export interface PedestrianRenderer {
   attachGltfPeople: (clonePerson: (variantIndex: number) => ClonedPerson | null) => void;
-  syncFromState: (peds: PedestrianState[], dt: number) => void;
+  syncFromState: (peds: PedestrianState[], dt: number, focusX: number, focusZ: number) => void;
 }
 
 interface PedInstance {
@@ -195,6 +195,14 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         const cloned = clonePerson(i + 1);
         if (!cloned) continue;
 
+        // Keep pedestrians lightweight: contact shadow handles grounding without costly skinned shadow passes
+        cloned.scene.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.castShadow = false;
+            obj.receiveShadow = false;
+          }
+        });
+
         const inst = instances[i];
         const shadow = new THREE.Mesh(shadowGeo, shadowMat);
         shadow.position.y = 0.03;
@@ -210,14 +218,23 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
       }
     },
 
-    syncFromState(statePeds: PedestrianState[], dt: number) {
+    syncFromState(statePeds: PedestrianState[], dt: number, focusX: number, focusZ: number) {
       elapsedAccum += dt;
       for (let i = 0; i < statePeds.length && i < instances.length; i++) {
         const p = statePeds[i];
         const inst = instances[i];
+        if (!inst.rig) continue;
+
+        // Distance-cull far skinned pedestrians (>95m) so GPU only skins nearby crowd
+        const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);
+        if (dSq > 95 * 95) {
+          inst.root.visible = false;
+          continue;
+        }
+        inst.root.visible = true;
         inst.root.position.set(p.x, p.y, p.z);
         inst.root.rotation.y = -p.yaw;
-        inst.rig?.update(dt, p.speed * 2.4, false, true, elapsedAccum + i);
+        inst.rig.update(dt, p.speed * 2.4, false, true, elapsedAccum + i);
       }
     },
   };

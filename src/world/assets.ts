@@ -195,13 +195,13 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
       cloned.rotation.y = Math.PI;
       cloned.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          // Hide optional held briefcase/prop accessory used only in Walk_Carry
-          if (/accessory/i.test(obj.name)) {
+          // Hide optional held accessory & ultra-dense invisible micro-meshes (teeth=4.5k verts, hairline=9.6k verts)
+          if (/accessory|teeth|hairline|eyelash|ankle_lining/i.test(obj.name)) {
             obj.visible = false;
             return;
           }
           obj.castShadow = true;
-          obj.receiveShadow = true;
+          obj.receiveShadow = false;
         }
       });
       return { scene: cloned, animations: gltf.animations };

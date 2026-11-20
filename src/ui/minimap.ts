@@ -5,13 +5,92 @@ import { CAUSEWAY, KEY_SOL_BOUNDS, SOUTH_PIER } from '../world/cityData';
 import type { CityBlueprint } from '../world/types';
 import { MISSIONS, type MissionManager } from '../systems/missions';
 
+const WORLD_MIN_X = -320;
+const WORLD_MAX_X = 420;
+const WORLD_MIN_Z = -340;
+const WORLD_MAX_Z = 320;
+const CACHE_SCALE = 0.75; // pixels per meter on pre-rendered static map
+
 export class MinimapRenderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly size: number;
+  private staticMapCanvas: HTMLCanvasElement | null = null;
+  private frameSkip = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     this.size = canvas.width;
+  }
+
+  private ensureStaticMap(blueprint: CityBlueprint): HTMLCanvasElement {
+    if (this.staticMapCanvas) return this.staticMapCanvas;
+    const w = Math.ceil((WORLD_MAX_X - WORLD_MIN_X) * CACHE_SCALE);
+    const h = Math.ceil((WORLD_MAX_Z - WORLD_MIN_Z) * CACHE_SCALE);
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d')!;
+
+    const px = (wx: number) => (wx - WORLD_MIN_X) * CACHE_SCALE;
+    const pz = (wz: number) => (wz - WORLD_MIN_Z) * CACHE_SCALE;
+
+    ctx.fillStyle = '#092438';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.fillStyle = '#1b263b';
+    ctx.fillRect(px(-248), pz(-228), 408 * CACHE_SCALE, 420 * CACHE_SCALE);
+
+    ctx.fillStyle = '#a98e62';
+    ctx.fillRect(px(165), pz(-184), 50 * CACHE_SCALE, 376 * CACHE_SCALE);
+
+    ctx.fillStyle = '#244b3c';
+    ctx.fillRect(
+      px(KEY_SOL_BOUNDS.minX),
+      pz(KEY_SOL_BOUNDS.minZ),
+      (KEY_SOL_BOUNDS.maxX - KEY_SOL_BOUNDS.minX) * CACHE_SCALE,
+      (KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ) * CACHE_SCALE,
+    );
+
+    ctx.fillStyle = '#235e45';
+    ctx.fillRect(px(-8), pz(-8), 66 * CACHE_SCALE, 66 * CACHE_SCALE);
+
+    ctx.fillStyle = '#8b6546';
+    ctx.fillRect(
+      px(SOUTH_PIER.startX),
+      pz(SOUTH_PIER.centerZ - SOUTH_PIER.halfWidth),
+      (SOUTH_PIER.endX - SOUTH_PIER.startX) * CACHE_SCALE,
+      SOUTH_PIER.halfWidth * 2 * CACHE_SCALE,
+    );
+
+    ctx.strokeStyle = '#47556f';
+    ctx.lineCap = 'square';
+    for (const r of blueprint.roads) {
+      ctx.lineWidth = Math.max(2, r.width * CACHE_SCALE);
+      ctx.beginPath();
+      ctx.moveTo(px(r.x1), pz(r.z1));
+      ctx.lineTo(px(r.x2), pz(r.z2));
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = '#53c8df';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(px(CAUSEWAY.startX), pz(CAUSEWAY.centerZ));
+    ctx.lineTo(px(CAUSEWAY.endX), pz(CAUSEWAY.centerZ));
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(130, 155, 195, 0.36)';
+    for (const b of blueprint.buildings) {
+      ctx.fillRect(
+        px(b.x - b.width * 0.5),
+        pz(b.z - b.depth * 0.5),
+        b.width * CACHE_SCALE,
+        b.depth * CACHE_SCALE,
+      );
+    }
+
+    this.staticMapCanvas = c;
+    return c;
   }
 
   public render(
@@ -21,94 +100,36 @@ export class MinimapRenderer {
     traffic: TrafficCarState[],
     missions: MissionManager,
   ): void {
+    // Throttle 2D minimap redraws to every 2nd frame (~30 Hz) for near-zero CPU overhead
+    this.frameSkip = (this.frameSkip + 1) % 2;
+    if (this.frameSkip !== 0 && this.staticMapCanvas) return;
+
     const ctx = this.ctx;
     const s = this.size;
     const half = s * 0.5;
-    // Scale: ~260m radius visible around player
     const scale = s / 420;
+    const staticCanvas = this.ensureStaticMap(blueprint);
 
     const toMap = (wx: number, wz: number) => ({
       mx: half + (wx - player.x) * scale,
       my: half + (wz - player.z) * scale,
     });
 
-    // Deep Atlantic background
     ctx.fillStyle = '#092438';
     ctx.fillRect(0, 0, s, s);
 
-    // Mainland block
-    const ml = toMap(-248, -228);
-    ctx.fillStyle = '#1b263b';
-    ctx.fillRect(ml.mx, ml.my, 408 * scale, 420 * scale);
+    // Blit pre-rendered static city map in ONE fast GPU-accelerated drawImage call
+    const ratio = scale / CACHE_SCALE;
+    const destX = half + (WORLD_MIN_X - player.x) * scale;
+    const destY = half + (WORLD_MIN_Z - player.z) * scale;
+    ctx.drawImage(staticCanvas, destX, destY, staticCanvas.width * ratio, staticCanvas.height * ratio);
 
-    // Sandy beach strip
-    const bch = toMap(165, -184);
-    ctx.fillStyle = '#a98e62';
-    ctx.fillRect(bch.mx, bch.my, 50 * scale, 376 * scale);
-
-    // Key Sol island
-    const ks = toMap(KEY_SOL_BOUNDS.minX, KEY_SOL_BOUNDS.minZ);
-    ctx.fillStyle = '#244b3c';
-    ctx.fillRect(
-      ks.mx,
-      ks.my,
-      (KEY_SOL_BOUNDS.maxX - KEY_SOL_BOUNDS.minX) * scale,
-      (KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ) * scale,
-    );
-
-    // Palm Plaza green park
-    const pp = toMap(-8, -8);
-    ctx.fillStyle = '#235e45';
-    ctx.fillRect(pp.mx, pp.my, 66 * scale, 66 * scale);
-
-    // South Pier
-    const sp = toMap(SOUTH_PIER.startX, SOUTH_PIER.centerZ - SOUTH_PIER.halfWidth);
-    ctx.fillStyle = '#8b6546';
-    ctx.fillRect(
-      sp.mx,
-      sp.my,
-      (SOUTH_PIER.endX - SOUTH_PIER.startX) * scale,
-      SOUTH_PIER.halfWidth * 2 * scale,
-    );
-
-    // Roads
-    ctx.strokeStyle = '#47556f';
-    ctx.lineCap = 'square';
-    for (const r of blueprint.roads) {
-      const p1 = toMap(r.x1, r.z1);
-      const p2 = toMap(r.x2, r.z2);
-      ctx.lineWidth = Math.max(2, r.width * scale);
-      ctx.beginPath();
-      ctx.moveTo(p1.mx, p1.my);
-      ctx.lineTo(p2.mx, p2.my);
-      ctx.stroke();
-    }
-
-    // Causeway highlight
-    const cw1 = toMap(CAUSEWAY.startX, CAUSEWAY.centerZ);
-    const cw2 = toMap(CAUSEWAY.endX, CAUSEWAY.centerZ);
-    ctx.strokeStyle = '#53c8df';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(cw1.mx, cw1.my);
-    ctx.lineTo(cw2.mx, cw2.my);
-    ctx.stroke();
-
-    // Buildings
-    ctx.fillStyle = 'rgba(130, 155, 195, 0.34)';
-    for (const b of blueprint.buildings) {
-      const bp = toMap(b.x - b.width * 0.5, b.z - b.depth * 0.5);
-      ctx.fillRect(bp.mx, bp.my, b.width * scale, b.depth * scale);
-    }
-
-    // Ambient traffic blips
     ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
     for (const t of traffic) {
       const tp = toMap(t.x, t.z);
       ctx.fillRect(tp.mx - 1.5, tp.my - 1.5, 3, 3);
     }
 
-    // Player-drivable vehicles (coral dots)
     for (const v of vehicles) {
       const vp = toMap(v.x, v.z);
       ctx.fillStyle = v.id === player.vehicleId ? '#ffffff' : '#ff5e8e';
@@ -117,7 +138,6 @@ export class MinimapRenderer {
       ctx.fill();
     }
 
-    // Available mission beacons
     if (!missions.active) {
       for (const m of MISSIONS) {
         const mp = toMap(m.startX, m.startZ);
@@ -129,7 +149,6 @@ export class MinimapRenderer {
       }
     }
 
-    // Active objective or tracked mission waypoint (clamped to radar edge if off-screen)
     const target = missions.getCurrentTarget();
     if (target) {
       const tp = toMap(target.x, target.z);
@@ -140,7 +159,6 @@ export class MinimapRenderer {
       const cx = len > maxR ? half + (dx / len) * maxR : tp.mx;
       const cy = len > maxR ? half + (dy / len) * maxR : tp.my;
 
-      // Dashed GPS line
       ctx.strokeStyle = 'rgba(255, 207, 92, 0.5)';
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
@@ -159,7 +177,6 @@ export class MinimapRenderer {
       ctx.stroke();
     }
 
-    // Player directional chevron in center
     ctx.save();
     ctx.translate(half, half);
     ctx.rotate(player.yaw);
@@ -173,7 +190,6 @@ export class MinimapRenderer {
     ctx.fill();
     ctx.restore();
 
-    // North indicator
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = 'bold 10px system-ui';
     ctx.textAlign = 'center';

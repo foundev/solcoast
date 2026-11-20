@@ -119,6 +119,8 @@ export class HudController {
     vehicles: VehicleState[];
     missions: MissionManager;
     promptText: string | null;
+    fps?: number;
+    drawCalls?: number;
   }): void {
     const {
       timeLabel,
@@ -130,6 +132,8 @@ export class HudController {
       vehicles,
       missions,
       promptText,
+      fps,
+      drawCalls,
     } = params;
 
     this.clockEl.textContent = timeLabel;
@@ -137,7 +141,8 @@ export class HudController {
     this.cashEl.textContent = `$${cash.toLocaleString()}`;
     this.rankEl.textContent = computePlayerRank(cash, missions.completedIds.size);
     this.modeEl.textContent = activeVehicle ? 'DRIVING' : 'ON FOOT';
-    this.progressEl.textContent = `Missions ${missions.completedIds.size}/${MISSIONS.length} · Districts ${discoveredCount}/${ALL_DISTRICT_IDS.length}`;
+    const perfStr = fps !== undefined ? ` · ${fps} FPS (${drawCalls ?? 0} draws)` : '';
+    this.progressEl.textContent = `Missions ${missions.completedIds.size}/${MISSIONS.length} · Districts ${discoveredCount}/${ALL_DISTRICT_IDS.length}${perfStr}`;
 
     // Mission panel
     if (missions.active) {

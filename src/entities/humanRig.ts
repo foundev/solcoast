@@ -30,29 +30,29 @@ function aimBoneInModelSpace(
   tmpMat: THREE.Matrix4,
   tmpCurDir: THREE.Vector3,
   tmpDelta: THREE.Quaternion,
+  tmpParentQuat: THREE.Quaternion,
+  tmpInvParentQuat: THREE.Quaternion,
 ): void {
   const parent = bone.parent;
   if (!parent) return;
 
-  // Start from the bone's natural bind-pose orientation (preserves clean anatomical twist/roll)
   bone.quaternion.copy(restLocalQuat);
-  bone.updateMatrixWorld(true);
+  bone.updateMatrix();
+  bone.matrixWorld.multiplyMatrices(parent.matrixWorld, bone.matrix);
 
-  // Current +Y bone direction in modelRoot space
   tmpMat.multiplyMatrices(invModelMat, bone.matrixWorld);
   tmpCurDir.set(0, 1, 0).transformDirection(tmpMat).normalize();
 
-  // Compute shortest-arc rotation in model space from current +Y to desired targetDirModel
   tmpDelta.setFromUnitVectors(tmpCurDir, targetDirModel);
 
-  // Convert that model-space delta into bone's parent-local space and premultiply
   tmpParentWorld.multiplyMatrices(invModelMat, parent.matrixWorld);
-  const parentQuat = new THREE.Quaternion().setFromRotationMatrix(tmpParentWorld);
-  const invParentQuat = parentQuat.clone().invert();
+  tmpParentQuat.setFromRotationMatrix(tmpParentWorld);
+  tmpInvParentQuat.copy(tmpParentQuat).invert();
 
-  const localDelta = invParentQuat.multiply(tmpDelta).multiply(parentQuat);
-  bone.quaternion.premultiply(localDelta).normalize();
-  bone.updateMatrixWorld(true);
+  tmpInvParentQuat.multiply(tmpDelta).multiply(tmpParentQuat);
+  bone.quaternion.premultiply(tmpInvParentQuat).normalize();
+  bone.updateMatrix();
+  bone.matrixWorld.multiplyMatrices(parent.matrixWorld, bone.matrix);
 }
 
 export interface HumanRigController {
@@ -120,6 +120,8 @@ export function createHumanRigController(
   const tmpMat = new THREE.Matrix4();
   const tmpCurDir = new THREE.Vector3();
   const tmpDelta = new THREE.Quaternion();
+  const tmpParentQuat = new THREE.Quaternion();
+  const tmpInvParentQuat = new THREE.Quaternion();
   const tmpFootL = new THREE.Vector3();
   const tmpFootR = new THREE.Vector3();
   const tmpDirUpper = new THREE.Vector3();
@@ -175,9 +177,16 @@ export function createHumanRigController(
       smoothStride = lerp(smoothStride, rawStride, clamp(dt * 18, 0, 1));
 
       // Keep clavicles relaxed & level in bind pose (prevents hunched shoulders)
-      if (clavL) clavL.quaternion.copy(restClavL);
-      if (clavR) clavR.quaternion.copy(restClavR);
-      model.updateMatrixWorld(true);
+      if (clavL && clavL.parent) {
+        clavL.quaternion.copy(restClavL);
+        clavL.updateMatrix();
+        clavL.matrixWorld.multiplyMatrices(clavL.parent.matrixWorld, clavL.matrix);
+      }
+      if (clavR && clavR.parent) {
+        clavR.quaternion.copy(restClavR);
+        clavR.updateMatrix();
+        clavR.matrixWorld.multiplyMatrices(clavR.parent.matrixWorld, clavR.matrix);
+      }
 
       const moveNorm = clamp(speed / 6.0, 0, 1);
       const runBlend = activeMode === 'run' ? 1 : 0;
@@ -233,6 +242,8 @@ export function createHumanRigController(
           tmpMat,
           tmpCurDir,
           tmpDelta,
+          tmpParentQuat,
+          tmpInvParentQuat,
         );
 
         // Forearm bends strictly forward (+Z) and slightly inward across torso during run
@@ -249,7 +260,13 @@ export function createHumanRigController(
           tmpMat,
           tmpCurDir,
           tmpDelta,
+          tmpParentQuat,
+          tmpInvParentQuat,
         );
+        // Update hand child matrix cleanly after forearm rotation
+        for (const ch of lower.children) {
+          ch.updateMatrixWorld(true);
+        }
       };
 
       // Counter-swing: when left foot is forward (+smoothStride), RIGHT arm swings forward (+smoothStride)
