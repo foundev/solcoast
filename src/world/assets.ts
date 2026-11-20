@@ -29,6 +29,7 @@ export interface ClonedPerson {
 export interface LoadedGameAssets {
   ferrariGltf: GLTF | null;
   peopleGltfs: GLTF[];
+  mocapClips: THREE.AnimationClip[];
   hdris: Partial<LoadedHdriSet>;
   textures: {
     asphalt?: LoadedPbrTextures;
@@ -96,8 +97,6 @@ function loadHdri(
         dataTex.minFilter = THREE.LinearFilter;
         dataTex.magFilter = THREE.LinearFilter;
         const envTex = pmrem.fromEquirectangular(dataTex).texture;
-        // Keep the crisp unfiltered equirectangular HDR texture for scene.background
-        // and the PMREM cubemap strictly for PBR IBL scene.environment reflections!
         resolve({ env: envTex, bg: dataTex });
       },
       undefined,
@@ -110,8 +109,9 @@ function loadHdri(
 }
 
 /**
- * Loads artist-authored GLB models (Ferrari 458 + 4 CC0 animated civilian humans),
- * Poly Haven Pure Sky CC0 HDRIs (no buildings/houses on horizon), and photographic PBR textures.
+ * Loads artist-authored GLB models (Ferrari 458 + 4 Ready Player Me civilian avatars),
+ * studio optical mocap animations (Idle, Walk, Run, Jump), Poly Haven Pure Sky CC0 HDRIs,
+ * and photographic CC0 PBR textures.
  */
 export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<LoadedGameAssets> {
   const gltfLoader = new GLTFLoader();
@@ -140,10 +140,14 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
 
   const [
     ferrariGltf,
-    samGltf,
-    mayaGltf,
-    jordanGltf,
-    harperGltf,
+    av2,
+    av1,
+    av3,
+    av4,
+    animIdle,
+    animWalk,
+    animRun,
+    animJump,
     sunset,
     midday,
     night,
@@ -153,10 +157,14 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     concrete,
   ] = await Promise.all([
     loadGltfSafe('/assets/models/ferrari.glb'),
-    loadGltfSafe('/assets/models/person_sam.glb'),
-    loadGltfSafe('/assets/models/person_maya.glb'),
-    loadGltfSafe('/assets/models/person_jordan.glb'),
-    loadGltfSafe('/assets/models/person_harper.glb'),
+    loadGltfSafe('/assets/models/avatar_2.glb'),
+    loadGltfSafe('/assets/models/avatar_1.glb'),
+    loadGltfSafe('/assets/models/avatar_3.glb'),
+    loadGltfSafe('/assets/models/avatar_4.glb'),
+    loadGltfSafe('/assets/animations/anim_idle.glb'),
+    loadGltfSafe('/assets/animations/anim_walk.glb'),
+    loadGltfSafe('/assets/animations/anim_run.glb'),
+    loadGltfSafe('/assets/animations/anim_jump.glb'),
     loadHdri(rgbeLoader, pmrem, '/assets/hdri/sunset.hdr'),
     loadHdri(rgbeLoader, pmrem, '/assets/hdri/midday.hdr'),
     loadHdri(rgbeLoader, pmrem, '/assets/hdri/night.hdr'),
@@ -169,13 +177,25 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
   pmrem.dispose();
   dracoLoader.dispose();
 
-  const peopleGltfs = [samGltf, mayaGltf, jordanGltf, harperGltf].filter(
-    (g): g is GLTF => g !== null,
-  );
+  const peopleGltfs = [av2, av1, av3, av4].filter((g): g is GLTF => g !== null);
+
+  const mocapClips: THREE.AnimationClip[] = [];
+  const pushClip = (gltf: GLTF | null, canonicalName: string) => {
+    const raw = gltf?.animations?.[0];
+    if (!raw) return;
+    const named = raw.clone();
+    named.name = canonicalName;
+    mocapClips.push(named);
+  };
+  pushClip(animIdle, 'Idle');
+  pushClip(animWalk, 'Walk');
+  pushClip(animRun, 'Run');
+  pushClip(animJump, 'Jump');
 
   return {
     ferrariGltf,
     peopleGltfs,
+    mocapClips,
     hdris: {
       ...(sunset ? { sunset } : {}),
       ...(midday ? { midday } : {}),
@@ -188,15 +208,14 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
       concrete,
     },
     clonePerson(variantIndex = 0) {
-      if (peopleGltfs.length === 0) return null;
+      if (peopleGltfs.length === 0 || mocapClips.length === 0) return null;
       const gltf = peopleGltfs[((variantIndex % peopleGltfs.length) + peopleGltfs.length) % peopleGltfs.length];
       const cloned = SkeletonUtils.clone(gltf.scene);
-      // Innerscene CC0 humans face +Z natively; rotate 180 deg so they face -Z (our forward axis)
+      // Ready Player Me avatars face +Z natively; rotate 180 deg so they face -Z (our forward axis)
       cloned.rotation.y = Math.PI;
       cloned.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          // Hide optional held accessory & ultra-dense invisible micro-meshes (teeth=4.5k verts, hairline=9.6k verts)
-          if (/accessory|teeth|hairline|eyelash|ankle_lining/i.test(obj.name)) {
+          if (/teeth/i.test(obj.name)) {
             obj.visible = false;
             return;
           }
@@ -204,7 +223,7 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
           obj.receiveShadow = false;
         }
       });
-      return { scene: cloned, animations: gltf.animations };
+      return { scene: cloned, animations: mocapClips };
     },
     cloneFerrari() {
       if (!ferrariGltf) return null;

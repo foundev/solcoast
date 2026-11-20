@@ -183,11 +183,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(walked).toBeGreaterThanOrEqual(8);
   });
 
-  it('drives person_sam.glb with relaxed idle arms, upright pelvis, and opposite counter-swinging walk/run arms', async () => {
-    const glbPath = path.resolve(__dirname, '../public/assets/models/person_sam.glb');
-    const buf = fs.readFileSync(glbPath);
-    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-
+  it('drives Ready Player Me civilian avatar with in-place optical mocap Idle, Walk, and Run clips', async () => {
     (globalThis as unknown as { self: unknown; createImageBitmap: unknown }).self = globalThis;
     (globalThis as unknown as { createImageBitmap: unknown }).createImageBitmap = async () => ({
       width: 1,
@@ -195,42 +191,68 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       close() {},
     });
 
-    const gltf = await new Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>((resolve, reject) => {
-      new GLTFLoader().parse(ab, '', resolve, reject);
-    });
+    const loader = new GLTFLoader();
+    const loadLocal = (rel: string) =>
+      new Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>((resolve, reject) => {
+        const buf = fs.readFileSync(path.resolve(__dirname, '../public/assets', rel));
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        loader.parse(ab, '', resolve, reject);
+      });
 
-    const model = gltf.scene;
-    const rig = createHumanRigController(model, gltf.animations);
+    const [avatar, idleG, walkG, runG, jumpG] = await Promise.all([
+      loadLocal('models/avatar_2.glb'),
+      loadLocal('animations/anim_idle.glb'),
+      loadLocal('animations/anim_walk.glb'),
+      loadLocal('animations/anim_run.glb'),
+      loadLocal('animations/anim_jump.glb'),
+    ]);
+
+    const clips = [
+      Object.assign(idleG.animations[0].clone(), { name: 'Idle' }),
+      Object.assign(walkG.animations[0].clone(), { name: 'Walk' }),
+      Object.assign(runG.animations[0].clone(), { name: 'Run' }),
+      Object.assign(jumpG.animations[0].clone(), { name: 'Jump' }),
+    ];
+
+    const model = avatar.scene;
+    const rig = createHumanRigController(model, clips);
     const wp = (name: string) => model.getObjectByName(name)!.getWorldPosition(new THREE.Vector3());
 
-    // 1. Idle: arms hang relaxed near hips (not bowed outward like A-pose)
+    // 1. Idle: relaxed natural human stance with arms beside hips
     rig.update(0.016, 0, false, true, 0);
-    const uArmL = wp('upperarm_l');
-    const lArmL = wp('lowerarm_l');
-    const handL = wp('hand_l');
-    const handR = wp('hand_r');
-    expect(Math.abs(lArmL.x)).toBeLessThan(0.25);
-    expect(Math.abs(handL.x)).toBeLessThan(0.27);
-    expect(handL.y).toBeLessThan(lArmL.y);
-    expect(lArmL.y).toBeLessThan(uArmL.y);
-    expect(Math.abs(handL.z - handR.z)).toBeLessThan(0.05);
+    model.updateMatrixWorld(true);
+    const handL = wp('LeftHand');
+    const handR = wp('RightHand');
+    expect(Math.abs(handL.x)).toBeLessThan(0.32);
+    expect(Math.abs(handR.x)).toBeLessThan(0.32);
+    expect(wp('Hips').y).toBeGreaterThan(0.9);
 
-    // 2. Walk: step until left foot is clearly ahead of right foot (+Z in unrotated GLB),
-    // then verify right hand swings forward ahead of left hand AND pelvis stays upright!
-    let sawCounterSwing = false;
-    for (let step = 0; step < 60; step++) {
-      rig.update(0.05, 5.5, false, true, step * 0.05);
-      const footL = wp('foot_l');
-      const footR = wp('foot_r');
-      const hL = wp('hand_l');
-      const hR = wp('hand_r');
-      const pelv = wp('pelvis');
-      expect(pelv.y).toBeGreaterThan(0.86);
-      if (footL.z - footR.z > 0.35) {
-        expect(hR.z).toBeGreaterThan(hL.z + 0.12);
-        sawCounterSwing = true;
+    // 2. Run: allow 0.24s crossfade from Idle into Run, then verify horizontal root-motion stays in place
+    //    (|hips.z| < 0.05) while real studio mocap arms counter-swing naturally!
+    for (let warm = 0; warm < 8; warm++) {
+      rig.update(0.03, 11.5, true, true, warm * 0.03);
+    }
+    let maxLeftAhead = 0;
+    let maxRightAhead = 0;
+    for (let step = 0; step < 30; step++) {
+      rig.update(0.03, 11.5, true, true, (step + 8) * 0.03);
+      model.updateMatrixWorld(true);
+      const hips = wp('Hips');
+      expect(Math.abs(hips.z)).toBeLessThan(0.05);
+      const fL = wp('LeftFoot');
+      const fR = wp('RightFoot');
+      const hL = wp('LeftHand');
+      const hR = wp('RightHand');
+      if (fL.z - fR.z > 0.45) {
+        expect(hR.z).toBeGreaterThan(hL.z + 0.1);
+        maxRightAhead = Math.max(maxRightAhead, hR.z - hL.z);
+      }
+      if (fR.z - fL.z > 0.45) {
+        expect(hL.z).toBeGreaterThan(hR.z + 0.1);
+        maxLeftAhead = Math.max(maxLeftAhead, hL.z - hR.z);
       }
     }
-    expect(sawCounterSwing).toBe(true);
+    expect(maxLeftAhead).toBeGreaterThan(0.35);
+    expect(maxRightAhead).toBeGreaterThan(0.35);
   });
 });

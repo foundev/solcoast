@@ -1,13 +1,15 @@
 # Third-Party 3D & PBR Assets
 
-Sol Coast code is MIT-licensed ([LICENSE](LICENSE)). The bundled 3D models, HDRI environments, and photographic PBR textures in `public/assets/` retain their respective creators' licenses and attributions:
+Sol Coast code is MIT-licensed ([LICENSE](LICENSE)). The bundled 3D models, motion-capture animations, HDRI environments, and photographic PBR textures in `public/assets/` retain their respective creators' licenses and attributions:
 
-## 3D Models (`public/assets/models/`)
+## 3D Models & Motion-Capture Animations
 
-- **`ferrari.glb`** — Ferrari 458 Italia 3D model by **vicent091036** (via Three.js examples / Sketchfab).
+- **`public/assets/models/ferrari.glb`** — Ferrari 458 Italia 3D model by **vicent091036** (via Three.js examples / Sketchfab).
   - License: **CC BY 4.0** (Creative Commons Attribution 4.0 International).
-- **`person_sam.glb`, `person_maya.glb`, `person_jordan.glb`, `person_harper.glb`** — Animated civilian human characters (*Locomotion Collection* — Sam, Maya, Jordan, Harper) from the **Innerscene Free 3D Parts Library** (adapted from MakeHuman/MPFB assets), with embedded `Idle_Standing`, `Walk_Relaxed`, `Walk_Brisk`, `Jog`, and `Run` clips (embedded textures optimized to 1K JPEG/PNG via `scripts/optimize-glbs.py`).
-  - License: **CC0 1.0 (Public Domain)**.
+- **`public/assets/models/avatar_1..4.glb`** — Full-body game-optimized civilian avatars from **Ready Player Me** (`readyplayerme/animation-library-demo`).
+  - License: **MIT / Ready Player Me Sample Assets**.
+- **`public/assets/animations/anim_idle.glb`, `anim_walk.glb`, `anim_run.glb`, `anim_jump.glb`** — Studio optical motion-capture locomotion animations (`M_Standing_Idle_001`, `M_Walk_001`, `M_Run_001`, `M_Jog_Jump_001`) from **Ready Player Me Animation Library** (`readyplayerme/animation-library`).
+  - License: **MIT License**.
 
 ## HDRI Sky & Reflection Maps (`public/assets/hdri/`)
 
@@ -26,9 +28,8 @@ All photographic PBR texture maps (Diffuse, OpenGL Normal, Roughness) are from *
 - **`wood_*`** — *Wood Planks* (1K, CC0)
 - **`concrete_*`** — *Concrete Floor 02* (1K, CC0)
 
-## Re-fetching & Optimizing Assets
+## Re-fetching Assets
 
 ```bash
 node scripts/fetch-assets.mjs
-python3 scripts/optimize-glbs.py public/assets/models/person_*.glb
 ```
