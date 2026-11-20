@@ -367,6 +367,7 @@ export interface VehicleMeshHandles {
   frontWheelPivots: THREE.Object3D[];
   syncFromState: (state: VehicleState, nightFactor: number, dt?: number, isOccupied?: boolean) => void;
   applyPaint: (paintIndex: number) => void;
+  attachGltfSupercar: (ferrariRoot: THREE.Group) => void;
 }
 
 let sharedContactShadowTex: THREE.CanvasTexture | null = null;
@@ -702,11 +703,14 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
 
   const wheelMeshes: THREE.Object3D[] = [];
   const frontWheelPivots: THREE.Object3D[] = [];
+  const proceduralWheelPivots: THREE.Object3D[] = [];
+  let gltfWheelBaseRotX = 0;
 
   for (const wp of wheelPositions) {
     const pivot = new THREE.Group();
     pivot.position.set(wp.x, 0.37, wp.z);
     root.add(pivot);
+    proceduralWheelPivots.push(pivot);
     if (wp.front) frontWheelPivots.push(pivot);
 
     const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.12), caliperMaterial);
@@ -796,7 +800,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       p.rotation.y = -s.steerAngle;
     }
     for (const w of wheelMeshes) {
-      w.rotation.x = -s.wheelSpin;
+      w.rotation.x = gltfWheelBaseRotX - s.wheelSpin;
     }
 
     const lightsActive = s.headlightsOn && nightFactor > 0.08;
@@ -888,6 +892,70 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     }
   };
 
+  const attachGltfSupercar = (ferrariRoot: THREE.Group) => {
+    // Hide procedural car shell & procedural wheel pivots while preserving glow halos, spotlights & contact shadow
+    for (const child of bodyGroup.children) {
+      if (!(child instanceof THREE.Sprite)) {
+        child.visible = false;
+      }
+    }
+    for (const wp of proceduralWheelPivots) {
+      wp.visible = false;
+    }
+
+    ferrariRoot.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+
+      const name = obj.name.toLowerCase();
+      const matName = Array.isArray(obj.material)
+        ? ''
+        : (obj.material?.name ?? '').toLowerCase();
+
+      if (name === 'body' || matName === 'body_color') {
+        obj.material = paintMaterial;
+      } else if (name === 'glass' || matName === 'glass_gray') {
+        obj.material = glassMat;
+      } else if (name === 'lights_red' || matName === 'taillight_glass') {
+        obj.material = brakeLightMaterial;
+      } else if (name === 'lights' || name === 'leds' || matName === 'projector_glass') {
+        obj.material = headlightMaterial;
+      } else if (name === 'trim' || matName === 'carbon_fiber') {
+        obj.material = carbonMat;
+      } else if (matName === 'metal_chrome') {
+        obj.material = chromeMat;
+      } else if (name === 'brakes') {
+        obj.material = caliperMaterial;
+      }
+    });
+
+    // Rewire steering & spinning wheels to Ferrari's authentic wheel nodes
+    wheelMeshes.length = 0;
+    frontWheelPivots.length = 0;
+    gltfWheelBaseRotX = -Math.PI * 0.5;
+
+    const wheelNames = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'];
+    for (const wn of wheelNames) {
+      const wheelObj = ferrariRoot.getObjectByName(wn);
+      if (!wheelObj) continue;
+      if (wn === 'wheel_fl' || wn === 'wheel_fr') {
+        const parent = wheelObj.parent;
+        if (parent) {
+          const steerPivot = new THREE.Group();
+          steerPivot.position.copy(wheelObj.position);
+          wheelObj.position.set(0, 0, 0);
+          parent.add(steerPivot);
+          steerPivot.add(wheelObj);
+          frontWheelPivots.push(steerPivot);
+        }
+      }
+      wheelMeshes.push(wheelObj);
+    }
+
+    bodyGroup.add(ferrariRoot);
+  };
+
   syncFromState(state, 0.2, 0.016, false);
 
   return {
@@ -904,5 +972,6 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     frontWheelPivots,
     syncFromState,
     applyPaint,
+    attachGltfSupercar,
   };
 }

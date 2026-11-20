@@ -40,6 +40,7 @@ import {
 } from './systems/persistence';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
+import { loadGameAssets } from './world/assets';
 import { buildCityScene } from './world/cityBuilder';
 import {
   createCityBlueprint,
@@ -136,6 +137,31 @@ function bootstrap(): void {
   }
 
   const playerMesh = createPlayerMesh(scene);
+
+  // Stream local photorealistic GLB models (Ferrari 458, rigged mocap character),
+  // Poly Haven CC0 HDRI skies, and photographic PBR textures asynchronously!
+  void loadGameAssets(renderer).then((assets) => {
+    sky.setHdriSet(assets.hdris);
+    cityHandles.applyPhotoTextures(assets.textures);
+
+    for (const v of vehicles) {
+      if (v.id === 'solstice-gt' || v.id === 'neon-apex') {
+        const ferrari = assets.cloneFerrari();
+        if (ferrari) {
+          vehicleMeshes.get(v.id)?.attachGltfSupercar(ferrari);
+        }
+      }
+    }
+
+    const riggedChar = assets.cloneCharacter();
+    if (riggedChar) {
+      playerMesh.attachGltfCharacter(riggedChar.scene, riggedChar.animations);
+    }
+
+    if (assets.ferrariGltf || assets.characterGltf) {
+      hud.showToast('HD Assets Ready: Ferrari 458, Mocap Character & HDRI Sky loaded!', 'success');
+    }
+  });
 
   // Ambient AI traffic cars + strolling sidewalk pedestrians
   const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
@@ -456,7 +482,7 @@ function bootstrap(): void {
       const occupied = activeVehicle !== null && activeVehicle.id === v.id;
       vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
     }
-    playerMesh.syncFromState(player, elapsed);
+    playerMesh.syncFromState(player, elapsed, dt);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
     pedestrianMeshes.syncFromState(pedestrians, elapsed);
     beaconRenderer.update(elapsed, missions);

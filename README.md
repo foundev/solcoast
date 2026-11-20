@@ -60,6 +60,6 @@ npm test       # Run Vitest unit suite (world, physics, missions, persistence)
 npm run build  # Type-check and build production bundle
 ```
 
-## License
+## License & Assets
 
-MIT — see [LICENSE](LICENSE).
+Code is MIT-licensed — see [LICENSE](LICENSE). Bundled 3D models (`ferrari.glb`, rigged mocap `character.glb`), Poly Haven CC0 HDRIs, and photographic CC0 PBR textures are documented with attributions in [ASSETS.md](ASSETS.md). Run `node scripts/fetch-assets.mjs` to re-fetch assets if needed.

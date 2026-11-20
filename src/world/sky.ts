@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, lerp } from '../core/math';
+import type { LoadedHdriSet } from './assets';
 
 export interface TimePreset {
   hour: number;
@@ -156,6 +157,8 @@ export class SkySystem {
   private readonly envSkyMat: THREE.ShaderMaterial;
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
   private lastEnvHour = -999;
+  private hdriSet: Partial<LoadedHdriSet> = {};
+  private activeHdriKey: keyof LoadedHdriSet | null = null;
 
   private readonly tmpSunDir = new THREE.Vector3();
   private readonly tmpZenith = new THREE.Color();
@@ -227,6 +230,11 @@ export class SkySystem {
     scene.fog = this.fog;
   }
 
+  public setHdriSet(hdris: Partial<LoadedHdriSet>): void {
+    this.hdriSet = hdris;
+    this.activeHdriKey = null; // Force immediate refresh on next update
+  }
+
   public update(timeOfDayHours: number, elapsedSec: number, focusPos: THREE.Vector3): SkyUpdateResult {
     const h = ((timeOfDayHours % 24) + 24) % 24;
     const dayAngle = ((h - 6) / 12) * Math.PI;
@@ -269,15 +277,32 @@ export class SkySystem {
 
     this.skyMesh.position.copy(focusPos);
 
-    // Refresh PMREM environment reflection cubemap whenever time-of-day changes appreciably
-    const hourDiff = Math.abs(h - this.lastEnvHour);
-    if (hourDiff > 0.18 || this.envRenderTarget === null) {
-      this.lastEnvHour = h;
-      const nextRT = this.pmrem.fromScene(this.envScene, 0.035);
-      this.scene.environment = nextRT.texture;
-      this.scene.environmentIntensity = lerp(1.15, 0.42, nightFactor);
-      this.envRenderTarget?.dispose();
-      this.envRenderTarget = nextRT;
+    // Use real Poly Haven photographic HDRI sky & reflections when loaded; fall back to procedural PMREM
+    const desiredKey: keyof LoadedHdriSet =
+      nightFactor > 0.55 ? 'night' : sunsetBand > 0.35 || h < 8.5 || h > 15.8 ? 'sunset' : 'midday';
+    const loadedHdri = this.hdriSet[desiredKey] ?? this.hdriSet.sunset ?? this.hdriSet.midday;
+
+    if (loadedHdri) {
+      if (this.activeHdriKey !== desiredKey) {
+        this.activeHdriKey = desiredKey;
+        this.scene.environment = loadedHdri;
+        this.scene.background = loadedHdri;
+        this.scene.backgroundBlurriness = 0.015;
+        this.skyMesh.visible = false;
+      }
+      this.scene.environmentIntensity = lerp(1.2, 0.48, nightFactor);
+      this.scene.backgroundIntensity = lerp(1.05, 0.42, nightFactor);
+    } else {
+      this.skyMesh.visible = true;
+      const hourDiff = Math.abs(h - this.lastEnvHour);
+      if (hourDiff > 0.18 || this.envRenderTarget === null) {
+        this.lastEnvHour = h;
+        const nextRT = this.pmrem.fromScene(this.envScene, 0.035);
+        this.scene.environment = nextRT.texture;
+        this.scene.environmentIntensity = lerp(1.15, 0.42, nightFactor);
+        this.envRenderTarget?.dispose();
+        this.envRenderTarget = nextRT;
+      }
     }
 
     this.sunLight.position.copy(focusPos).addScaledVector(clampedSunLightDir, 145);

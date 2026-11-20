@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { LoadedGameAssets } from './assets';
 import {
   CAUSEWAY,
   KEY_SOL_BOUNDS,
@@ -31,6 +32,7 @@ export interface CitySceneHandles {
   lighthouseBeacon: THREE.Mesh;
   yachts: { group: THREE.Group; baseY: number; phase: number }[];
   palmCrowns: { group: THREE.Group; phase: number }[];
+  applyPhotoTextures: (textures: LoadedGameAssets['textures']) => void;
   updateAnimation: (
     elapsed: number,
     nightFactor: number,
@@ -736,6 +738,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   root.add(keySand);
 
   // 6. PBR Normal- & Roughness-Mapped Asphalt Road Network
+  const roadMaterials: { mat: THREE.MeshStandardMaterial; repeatY: number }[] = [];
+  const roadMarkingsGroup = new THREE.Group();
   const intersectionMat = new THREE.MeshStandardMaterial({
     color: 0x262a34,
     normalMap: asphaltPbr.normalMap,
@@ -743,6 +747,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roughness: 0.82,
     metalness: 0.08,
   });
+
+  const yellowLineMat = new THREE.MeshStandardMaterial({ color: 0xf4c042, roughness: 0.65 });
+  const whiteLineMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf5, roughness: 0.65 });
 
   for (const road of blueprint.roads) {
     if (road.isBridge) continue;
@@ -772,6 +779,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       roughness: 1.0,
       metalness: 0.08,
     });
+    roadMaterials.push({ mat: roadMat, repeatY: rep });
 
     const isHoriz = Math.abs(dx) > Math.abs(dz);
     const geo = new THREE.PlaneGeometry(road.width, len);
@@ -781,7 +789,37 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     mesh.position.set(xm, baseY, zm);
     mesh.receiveShadow = true;
     root.add(mesh);
+
+    // Painted double-yellow centerline & white shoulder decals overlaid above photographed asphalt
+    const lineY = baseY + 0.012;
+    for (const side of [-1, 1]) {
+      const shoulder = new THREE.Mesh(
+        new THREE.PlaneGeometry(isHoriz ? len : 0.22, isHoriz ? 0.22 : len),
+        whiteLineMat,
+      );
+      shoulder.rotation.x = -Math.PI * 0.5;
+      shoulder.position.set(
+        xm + (isHoriz ? 0 : side * (road.width * 0.5 - 0.65)),
+        lineY,
+        zm + (isHoriz ? side * (road.width * 0.5 - 0.65) : 0),
+      );
+      roadMarkingsGroup.add(shoulder);
+
+      const centerStripe = new THREE.Mesh(
+        new THREE.PlaneGeometry(isHoriz ? len : 0.14, isHoriz ? 0.14 : len),
+        yellowLineMat,
+      );
+      centerStripe.rotation.x = -Math.PI * 0.5;
+      centerStripe.position.set(
+        xm + (isHoriz ? 0 : side * 0.16),
+        lineY,
+        zm + (isHoriz ? side * 0.16 : 0),
+      );
+      roadMarkingsGroup.add(centerStripe);
+    }
   }
+  roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
+  root.add(roadMarkingsGroup);
 
   const stripeMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf5, roughness: 0.65 });
   for (const ax of blueprint.avenueXs) {
@@ -1094,6 +1132,52 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  const applyPhotoTextures = (textures: LoadedGameAssets['textures']) => {
+    if (textures.concrete) {
+      mainlandMat.map = textures.concrete.map;
+      mainlandMat.normalMap = textures.concrete.normalMap;
+      mainlandMat.roughnessMap = textures.concrete.roughnessMap;
+      mainlandMat.needsUpdate = true;
+    }
+    if (textures.sand) {
+      beachMat.map = textures.sand.map;
+      beachMat.normalMap = textures.sand.normalMap;
+      beachMat.roughnessMap = textures.sand.roughnessMap;
+      beachMat.color.setHex(0xffe9c7);
+      beachMat.needsUpdate = true;
+    }
+    if (textures.wood) {
+      boardwalkMat.map = textures.wood.map;
+      boardwalkMat.normalMap = textures.wood.normalMap;
+      boardwalkMat.roughnessMap = textures.wood.roughnessMap;
+      boardwalkMat.needsUpdate = true;
+    }
+    if (textures.asphalt) {
+      for (const entry of roadMaterials) {
+        const m = textures.asphalt.map.clone();
+        m.needsUpdate = true;
+        m.repeat.set(1.5, entry.repeatY * 0.85);
+        const n = textures.asphalt.normalMap.clone();
+        n.needsUpdate = true;
+        n.repeat.set(1.5, entry.repeatY * 0.85);
+        const r = textures.asphalt.roughnessMap.clone();
+        r.needsUpdate = true;
+        r.repeat.set(1.5, entry.repeatY * 0.85);
+        entry.mat.map = m;
+        entry.mat.normalMap = n;
+        entry.mat.roughnessMap = r;
+        entry.mat.color.setHex(0xb8bec8);
+        entry.mat.needsUpdate = true;
+      }
+      intersectionMat.map = textures.asphalt.map;
+      intersectionMat.normalMap = textures.asphalt.normalMap;
+      intersectionMat.roughnessMap = textures.asphalt.roughnessMap;
+      intersectionMat.color.setHex(0xa8aeb8);
+      intersectionMat.needsUpdate = true;
+      roadMarkingsGroup.visible = true;
+    }
+  };
+
   return {
     root,
     waterUniforms,
@@ -1103,6 +1187,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     lighthouseBeacon,
     yachts,
     palmCrowns,
+    applyPhotoTextures,
     updateAnimation,
   };
 }

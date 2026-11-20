@@ -333,7 +333,8 @@ export function computeCharacterPose(s: PlayerState, elapsed = 0): CharacterPose
 
 export interface PlayerMeshHandles {
   root: THREE.Group;
-  syncFromState: (state: PlayerState, elapsed?: number) => void;
+  syncFromState: (state: PlayerState, elapsed?: number, dt?: number) => void;
+  attachGltfCharacter: (model: THREE.Object3D, animations: THREE.AnimationClip[]) => void;
 }
 
 /**
@@ -596,13 +597,76 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const leftLeg = makeLeg(-1);
   const rightLeg = makeLeg(1);
 
+  let gltfMixer: THREE.AnimationMixer | null = null;
+  let idleAction: THREE.AnimationAction | null = null;
+  let walkAction: THREE.AnimationAction | null = null;
+  let runAction: THREE.AnimationAction | null = null;
+  let activeClip: 'idle' | 'walk' | 'run' = 'idle';
+
+  const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
+    body.visible = false;
+    model.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
+    root.add(model);
+
+    const mixer = new THREE.AnimationMixer(model);
+    const findClip = (name: string) =>
+      animations.find((a) => a.name.toLowerCase() === name.toLowerCase()) ?? null;
+
+    const cIdle = findClip('Idle');
+    const cWalk = findClip('Walk');
+    const cRun = findClip('Run');
+
+    idleAction = cIdle ? mixer.clipAction(cIdle) : null;
+    walkAction = cWalk ? mixer.clipAction(cWalk) : null;
+    runAction = cRun ? mixer.clipAction(cRun) : null;
+
+    if (idleAction) {
+      idleAction.reset().play();
+      activeClip = 'idle';
+    }
+    gltfMixer = mixer;
+  };
+
   scene.add(root);
 
-  const syncFromState = (s: PlayerState, elapsed = 0) => {
+  const syncFromState = (s: PlayerState, elapsed = 0, dt = 1 / 60) => {
     root.visible = s.vehicleId === null;
     if (!root.visible) return;
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
+
+    if (gltfMixer) {
+      const desired: 'idle' | 'walk' | 'run' =
+        s.speed < 0.35 ? 'idle' : s.sprinting || s.speed > 7.5 ? 'run' : 'walk';
+
+      if (desired !== activeClip) {
+        const from =
+          activeClip === 'idle' ? idleAction : activeClip === 'walk' ? walkAction : runAction;
+        const to =
+          desired === 'idle' ? idleAction : desired === 'walk' ? walkAction : runAction;
+        if (to) {
+          to.enabled = true;
+          to.reset().play();
+          if (from && from !== to) {
+            from.crossFadeTo(to, 0.18, true);
+          }
+          activeClip = desired;
+        }
+      }
+
+      if (walkAction && activeClip === 'walk') {
+        walkAction.timeScale = clamp(s.speed / 3.8, 0.7, 1.85);
+      } else if (runAction && activeClip === 'run') {
+        runAction.timeScale = clamp(s.speed / 7.8, 0.9, 1.75);
+      }
+      gltfMixer.update(dt);
+      return;
+    }
 
     const pose = computeCharacterPose(s, elapsed);
     body.position.y = pose.bodyOffsetY;
@@ -625,5 +689,5 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     rightArm.elbow.rotation.x = pose.rightElbowX;
   };
 
-  return { root, syncFromState };
+  return { root, syncFromState, attachGltfCharacter };
 }
