@@ -1,0 +1,503 @@
+import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+
+import { SoundEngine } from './core/audio';
+import { InputManager } from './core/input';
+import { clamp } from './core/math';
+import {
+  computeSafeExitPosition,
+  createInitialPlayerState,
+  createPlayerMesh,
+  findNearestVehicle,
+  stepPlayerOnFoot,
+  type PlayerState,
+} from './entities/player';
+import { createTrafficCars, createTrafficMeshes, stepTraffic } from './entities/traffic';
+import {
+  DEFAULT_VEHICLES,
+  PAINT_FINISHES,
+  createVehicleMesh,
+  createVehicleState,
+  stepVehiclePhysics,
+  type VehicleMeshHandles,
+  type VehicleState,
+} from './entities/vehicle';
+import { CameraController } from './systems/camera';
+import { MissionManager, createMissionBeacons } from './systems/missions';
+import {
+  clearWorldSave,
+  loadWorld,
+  saveWorld,
+  serializeWorldState,
+} from './systems/persistence';
+import { HudController } from './ui/hud';
+import { MinimapRenderer } from './ui/minimap';
+import { buildCityScene } from './world/cityBuilder';
+import {
+  createCityBlueprint,
+  getDistrictAt,
+  getGroundHeight,
+} from './world/cityData';
+import { SkySystem, TIME_PRESETS } from './world/sky';
+import type { DistrictId } from './world/types';
+
+function bootstrap(): void {
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  const minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+
+  // Renderer with ACES Filmic tone mapping & soft shadows
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: 'high-performance',
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1300);
+
+  // Post-processing pipeline with subtle UnrealBloom so Miami neon & car LEDs glow
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.42, // strength
+    0.55, // radius
+    0.82, // threshold
+  );
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+
+  // Build deterministic coastal Miami world
+  const blueprint = createCityBlueprint();
+  const sky = new SkySystem(scene);
+  const cityHandles = buildCityScene(scene, blueprint);
+  const beaconRenderer = createMissionBeacons(scene);
+
+  // Create player-drivable modern cars
+  const vehicles: VehicleState[] = DEFAULT_VEHICLES.map(createVehicleState);
+  const vehicleMeshes = new Map<string, VehicleMeshHandles>();
+  for (const v of vehicles) {
+    vehicleMeshes.set(v.id, createVehicleMesh(v, scene));
+  }
+
+  // Create player & missions & persistent state
+  const missions = new MissionManager();
+  let cash = 1500;
+  let timeOfDayHours = TIME_PRESETS[0].hour; // Iconic Miami Golden Hour
+  let timePresetIdx = 0;
+  const discoveredDistricts = new Set<DistrictId>(['ocean-drive']);
+  let player: PlayerState = createInitialPlayerState(vehicles[0]);
+
+  // Restore persisted world state if available
+  const saved = loadWorld();
+  let restoredSave = false;
+  if (saved) {
+    restoredSave = true;
+    cash = saved.cash;
+    timeOfDayHours = saved.timeOfDayHours;
+    for (const sv of saved.vehicles) {
+      const target = vehicles.find((v) => v.id === sv.id);
+      if (target) {
+        target.x = sv.x;
+        target.z = sv.z;
+        target.y = getGroundHeight(sv.x, sv.z);
+        target.yaw = sv.yaw;
+        target.paintIndex = sv.paintIndex;
+        target.odometerMeters = sv.odometerMeters;
+        vehicleMeshes.get(target.id)?.applyPaint(target.paintIndex);
+      }
+    }
+    player.x = saved.player.x;
+    player.y = saved.player.y;
+    player.z = saved.player.z;
+    player.yaw = saved.player.yaw;
+    player.vehicleId = saved.player.vehicleId;
+    player.walkedMeters = saved.player.walkedMeters;
+    saved.completedMissions.forEach((id) => missions.completedIds.add(id));
+    Object.assign(missions.bestTimes, saved.bestTimes);
+    saved.discoveredDistricts.forEach((d) => discoveredDistricts.add(d));
+  }
+
+  const playerMesh = createPlayerMesh(scene);
+
+  // Ambient AI traffic cars cruising the avenues
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
+  const trafficMeshes = createTrafficMeshes(trafficCars, scene);
+
+  // Systems & UI
+  const input = new InputManager(canvas);
+  const cameraCtrl = new CameraController();
+  cameraCtrl.yaw = player.yaw;
+  const hud = new HudController();
+  const minimap = new MinimapRenderer(minimapCanvas);
+  const sound = new SoundEngine();
+
+  let paused = false;
+  let elapsed = 0;
+  let autoSaveTimer = 0;
+  let lastDistrictId: DistrictId = getDistrictAt(player.x, player.z).id;
+
+  const persistNow = (showBadge = true) => {
+    const payload = serializeWorldState({
+      cash,
+      timeOfDayHours,
+      player,
+      vehicles,
+      missions,
+      discoveredDistricts,
+    });
+    if (saveWorld(payload) && showBadge) {
+      hud.flashSaved();
+    }
+  };
+
+  const getActiveVehicle = (): VehicleState | null => {
+    if (!player.vehicleId) return null;
+    return vehicles.find((v) => v.id === player.vehicleId) ?? null;
+  };
+
+  // Unlock Web Audio on first user interaction
+  const unlockAudioOnce = () => {
+    sound.unlock();
+    window.removeEventListener('keydown', unlockAudioOnce);
+    window.removeEventListener('mousedown', unlockAudioOnce);
+  };
+  window.addEventListener('keydown', unlockAudioOnce);
+  window.addEventListener('mousedown', unlockAudioOnce);
+
+  // Pause menu buttons
+  const setPaused = (next: boolean) => {
+    paused = next;
+    hud.setPauseMenu(paused, missions);
+    if (paused) {
+      input.releasePointerLock();
+      sound.silenceContinuous();
+    }
+  };
+
+  hud.btnResume.addEventListener('click', () => setPaused(false));
+  hud.btnSave.addEventListener('click', () => {
+    persistNow(true);
+    hud.showToast('World state saved!', 'success');
+  });
+  hud.btnExport.addEventListener('click', () => {
+    const payload = serializeWorldState({
+      cash,
+      timeOfDayHours,
+      player,
+      vehicles,
+      missions,
+      discoveredDistricts,
+    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'solcoast-save.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    hud.showToast('Exported solcoast-save.json', 'info');
+  });
+  hud.btnAudio.addEventListener('click', () => {
+    sound.unlock();
+    const on = sound.toggle();
+    hud.setAudioButton(on);
+  });
+  hud.btnReset.addEventListener('click', () => {
+    clearWorldSave();
+    window.location.reload();
+  });
+
+  // Auto-save when closing tab
+  window.addEventListener('beforeunload', () => persistNow(false));
+
+  window.addEventListener('resize', () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    composer.setSize(w, h);
+    bloomPass.setSize(w, h);
+  });
+
+  if (restoredSave) {
+    hud.showToast('Welcome back to Sol Coast — persistent world restored.', 'success');
+  } else {
+    hud.showToast('Welcome to Sol Coast! Hit [W] to cruise Ocean Drive or [E] to walk on foot.', 'info');
+  }
+
+  let lastTime = performance.now();
+  const focusVec = new THREE.Vector3();
+
+  const tick = (now: number) => {
+    requestAnimationFrame(tick);
+    const dt = clamp((now - lastTime) / 1000, 0.001, 0.05);
+    lastTime = now;
+
+    const snap = input.poll();
+
+    if (snap.pausePressed) {
+      setPaused(!paused);
+    }
+
+    if (snap.audioTogglePressed) {
+      sound.unlock();
+      const on = sound.toggle();
+      hud.setAudioButton(on);
+      hud.showToast(`Audio ${on ? 'ON' : 'OFF'}`);
+    }
+
+    if (paused) {
+      composer.render();
+      return;
+    }
+
+    elapsed += dt;
+    // Gentle Miami time-of-day flow (~1 game minute per 2.5 real seconds)
+    timeOfDayHours = (timeOfDayHours + dt * (1 / 150)) % 24;
+
+    if (snap.timeCyclePressed) {
+      timePresetIdx = (timePresetIdx + 1) % TIME_PRESETS.length;
+      timeOfDayHours = TIME_PRESETS[timePresetIdx].hour;
+      hud.showToast(`Time set to ${TIME_PRESETS[timePresetIdx].label}`);
+    }
+
+    if (snap.cameraCyclePressed) {
+      const mode = cameraCtrl.cycleMode();
+      hud.showToast(`Camera: ${mode.toUpperCase()}`);
+    }
+
+    if (snap.quickSavePressed) {
+      persistNow(true);
+      hud.showToast('World saved!', 'success');
+    }
+
+    if (snap.trackMissionPressed) {
+      const tracked = missions.trackNearestMission(player.x, player.z);
+      if (tracked) {
+        hud.showToast(`GPS set to ${tracked.title} (${tracked.district})`, 'info');
+      }
+    }
+
+    if (snap.cancelMissionPressed && missions.active) {
+      const cancelled = missions.cancelMission();
+      if (cancelled) {
+        hud.showToast(`Cancelled ${cancelled.title} — back to free roam.`, 'warn');
+      }
+    }
+
+    cameraCtrl.applyLookInput(snap.mouseDX, snap.mouseDY, snap.wheelDelta);
+
+    let activeVehicle = getActiveVehicle();
+
+    // Repaint or toggle headlights when inside a vehicle
+    if (activeVehicle) {
+      if (snap.paintCyclePressed) {
+        activeVehicle.paintIndex = (activeVehicle.paintIndex + 1) % PAINT_FINISHES.length;
+        vehicleMeshes.get(activeVehicle.id)?.applyPaint(activeVehicle.paintIndex);
+        sound.playChime('paint');
+        hud.showToast(`Painted ${activeVehicle.name}: ${PAINT_FINISHES[activeVehicle.paintIndex].name}`, 'info');
+        persistNow(false);
+      }
+      if (snap.headlightsPressed) {
+        activeVehicle.headlightsOn = !activeVehicle.headlightsOn;
+        hud.showToast(`Headlights ${activeVehicle.headlightsOn ? 'ON' : 'OFF'}`);
+      }
+    }
+
+    // Context-sensitive [E] Interact: Mission start takes priority if standing in a start beacon,
+    // otherwise enter/exit vehicle!
+    const nearbyMission = missions.findNearbyStartBeacon(player.x, player.z);
+    const nearbyCar = activeVehicle ? null : findNearestVehicle(player.x, player.z, vehicles);
+
+    let promptText: string | null = null;
+    if (nearbyMission) {
+      const doneTag = missions.completedIds.has(nearbyMission.id) ? ' (Replay)' : '';
+      promptText = `Start Mission: ${nearbyMission.title}${doneTag} — $${nearbyMission.rewardCash.toLocaleString()}`;
+    } else if (!activeVehicle && nearbyCar) {
+      promptText = `Enter ${nearbyCar.vehicle.name}`;
+    } else if (activeVehicle && Math.abs(activeVehicle.speed) < 3.5) {
+      promptText = `Exit ${activeVehicle.name} (On Foot)`;
+    }
+
+    if (snap.interactPressed) {
+      if (nearbyMission) {
+        const started = missions.startMission(nearbyMission.id);
+        if (started) {
+          sound.playChime('checkpoint');
+          hud.showToast(`Mission Started: ${started.title} — ${started.description}`, 'success');
+        }
+      } else if (activeVehicle) {
+        if (Math.abs(activeVehicle.speed) < 10) {
+          const exitPos = computeSafeExitPosition(activeVehicle, blueprint.colliders);
+          player.vehicleId = null;
+          player.x = exitPos.x;
+          player.y = exitPos.y;
+          player.z = exitPos.z;
+          player.yaw = activeVehicle.yaw;
+          player.vy = 0;
+          player.speed = 0;
+          activeVehicle.vx *= 0.2;
+          activeVehicle.vz *= 0.2;
+          activeVehicle = null;
+          sound.playChime('enter');
+          persistNow(false);
+        } else {
+          hud.showToast('Slow down to exit the vehicle!', 'warn');
+        }
+      } else if (nearbyCar) {
+        player.vehicleId = nearbyCar.vehicle.id;
+        player.x = nearbyCar.vehicle.x;
+        player.y = nearbyCar.vehicle.y;
+        player.z = nearbyCar.vehicle.z;
+        player.yaw = nearbyCar.vehicle.yaw;
+        activeVehicle = nearbyCar.vehicle;
+        sound.playChime('enter');
+        persistNow(false);
+      }
+    }
+
+    // Step active vehicle & parked vehicles (gentle coasting for unoccupied cars)
+    for (const v of vehicles) {
+      if (activeVehicle && v.id === activeVehicle.id) {
+        stepVehiclePhysics(
+          v,
+          {
+            throttle: snap.forward,
+            steer: snap.right,
+            handbrake: snap.handbrakeOrJump,
+          },
+          dt,
+          blueprint.colliders,
+        );
+      } else if (Math.abs(v.vx) > 0.05 || Math.abs(v.vz) > 0.05) {
+        stepVehiclePhysics(v, { throttle: 0, steer: 0, handbrake: true }, dt, blueprint.colliders);
+      }
+    }
+
+    // Step player (either synced with driven vehicle or walking/sprinting on foot)
+    if (activeVehicle) {
+      player.x = activeVehicle.x;
+      player.y = activeVehicle.y;
+      player.z = activeVehicle.z;
+      player.yaw = activeVehicle.yaw;
+      player.speed = Math.abs(activeVehicle.speed);
+    } else {
+      stepPlayerOnFoot(
+        player,
+        {
+          forward: snap.forward,
+          right: snap.right,
+          sprint: snap.sprint,
+          jump: snap.handbrakeOrJump,
+          cameraYaw: cameraCtrl.yaw,
+        },
+        dt,
+        blueprint.colliders,
+        vehicles,
+      );
+    }
+
+    // Step AI traffic
+    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
+
+    // Step mission state machine
+    const missionEvent = missions.update(dt, player.x, player.z, player.vehicleId);
+    if (missionEvent) {
+      if (missionEvent.type === 'complete') {
+        cash += missionEvent.rewardCash ?? 0;
+        sound.playChime('complete');
+        hud.showToast(missionEvent.message, 'success');
+        persistNow(true);
+      } else if (missionEvent.type === 'step') {
+        sound.playChime('checkpoint');
+        hud.showToast(missionEvent.message, 'info');
+      } else if (missionEvent.type === 'fail') {
+        sound.playChime('fail');
+        hud.showToast(missionEvent.message, 'warn');
+      }
+    }
+
+    // District discovery check
+    const district = getDistrictAt(player.x, player.z);
+    if (district.id !== lastDistrictId) {
+      lastDistrictId = district.id;
+      if (!discoveredDistricts.has(district.id)) {
+        discoveredDistricts.add(district.id);
+        cash += 250;
+        sound.playChime('checkpoint');
+        hud.showDistrictBanner(`DISCOVERED: ${district.name} (+$250)`);
+        persistNow(false);
+      } else {
+        hud.showDistrictBanner(district.name);
+      }
+    }
+
+    // Update sky, lighting, water shader, neon glow, vehicles, player, traffic, beacons
+    focusVec.set(player.x, player.y, player.z);
+    const skyRes = sky.update(timeOfDayHours, focusVec);
+    cityHandles.updateAnimation(
+      elapsed,
+      skyRes.nightFactor,
+      skyRes.sunDirection,
+      skyRes.sunColor,
+      skyRes.fogColor,
+    );
+
+    for (const v of vehicles) {
+      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor);
+    }
+    playerMesh.syncFromState(player);
+    trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
+    beaconRenderer.update(elapsed, missions);
+
+    // Camera follow
+    cameraCtrl.update(camera, dt, player, activeVehicle);
+
+    // Procedural Web Audio engine / drift / horn
+    if (activeVehicle) {
+      const speedNorm = Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed;
+      const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
+      sound.updateDriving(true, speedNorm, snap.forward, driftAmt, snap.horn);
+    } else {
+      sound.updateDriving(false, 0, 0, 0, false);
+    }
+
+    // Periodic persistent auto-save every 15 seconds
+    autoSaveTimer += dt;
+    if (autoSaveTimer >= 15) {
+      autoSaveTimer = 0;
+      persistNow(true);
+    }
+
+    // HUD + Minimap
+    hud.update({
+      timeLabel: skyRes.timeLabel,
+      district,
+      cash,
+      discoveredCount: discoveredDistricts.size,
+      player,
+      activeVehicle,
+      vehicles,
+      missions,
+      promptText,
+    });
+    minimap.render(blueprint, player, vehicles, trafficCars, missions);
+
+    composer.render();
+  };
+
+  requestAnimationFrame(tick);
+}
+
+bootstrap();

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sol Coast — Open-World Coastal Sandbox</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+
+    <div id="hud">
+      <!-- Top Left: Location, Cash, Rank, Clock -->
+      <div class="hud-panel top-left">
+        <div class="brand-row">
+          <span class="brand-title">SOL COAST</span>
+          <span id="hud-clock" class="pill pill-time">17:30 GOLDEN HOUR</span>
+        </div>
+        <div id="hud-district" class="district-name">OCEAN DRIVE</div>
+        <div class="stats-row">
+          <span id="hud-cash" class="cash">$1,500</span>
+          <span id="hud-rank" class="rank-badge">COASTAL CRUISER</span>
+          <span id="hud-mode" class="mode-badge">DRIVING</span>
+        </div>
+        <div id="hud-progress" class="progress-sub">Missions 0/6 · Districts 1/8</div>
+      </div>
+
+      <!-- Top Center: Active Mission / Objective -->
+      <div id="mission-panel" class="hud-panel top-center hidden">
+        <div class="mission-header">
+          <span id="mission-category" class="pill pill-mission">RACE</span>
+          <span id="mission-title" class="mission-title">OCEAN DRIVE SPRINT</span>
+          <span id="mission-timer" class="mission-timer hidden">01:30</span>
+        </div>
+        <div id="mission-objective" class="mission-objective">Drive through the coastal checkpoints</div>
+        <div class="mission-footer">
+          <span id="mission-step">Checkpoint 1 / 5</span>
+          <span id="mission-distance">240m</span>
+          <span class="key-hint">[X] Cancel</span>
+        </div>
+      </div>
+
+      <!-- Top Right: Live Minimap -->
+      <div class="hud-panel top-right minimap-wrap">
+        <canvas id="minimap-canvas" width="210" height="210"></canvas>
+        <div class="minimap-legend">
+          <span><i class="dot dot-car"></i>Car</span>
+          <span><i class="dot dot-mission"></i>Mission</span>
+          <span><i class="dot dot-target"></i>Target</span>
+        </div>
+      </div>
+
+      <!-- Center Notifications: District Banner & Toasts -->
+      <div id="district-banner" class="district-banner hidden"></div>
+      <div id="toast-container" class="toast-container"></div>
+
+      <!-- Bottom Center: Context Prompt -->
+      <div id="interact-prompt" class="interact-prompt hidden">
+        <span class="keycap">E</span>
+        <span id="interact-text">Enter Solstice GT</span>
+      </div>
+
+      <!-- Bottom Left: Compact Controls Strip -->
+      <div class="hud-panel bottom-left controls-strip">
+        <div><kbd>WASD</kbd> Drive / Walk · <kbd>Space</kbd> Drift / Jump · <kbd>Shift</kbd> Sprint</div>
+        <div><kbd>E</kbd> Enter/Exit Car · <kbd>M</kbd> Track Mission · <kbd>T</kbd> Time · <kbd>P</kbd> Paint · <kbd>Esc</kbd> Menu</div>
+      </div>
+
+      <!-- Bottom Right: Speedometer / Vehicle Info -->
+      <div id="speedo-panel" class="hud-panel bottom-right speedo-panel">
+        <div class="speedo-top">
+          <span id="vehicle-name" class="vehicle-name">SOLSTICE GT</span>
+          <span id="vehicle-badge" class="pill pill-drift hidden">DRIFT</span>
+        </div>
+        <div class="speedo-readout">
+          <span id="speed-value" class="speed-value">0</span>
+          <span class="speed-unit">MPH</span>
+          <span id="gear-value" class="gear-value">N</span>
+        </div>
+        <div class="rpm-bar-track">
+          <div id="rpm-bar-fill" class="rpm-bar-fill"></div>
+        </div>
+        <div id="vehicle-meta" class="vehicle-meta">
+          <span id="paint-name">Sunset Coral</span>
+          <span id="odometer-value">0.0 mi</span>
+        </div>
+      </div>
+
+      <!-- Bottom Right (On Foot mode) -->
+      <div id="onfoot-panel" class="hud-panel bottom-right onfoot-panel hidden">
+        <div class="vehicle-name">ON FOOT</div>
+        <div id="onfoot-status" class="onfoot-status">Strolling Ocean Drive</div>
+        <div id="nearest-car-dist" class="vehicle-meta">Nearest car: 4m</div>
+      </div>
+
+      <!-- Save Indicator -->
+      <div id="save-indicator" class="save-indicator hidden">SAVED</div>
+    </div>
+
+    <!-- Pause / World Menu Overlay -->
+    <div id="pause-overlay" class="pause-overlay hidden">
+      <div class="pause-card">
+        <div class="pause-header">
+          <h1>SOL COAST</h1>
+          <p>Persistent Open-World Miami Sandbox</p>
+        </div>
+
+        <div class="pause-grid">
+          <div class="pause-section">
+            <h3>Controls</h3>
+            <ul>
+              <li><kbd>W A S D</kbd> Drive / Move on foot</li>
+              <li><kbd>Space</kbd> Handbrake Drift (car) / Jump (foot)</li>
+              <li><kbd>Shift</kbd> Sprint (on foot)</li>
+              <li><kbd>E</kbd> Enter / Exit car · Start Mission</li>
+              <li><kbd>Mouse</kbd> Orbit camera (click canvas or drag) · Scroll zoom</li>
+              <li><kbd>C</kbd> Cycle camera angle · <kbd>L</kbd> Headlights</li>
+              <li><kbd>P</kbd> Repaint current car · <kbd>H</kbd> Horn</li>
+              <li><kbd>T</kbd> Cycle Time of Day · <kbd>M</kbd> Track nearest mission</li>
+              <li><kbd>U</kbd> Toggle Audio · <kbd>F5</kbd> Quick Save</li>
+            </ul>
+          </div>
+
+          <div class="pause-section">
+            <h3>Missions</h3>
+            <div id="pause-mission-list" class="pause-mission-list"></div>
+          </div>
+        </div>
+
+        <div class="pause-actions">
+          <button id="btn-resume" class="btn btn-primary">Resume World</button>
+          <button id="btn-save" class="btn">Save Now</button>
+          <button id="btn-export" class="btn">Export Save JSON</button>
+          <button id="btn-audio" class="btn">Audio: ON</button>
+          <button id="btn-reset" class="btn btn-danger">Reset World</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

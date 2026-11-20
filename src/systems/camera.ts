@@ -1,0 +1,131 @@
+import * as THREE from 'three';
+import { clamp, forwardFromYaw, lerp, lerpAngle, wrapAngle } from '../core/math';
+import type { PlayerState } from '../entities/player';
+import type { VehicleState } from '../entities/vehicle';
+
+export type CameraMode = 'chase' | 'far' | 'hood';
+
+export class CameraController {
+  public yaw = 0;
+  public pitch = 0.24;
+  public zoomOffset = 0;
+  public mode: CameraMode = 'chase';
+
+  private orbitCooldown = 0;
+  private readonly currentPos = new THREE.Vector3(144, 6, 40);
+  private readonly currentLook = new THREE.Vector3(144, 2, 24);
+  private initialized = false;
+
+  public cycleMode(): CameraMode {
+    if (this.mode === 'chase') this.mode = 'far';
+    else if (this.mode === 'far') this.mode = 'hood';
+    else this.mode = 'chase';
+    return this.mode;
+  }
+
+  public applyLookInput(mouseDX: number, mouseDY: number, wheelDelta: number): void {
+    if (Math.abs(mouseDX) > 0.01 || Math.abs(mouseDY) > 0.01) {
+      this.yaw = wrapAngle(this.yaw + mouseDX * 0.0038);
+      this.pitch = clamp(this.pitch + mouseDY * 0.003, -0.08, 0.88);
+      this.orbitCooldown = 2.2;
+    }
+    if (wheelDelta !== 0) {
+      this.zoomOffset = clamp(this.zoomOffset + wheelDelta * 0.85, -2.5, 5.5);
+    }
+  }
+
+  public update(
+    camera: THREE.PerspectiveCamera,
+    dt: number,
+    player: PlayerState,
+    activeVehicle: VehicleState | null,
+  ): void {
+    const safeDt = clamp(dt, 0.001, 0.05);
+    if (this.orbitCooldown > 0) {
+      this.orbitCooldown = Math.max(0, this.orbitCooldown - safeDt);
+    }
+
+    let desiredPos: THREE.Vector3;
+    let desiredLook: THREE.Vector3;
+    let targetFov = 62;
+
+    if (activeVehicle) {
+      // Gently align chase camera behind the car when moving and user isn't orbiting
+      const speedAbs = Math.abs(activeVehicle.speed);
+      if (this.orbitCooldown <= 0 && speedAbs > 1.2) {
+        const alignYaw = activeVehicle.speed >= -0.5 ? activeVehicle.yaw : wrapAngle(activeVehicle.yaw + Math.PI);
+        this.yaw = lerpAngle(this.yaw, alignYaw, clamp(safeDt * (3.2 + speedAbs * 0.08), 0, 1));
+        this.pitch = lerp(this.pitch, 0.22, clamp(safeDt * 2.5, 0, 1));
+      }
+
+      const fwd = forwardFromYaw(activeVehicle.yaw);
+      if (this.mode === 'hood') {
+        desiredPos = new THREE.Vector3(
+          activeVehicle.x + fwd.x * 0.45,
+          activeVehicle.y + 1.55,
+          activeVehicle.z + fwd.z * 0.45,
+        );
+        desiredLook = new THREE.Vector3(
+          activeVehicle.x + fwd.x * 24,
+          activeVehicle.y + 1.1,
+          activeVehicle.z + fwd.z * 24,
+        );
+        targetFov = 68 + clamp(speedAbs / 55, 0, 1) * 10;
+      } else {
+        const baseDist = this.mode === 'far' ? 12.2 : 8.4;
+        const speedPull = clamp(speedAbs / 52, 0, 1) * 2.4;
+        const dist = clamp(baseDist + speedPull + this.zoomOffset, 5.5, 18);
+        const horiz = Math.cos(this.pitch) * dist;
+        const height = Math.sin(this.pitch) * dist + 1.85;
+        const camFwd = forwardFromYaw(this.yaw);
+
+        desiredPos = new THREE.Vector3(
+          activeVehicle.x - camFwd.x * horiz,
+          Math.max(activeVehicle.y + height, activeVehicle.y + 1.2),
+          activeVehicle.z - camFwd.z * horiz,
+        );
+        desiredLook = new THREE.Vector3(
+          activeVehicle.x + fwd.x * 4.2,
+          activeVehicle.y + 1.35,
+          activeVehicle.z + fwd.z * 4.2,
+        );
+        targetFov = 62 + clamp(speedAbs / 54, 0, 1) * 14;
+      }
+    } else {
+      // Smooth 3rd-person on-foot orbit camera
+      const dist = clamp(5.2 + this.zoomOffset * 0.65, 3.0, 9.5);
+      const horiz = Math.cos(this.pitch) * dist;
+      const height = Math.sin(this.pitch) * dist + 1.75;
+      const camFwd = forwardFromYaw(this.yaw);
+
+      desiredPos = new THREE.Vector3(
+        player.x - camFwd.x * horiz,
+        Math.max(player.y + height, player.y + 0.8),
+        player.z - camFwd.z * horiz,
+      );
+      desiredLook = new THREE.Vector3(
+        player.x + camFwd.x * 2.2,
+        player.y + 1.45,
+        player.z + camFwd.z * 2.2,
+      );
+      targetFov = player.sprinting ? 66 : 60;
+    }
+
+    if (!this.initialized) {
+      this.currentPos.copy(desiredPos);
+      this.currentLook.copy(desiredLook);
+      this.initialized = true;
+    } else {
+      const followRate = activeVehicle && this.mode === 'hood' ? 28 : 11;
+      this.currentPos.lerp(desiredPos, clamp(safeDt * followRate, 0, 1));
+      this.currentLook.lerp(desiredLook, clamp(safeDt * 14, 0, 1));
+    }
+
+    camera.position.copy(this.currentPos);
+    camera.lookAt(this.currentLook);
+    if (Math.abs(camera.fov - targetFov) > 0.05) {
+      camera.fov = lerp(camera.fov, targetFov, clamp(safeDt * 6, 0, 1));
+      camera.updateProjectionMatrix();
+    }
+  }
+}
