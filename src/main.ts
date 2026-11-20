@@ -141,17 +141,17 @@ function bootstrap(): void {
       }
     }
 
-    const playerPerson = assets.clonePerson(0);
+    const playerPerson = assets.cloneProtagonist();
     if (playerPerson) {
       playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
     }
 
-    if (assets.peopleGltfs.length > 0) {
-      pedestrianMeshes.attachGltfPeople((idx) => assets.clonePerson(idx));
+    if (assets.pedestrianGltfs.length > 0) {
+      pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
     }
 
-    if (assets.ferrariGltf || assets.peopleGltfs.length > 0) {
-      hud.showToast('HD Assets Ready: Ferrari 458, Civilian Cast & Pure-Sky HDRI loaded!', 'success');
+    if (assets.ferrariGltf || assets.protagonistGltf) {
+      hud.showToast('HD Assets Ready: Ferrari 458, Street Protagonist & Pure-Sky HDRI loaded!', 'success');
     }
   });
 

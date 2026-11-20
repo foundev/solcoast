@@ -6,7 +6,8 @@ Sol Coast code is MIT-licensed ([LICENSE](LICENSE)). The bundled 3D models, moti
 
 - **`public/assets/models/ferrari.glb`** — Ferrari 458 Italia 3D model by **vicent091036** (via Three.js examples / Sketchfab).
   - License: **CC BY 4.0** (Creative Commons Attribution 4.0 International).
-- **`public/assets/models/avatar_1..4.glb`** — Full-body game-optimized civilian avatars from **Ready Player Me** (`readyplayerme/animation-library-demo`).
+- **`public/assets/models/avatar_5.glb`** — Exclusive street-tough protagonist avatar (black sleeveless tank, distressed black jeans, beard, equipped with dark street shades & gold Cuban chain) from **Ready Player Me** (`readyplayerme/animation-library-demo`).
+- **`public/assets/models/avatar_1..4.glb`, `avatar_6.glb`, `avatar_7.glb`** — 6 distinct sidewalk civilian avatars from **Ready Player Me** (`readyplayerme/animation-library-demo`) and **TalkingHead** (`met4citizen/TalkingHead`, MIT).
   - License: **MIT / Ready Player Me Sample Assets**.
 - **`public/assets/animations/anim_idle.glb`, `anim_walk.glb`, `anim_run.glb`, `anim_jump.glb`** — Studio optical motion-capture locomotion animations (`M_Standing_Idle_001`, `M_Walk_001`, `M_Run_001`, `M_Jog_Jump_001`) from **Ready Player Me Animation Library** (`readyplayerme/animation-library`).
   - License: **MIT License**.

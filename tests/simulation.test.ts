@@ -200,7 +200,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       });
 
     const [avatar, idleG, walkG, runG, jumpG] = await Promise.all([
-      loadLocal('models/avatar_2.glb'),
+      loadLocal('models/avatar_5.glb'),
       loadLocal('animations/anim_idle.glb'),
       loadLocal('animations/anim_walk.glb'),
       loadLocal('animations/anim_run.glb'),

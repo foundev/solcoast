@@ -45,6 +45,8 @@ async function main() {
     { id: '64e359ea58f50a12df573a70', out: 'avatar_2.glb' },
     { id: '64e35a43c603b299c00dfeba', out: 'avatar_3.glb' },
     { id: '64e49ef0cb0dbe5f8449d1da', out: 'avatar_4.glb' },
+    { id: '64e49f0ce0d08c465057866c', out: 'avatar_5.glb' },
+    { id: '64e49fd93bf46b6b7fb28764', out: 'avatar_6.glb' },
   ];
   for (const av of avatars) {
     await downloadFile(
@@ -52,6 +54,10 @@ async function main() {
       path.join(assetsDir, 'models', av.out),
     );
   }
+  await downloadFile(
+    'https://raw.githubusercontent.com/met4citizen/TalkingHead/main/avatars/brunette.glb',
+    path.join(assetsDir, 'models', 'avatar_7.glb'),
+  );
 
   // 3. Studio optical motion-capture animations (MIT — ReadyPlayerMe/animation-library)
   const rpmAnimBase = 'https://raw.githubusercontent.com/readyplayerme/animation-library/master';
