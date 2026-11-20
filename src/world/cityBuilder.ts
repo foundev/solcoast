@@ -5,9 +5,12 @@ import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
   KEY_SOL_BOUNDS,
+  SEAWALL_HEIGHT,
   SIDEWALK_HEIGHT,
   SOUTH_PIER,
+  getBeachHeight,
   getGroundHeight,
+  getShorelineX,
 } from './cityData';
 import {
   createAsphaltPbrSet,
@@ -109,8 +112,9 @@ const OCEAN_FRAGMENT_SHADER = /* glsl */ `
     float hZ = waveHeight(vWorldPos.xz + vec2(0.0, eps));
     vec3 normal = normalize(vec3((hC - hX) * 0.58, 1.0, (hC - hZ) * 0.58));
 
-    // Shallow Miami turquoise water blending into rich Atlantic sapphire
-    float coastDist = clamp((vWorldPos.x - 196.0) / 145.0, 0.0, 1.0);
+    // Shallow Miami turquoise water blending into rich Atlantic sapphire along curved shoreline
+    float shoreX = 203.5 + sin(vWorldPos.z * 0.018) * 5.5 + cos(vWorldPos.z * 0.041 + 0.7) * 2.5;
+    float coastDist = clamp((vWorldPos.x - (shoreX - 8.0)) / 145.0, 0.0, 1.0);
     vec3 shallowDay = vec3(0.06, 0.64, 0.72);
     vec3 deepDay = vec3(0.018, 0.18, 0.36);
     vec3 baseDay = mix(shallowDay, deepDay, smoothstep(0.0, 1.0, coastDist));
@@ -135,12 +139,13 @@ const OCEAN_FRAGMENT_SHADER = /* glsl */ `
     float specBroad = pow(ndh, 28.0) * 0.25;
     waterCol += uSunColor * (specTight + specBroad) * mix(1.25, 0.28, uNightFactor);
 
-    // Organic frothy shoreline surf along Sol Beach
-    float shoreBand = smoothstep(226.0, 205.0, vWorldPos.x) * smoothstep(186.0, 201.0, vWorldPos.x);
+    // Organic frothy shoreline surf hugging the curved Sol Beach coves
+    float beachZMask = smoothstep(-194.0, -180.0, vWorldPos.z) * smoothstep(198.0, 184.0, vWorldPos.z);
+    float shoreBand = beachZMask * smoothstep(shoreX + 20.0, shoreX + 1.5, vWorldPos.x) * smoothstep(shoreX - 10.0, shoreX - 1.5, vWorldPos.x);
     float foamNoise = noise(vWorldPos.xz * 0.38 + vec2(-uTime * 0.85, uTime * 0.2));
-    float surfWave = sin(vWorldPos.x * 0.32 - uTime * 2.4 + foamNoise * 3.0) * 0.5 + 0.5;
-    float foam = shoreBand * smoothstep(0.45, 0.82, surfWave * 0.65 + foamNoise * 0.55);
-    waterCol = mix(waterCol, vec3(0.93, 0.97, 1.0), foam * 0.65 * (1.0 - uNightFactor * 0.55));
+    float surfWave = sin((vWorldPos.x - shoreX) * 0.42 - uTime * 2.4 + foamNoise * 3.0) * 0.5 + 0.5;
+    float foam = shoreBand * smoothstep(0.42, 0.80, surfWave * 0.65 + foamNoise * 0.55);
+    waterCol = mix(waterCol, vec3(0.94, 0.98, 1.0), foam * 0.72 * (1.0 - uNightFactor * 0.55));
 
     // Crisp distant horizon fog matching scene FogExp2
     float dist = length(cameraPosition - vWorldPos);
@@ -658,9 +663,11 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   mainland.receiveShadow = true;
   root.add(mainland);
 
+  // Walkable Marina Cove waterfront coping curb (top sits cleanly at SEAWALL_HEIGHT = 0.24m matching physics!)
   const seawallMat = new THREE.MeshStandardMaterial({ color: 0xdce0e8, roughness: 0.72 });
-  const southWall = new THREE.Mesh(new THREE.BoxGeometry(408, 1.3, 1.4), seawallMat);
-  southWall.position.set(-44, -0.1, 192.2);
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(408, 1.4, 2.7), seawallMat);
+  southWall.position.set(-44, SEAWALL_HEIGHT - 0.7, 191.8);
+  southWall.receiveShadow = true;
   root.add(southWall);
 
   // 3. Boardwalk Promenade with weathered coastal timber planks
@@ -671,62 +678,147 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roughnessMap: woodPbr.roughnessMap,
     roughness: 1.0,
   });
-  const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(14, BOARDWALK_HEIGHT + 0.18, 376), boardwalkMat);
-  boardwalk.position.set(159, BOARDWALK_HEIGHT - (BOARDWALK_HEIGHT + 0.18) * 0.5, 0);
+  const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(13.8, BOARDWALK_HEIGHT + 0.18, 376), boardwalkMat);
+  boardwalk.position.set(158.9, BOARDWALK_HEIGHT - (BOARDWALK_HEIGHT + 0.18) * 0.5, 0);
   boardwalk.receiveShadow = true;
   root.add(boardwalk);
 
-  // 4. Golden Sandy Beach with wind-rippled normal & quartz roughness map
-  const beachGeo = new THREE.PlaneGeometry(60, 382, 20, 20);
+  // 4. Sculpted 3D Golden Sandy Beach: rolling coastal dunes, curved scalloped shoreline & wet-sand gradient!
+  const beachCenterX = 203.5;
+  const beachCenterZ = 2;
+  const beachWidth = 76;
+  const beachLen = 384;
+  const beachGeo = new THREE.PlaneGeometry(beachWidth, beachLen, 72, 160);
   beachGeo.rotateX(-Math.PI * 0.5);
   const posAttr = beachGeo.attributes.position;
+  const colors = new Float32Array(posAttr.count * 3);
+  const dryCrestCol = new THREE.Color(0xfff5e0);
+  const goldenCol = new THREE.Color(0xf2d9b0);
+  const wetSandCol = new THREE.Color(0x9e7d54);
+  const tmpSandCol = new THREE.Color();
+
   for (let i = 0; i < posAttr.count; i++) {
-    const lx = posAttr.getX(i);
-    const t = (lx + 30) / 60;
-    posAttr.setY(i, -0.82 * t);
+    const wx = posAttr.getX(i) + beachCenterX;
+    const wz = posAttr.getZ(i) + beachCenterZ;
+    const wy = getBeachHeight(wx, wz);
+    posAttr.setY(i, wy);
+
+    // Smooth wet-sand -> warm golden -> sun-bleached dune crest vertex shading
+    const shoreX = getShorelineX(wz);
+    const wetBlend = THREE.MathUtils.clamp((wx - (shoreX - 7.5)) / 9.5, 0, 1);
+    const crestBlend = THREE.MathUtils.clamp((wy - 0.35) / 0.65, 0, 1);
+    tmpSandCol.copy(goldenCol).lerp(dryCrestCol, crestBlend).lerp(wetSandCol, wetBlend);
+    colors[i * 3 + 0] = tmpSandCol.r;
+    colors[i * 3 + 1] = tmpSandCol.g;
+    colors[i * 3 + 2] = tmpSandCol.b;
   }
+  beachGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   beachGeo.computeVertexNormals();
+
   const beachMat = new THREE.MeshStandardMaterial({
     map: sandPbr.map,
     normalMap: sandPbr.normalMap,
-    normalScale: new THREE.Vector2(0.75, 0.75),
+    normalScale: new THREE.Vector2(1.15, 1.15),
     roughnessMap: sandPbr.roughnessMap,
     roughness: 1.0,
+    vertexColors: true,
   });
   const beachMesh = new THREE.Mesh(beachGeo, beachMat);
-  beachMesh.position.set(194, -0.02, 2);
+  beachMesh.position.set(beachCenterX, 0, beachCenterZ);
   beachMesh.receiveShadow = true;
   root.add(beachMesh);
 
-  // 5. Key Sol Luxury Island
-  const keySolGeo = new THREE.BoxGeometry(
-    KEY_SOL_BOUNDS.maxX - KEY_SOL_BOUNDS.minX,
-    2.4,
-    KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ,
-  );
+  // Instanced coastal sea-oats & dune grass tufts along the upper rolling dunes (1 draw call!)
+  const tuftParts: THREE.BufferGeometry[] = [];
+  for (let b = 0; b < 7; b++) {
+    const ang = (b / 7) * Math.PI * 2 + (b % 2) * 0.25;
+    const blade = new THREE.ConeGeometry(0.06, 0.72 + (b % 3) * 0.14, 4);
+    blade.translate(0, 0.36, 0);
+    blade.rotateZ(0.28 + (b % 2) * 0.14);
+    blade.rotateY(ang);
+    tuftParts.push(blade);
+  }
+  const duneGrassGeo = mergeGeometries(tuftParts, false);
+  tuftParts.forEach((g) => g.dispose());
+  const duneGrassMat = new THREE.MeshStandardMaterial({
+    color: 0x6c8a4a,
+    roughness: 0.88,
+    metalness: 0.02,
+  });
+  const grassPositions: { x: number; y: number; z: number; s: number; r: number }[] = [];
+  for (let gz = -172; gz <= 172; gz += 5.5) {
+    if (Math.abs(gz - SOUTH_PIER.centerZ) < 16) continue;
+    // Leave clean sandy boardwalk access gaps every 65m
+    if (Math.abs(((gz + 32) % 68) - 34) < 5) continue;
+    for (let k = 0; k < 4; k++) {
+      const hash = Math.abs(Math.sin(gz * 12.9898 + k * 78.233) * 43758.5453) % 1;
+      const hash2 = Math.abs(Math.sin(gz * 39.346 + k * 11.135) * 24634.6345) % 1;
+      const gx = 167.2 + hash * 15.5;
+      const tz = gz + (hash2 - 0.5) * 4.5;
+      const gy = getBeachHeight(gx, tz);
+      if (gy > 0.24) {
+        grassPositions.push({
+          x: gx,
+          y: gy - 0.04,
+          z: tz,
+          s: 0.75 + hash2 * 0.75,
+          r: hash * Math.PI * 2,
+        });
+      }
+    }
+  }
+  const duneGrassInst = new THREE.InstancedMesh(duneGrassGeo, duneGrassMat, grassPositions.length);
+  const grassObj = new THREE.Object3D();
+  const grassCol = new THREE.Color();
+  grassPositions.forEach((gp, idx) => {
+    grassObj.position.set(gp.x, gp.y, gp.z);
+    grassObj.rotation.set(0, gp.r, 0);
+    grassObj.scale.set(gp.s, gp.s * 0.9, gp.s);
+    grassObj.updateMatrix();
+    duneGrassInst.setMatrixAt(idx, grassObj.matrix);
+    grassCol.setHSL(0.22 + (idx % 5) * 0.015, 0.34, 0.36 + (idx % 4) * 0.04);
+    duneGrassInst.setColorAt(idx, grassCol);
+  });
+  duneGrassInst.instanceMatrix.needsUpdate = true;
+  if (duneGrassInst.instanceColor) duneGrassInst.instanceColor.needsUpdate = true;
+  root.add(duneGrassInst);
+
+  // 5. Key Sol Luxury Island with gently tapered sandy shoreline (no abrupt boxy ledge!)
+  const keyW = KEY_SOL_BOUNDS.maxX - KEY_SOL_BOUNDS.minX;
+  const keyD = KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ;
+  const keyCX = (KEY_SOL_BOUNDS.minX + KEY_SOL_BOUNDS.maxX) * 0.5;
+  const keyCZ = (KEY_SOL_BOUNDS.minZ + KEY_SOL_BOUNDS.maxZ) * 0.5;
+  const keySolGeo = new THREE.BoxGeometry(keyW, 2.4, keyD);
   const keySolMat = new THREE.MeshStandardMaterial({ color: 0x4f915c, roughness: 0.9 });
   const keySolMesh = new THREE.Mesh(keySolGeo, keySolMat);
-  keySolMesh.position.set(
-    (KEY_SOL_BOUNDS.minX + KEY_SOL_BOUNDS.maxX) * 0.5,
-    KEY_SOL_BOUNDS.baseY - 1.22,
-    (KEY_SOL_BOUNDS.minZ + KEY_SOL_BOUNDS.maxZ) * 0.5,
-  );
+  keySolMesh.position.set(keyCX, KEY_SOL_BOUNDS.baseY - 1.22, keyCZ);
   keySolMesh.receiveShadow = true;
   root.add(keySolMesh);
 
-  const keySand = new THREE.Mesh(
-    new THREE.BoxGeometry(
-      KEY_SOL_BOUNDS.maxX - KEY_SOL_BOUNDS.minX + 12,
-      1.6,
-      KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ + 12,
-    ),
-    beachMat,
-  );
-  keySand.position.set(
-    (KEY_SOL_BOUNDS.minX + KEY_SOL_BOUNDS.maxX) * 0.5,
-    -0.55,
-    (KEY_SOL_BOUNDS.minZ + KEY_SOL_BOUNDS.maxZ) * 0.5,
-  );
+  const keySandGeo = new THREE.PlaneGeometry(keyW + 26, keyD + 26, 20, 20);
+  keySandGeo.rotateX(-Math.PI * 0.5);
+  const ksPos = keySandGeo.attributes.position;
+  for (let i = 0; i < ksPos.count; i++) {
+    const lx = Math.abs(ksPos.getX(i));
+    const lz = Math.abs(ksPos.getZ(i));
+    const dxOut = Math.max(0, lx - keyW * 0.5);
+    const dzOut = Math.max(0, lz - keyD * 0.5);
+    const edgeDist = Math.hypot(dxOut, dzOut);
+    const y = KEY_SOL_BOUNDS.baseY - 0.06 - Math.min(1.85, edgeDist * 0.14);
+    ksPos.setY(i, y);
+  }
+  keySandGeo.computeVertexNormals();
+  const keySandMat = new THREE.MeshStandardMaterial({
+    map: sandPbr.map,
+    normalMap: sandPbr.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughnessMap: sandPbr.roughnessMap,
+    roughness: 1.0,
+    color: 0xf4dfb8,
+  });
+  const keySand = new THREE.Mesh(keySandGeo, keySandMat);
+  keySand.position.set(keyCX, 0, keyCZ);
+  keySand.receiveShadow = true;
   root.add(keySand);
 
   // 6. PBR Normal- & Roughness-Mapped Asphalt Road Network
@@ -856,17 +948,18 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   // 7. Key Sol Causeway Arch Bridge
   root.add(buildArchedCauseway(asphaltPbr, neonMaterials));
 
-  // 8. South Pier (ramp + elevated timber deck + pilings + lighthouse)
+  // 8. South Pier (smooth ramp rising from boardwalk deck + elevated timber deck + pilings + lighthouse)
   const pilingMat = new THREE.MeshStandardMaterial({ color: 0x523c28, roughness: 0.94 });
   const rampLen = SOUTH_PIER.rampEndX - SOUTH_PIER.startX;
-  const rampSlope = Math.atan2(SOUTH_PIER.deckY, rampLen);
+  const rampRise = SOUTH_PIER.deckY - BOARDWALK_HEIGHT;
+  const rampSlope = Math.atan2(rampRise, rampLen);
   const rampMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(Math.hypot(rampLen, SOUTH_PIER.deckY), 0.35, SOUTH_PIER.halfWidth * 2),
+    new THREE.BoxGeometry(Math.hypot(rampLen, rampRise), 0.35, SOUTH_PIER.halfWidth * 2),
     boardwalkMat,
   );
   rampMesh.position.set(
     (SOUTH_PIER.startX + SOUTH_PIER.rampEndX) * 0.5,
-    SOUTH_PIER.deckY * 0.5 - 0.16,
+    BOARDWALK_HEIGHT + rampRise * 0.5 - 0.175,
     SOUTH_PIER.centerZ,
   );
   rampMesh.rotation.z = rampSlope;
@@ -923,10 +1016,22 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   lighthouseBeacon.position.set(279, SOUTH_PIER.deckY + 15.6, SOUTH_PIER.centerZ);
   root.add(lighthouseBeacon);
 
-  // 9. Marina Cove timber yacht docks
+  // 9. Marina Cove timber yacht docks + smooth approach ramps from promenade (zero knee clipping!)
+  const dockRampLen = 7.0;
+  const dockRampRise = 0.45;
+  const dockRampSlope = Math.atan2(dockRampRise, dockRampLen);
   for (const dx of [-75, -15, 45]) {
-    const dock = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.45, 52), boardwalkMat);
-    dock.position.set(dx, 0.24, 215);
+    const dockRamp = new THREE.Mesh(
+      new THREE.BoxGeometry(8.5, 0.28, Math.hypot(dockRampLen, dockRampRise)),
+      boardwalkMat,
+    );
+    dockRamp.position.set(dx, dockRampRise * 0.5 - 0.14, 190.5);
+    dockRamp.rotation.x = -dockRampSlope;
+    dockRamp.receiveShadow = true;
+    root.add(dockRamp);
+
+    const dock = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.45, 48), boardwalkMat);
+    dock.position.set(dx, 0.45 - 0.225, 218);
     dock.receiveShadow = true;
     root.add(dock);
   }
@@ -1170,8 +1275,13 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       beachMat.map = textures.sand.map;
       beachMat.normalMap = textures.sand.normalMap;
       beachMat.roughnessMap = textures.sand.roughnessMap;
-      beachMat.color.setHex(0xffe9c7);
+      beachMat.color.setHex(0xffffff);
       beachMat.needsUpdate = true;
+
+      keySandMat.map = textures.sand.map;
+      keySandMat.normalMap = textures.sand.normalMap;
+      keySandMat.roughnessMap = textures.sand.roughnessMap;
+      keySandMat.needsUpdate = true;
     }
     if (textures.wood) {
       boardwalkMat.map = textures.wood.map;

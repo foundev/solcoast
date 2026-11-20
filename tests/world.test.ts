@@ -5,11 +5,14 @@ import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
   KEY_SOL_BOUNDS,
+  SEAWALL_HEIGHT,
   SIDEWALK_HEIGHT,
   SOUTH_PIER,
   createCityBlueprint,
+  getBeachHeight,
   getDistrictAt,
   getGroundHeight,
+  getShorelineX,
   isDeepWater,
   isOnRoad,
 } from '../src/world/cityData';
@@ -30,14 +33,27 @@ describe('Sol Coast World Blueprint', () => {
     }
   });
 
-  it('provides smooth elevation for Sidewalks, Boardwalk, South Pier, Causeway Arch, Key Sol, and Beach', () => {
+  it('provides smooth elevation for Sidewalks, Boardwalk, Seawall, Dock Ramps, Sculpted Dunes, South Pier, and Causeway', () => {
     expect(getGroundHeight(140, 0)).toBe(0); // Ocean Drive asphalt
     expect(getGroundHeight(128, 20)).toBeCloseTo(SIDEWALK_HEIGHT, 3); // Raised city block sidewalk
     expect(getGroundHeight(159, 20)).toBeCloseTo(BOARDWALK_HEIGHT, 3); // Elevated boardwalk
+    expect(getGroundHeight(0, 191.8)).toBeCloseTo(SEAWALL_HEIGHT, 3); // Marina Cove walkable seawall curb
+    expect(getGroundHeight(-75, 190.5)).toBeCloseTo(0.225, 2); // Smooth Marina dock approach ramp
+    expect(getGroundHeight(-75, 210)).toBeCloseTo(0.45, 3); // Marina timber yacht dock
     expect(getGroundHeight(200, CAUSEWAY.centerZ)).toBeGreaterThan(3.5); // Bridge crest
     expect(getGroundHeight(280, -200)).toBeCloseTo(KEY_SOL_BOUNDS.baseY, 3); // Key Sol Island
+    expect(getGroundHeight(SOUTH_PIER.startX, SOUTH_PIER.centerZ)).toBeCloseTo(BOARDWALK_HEIGHT, 3); // Pier ramp flush with boardwalk
     expect(getGroundHeight(240, SOUTH_PIER.centerZ)).toBeCloseTo(SOUTH_PIER.deckY, 3); // South Pier deck
-    expect(getGroundHeight(195, 0)).toBeLessThan(0); // Sloping beach sand
+
+    // Sculpted rolling beach dunes rise naturally above the boardwalk and curve into the surf
+    const duneHeights = [-80, -20, 40, 100].map((z) => getBeachHeight(177, z));
+    expect(Math.max(...duneHeights)).toBeGreaterThan(0.5);
+    expect(Math.max(...duneHeights) - Math.min(...duneHeights)).toBeGreaterThan(0.2);
+
+    // Curved scalloped shoreline varies organically along Z and slopes cleanly below 0 offshore
+    const shoreVals = [-120, -40, 40, 120].map((z) => getShorelineX(z));
+    expect(Math.max(...shoreVals) - Math.min(...shoreVals)).toBeGreaterThan(6);
+    expect(getGroundHeight(getShorelineX(0) + 6, 0)).toBeLessThan(-0.3);
   });
 
   it('classifies water boundaries accurately while keeping pier, causeway, island, and marina docks dry', () => {

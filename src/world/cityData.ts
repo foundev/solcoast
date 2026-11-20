@@ -19,6 +19,65 @@ export const ROAD_WIDTH = 16;
 export const SIDEWALK_WIDTH = 4;
 export const SIDEWALK_HEIGHT = 0.22;
 export const BOARDWALK_HEIGHT = 0.14;
+export const SEAWALL_HEIGHT = 0.24;
+
+/**
+ * Natural scalloped Miami Beach shoreline curve (world X of waterline as a function of Z).
+ * Shared identically by beach terrain geometry, deep-water collision, and ocean surf shader.
+ */
+export function getShorelineX(z: number): number {
+  return 203.5 + Math.sin(z * 0.018) * 5.5 + Math.cos(z * 0.041 + 0.7) * 2.5;
+}
+
+/**
+ * Deterministic sculpted 3D sand dune & foreshore elevation for Sol Beach (x >= 165).
+ * Shared identically by the high-resolution beach mesh and player/vehicle ground physics
+ * so feet, tires, umbrellas, and lifeguard towers rest flush on the sand curves.
+ */
+export function getBeachHeight(x: number, z: number): number {
+  const shoreX = getShorelineX(z);
+  const startX = 165.5;
+
+  // Smooth transition off the boardwalk edge (0.14m) into the coastal dune zone
+  const fromBoardwalk = clamp((x - startX) / 5.5, 0, 1);
+  const boardBlend = fromBoardwalk * fromBoardwalk * (3 - 2 * fromBoardwalk);
+
+  // Rolling wind-sculpted coastal dunes concentrated behind the foreshore berm (x ~ 170..192)
+  const duneBand = Math.exp(-Math.pow((x - 177.5) / 8.8, 2));
+  const duneWave =
+    Math.sin(z * 0.055 + x * 0.09) * 0.36 +
+    Math.cos(z * 0.115 - x * 0.065 + 1.1) * 0.22 +
+    Math.sin(z * 0.024 + 0.4) * 0.18;
+  // Keep a gentler carved pathway right by the South Pier entrance
+  const pierFlatten = 1 - 0.85 * Math.exp(-Math.pow((z - SOUTH_PIER.centerZ) / 14, 2));
+  const duneLift = (0.58 + duneWave) * duneBand * pierFlatten;
+
+  // Mid-beach sunbathing berm gently sloping down toward the curving surf line
+  const shoreT = (x - startX) / Math.max(12, shoreX - startX);
+  let baseSlope: number;
+  if (shoreT <= 0.72) {
+    // Gentle wide upper/mid beach terrace (+0.14m -> +0.28m -> +0.16m)
+    const u = clamp(shoreT / 0.72, 0, 1);
+    baseSlope = BOARDWALK_HEIGHT + Math.sin(u * Math.PI) * 0.18;
+  } else if (shoreT <= 1.0) {
+    // Smooth foreshore wet-sand slope down to waterline (y = -0.08m at shoreX)
+    const u = (shoreT - 0.72) / 0.28;
+    const smoothU = u * u * (3 - 2 * u);
+    baseSlope = BOARDWALK_HEIGHT * (1 - smoothU) - 0.08 * smoothU;
+  } else {
+    // Natural seabed shelving cleanly under the turquoise Atlantic ocean
+    const offshoreDist = x - shoreX;
+    baseSlope = -0.08 - Math.min(2.2, offshoreDist * 0.11);
+  }
+
+  // Subtle organic micro-undulation across the sand terrace
+  const microRipple =
+    (Math.sin(x * 0.22 + z * 0.17) * 0.045 + Math.cos(x * 0.13 - z * 0.29) * 0.035) *
+    boardBlend *
+    clamp(1.15 - shoreT, 0, 1);
+
+  return BOARDWALK_HEIGHT * (1 - boardBlend) + (baseSlope + duneLift + microRipple) * boardBlend;
+}
 
 export const KEY_SOL_BOUNDS = {
   minX: 246,
@@ -94,7 +153,7 @@ export const ALL_DISTRICT_IDS = Object.keys(DISTRICTS) as DistrictId[];
  * Computes walkable/drivable ground elevation at world coordinate (x, z).
  */
 export function getGroundHeight(x: number, z: number): number {
-  // South Pier (ramp + elevated wooden deck)
+  // South Pier (smooth ramp rising from boardwalk deck up to elevated pier deck)
   if (
     x >= SOUTH_PIER.startX &&
     x <= SOUTH_PIER.endX &&
@@ -102,7 +161,7 @@ export function getGroundHeight(x: number, z: number): number {
   ) {
     if (x < SOUTH_PIER.rampEndX) {
       const t = (x - SOUTH_PIER.startX) / (SOUTH_PIER.rampEndX - SOUTH_PIER.startX);
-      return t * SOUTH_PIER.deckY;
+      return BOARDWALK_HEIGHT + t * (SOUTH_PIER.deckY - BOARDWALK_HEIGHT);
     }
     return SOUTH_PIER.deckY;
   }
@@ -129,20 +188,28 @@ export function getGroundHeight(x: number, z: number): number {
     return KEY_SOL_BOUNDS.baseY;
   }
 
-  // Marina Cove wooden yacht piers (south of promenade)
-  if (z >= 190 && z <= 242 && isOnMarinaDock(x, z)) {
+  // Marina Cove wooden yacht piers & smooth approach ramps from promenade
+  if (z >= 187 && z <= 242 && isOnMarinaDock(x, Math.max(z, 190))) {
+    if (z < 194) {
+      const t = clamp((z - 187) / 7, 0, 1);
+      return t * 0.45;
+    }
     return 0.45;
   }
 
+  // Marina Cove waterfront seawall promenade edge (low walkable curb, never knee-high!)
+  if (z >= 190.4 && z <= 193.2 && x >= -248 && x <= 160) {
+    return SEAWALL_HEIGHT;
+  }
+
   // Boardwalk Promenade (elevated timber walkway east of Ocean Drive)
-  if (x >= 152 && x <= 166 && z >= -188 && z <= 188) {
+  if (x >= 152 && x <= 165.5 && z >= -188 && z <= 188) {
     return BOARDWALK_HEIGHT;
   }
 
-  // Golden Sandy Beach (sloping gently into surf)
-  if (x > 166 && x <= 220 && z >= -184 && z <= 192) {
-    const t = clamp((x - 166) / 52, 0, 1);
-    return -0.55 * t;
+  // Sculpted Golden Sandy Beach with rolling dunes & curving surf line
+  if (x > 165.5 && x <= 232 && z >= -186 && z <= 192) {
+    return getBeachHeight(x, z);
   }
 
   // Raised city-block concrete sidewalks between roads
@@ -219,8 +286,9 @@ export function isDeepWater(x: number, z: number): boolean {
     return false;
   }
 
-  // Mainland peninsula boundary
-  const onMainland = x >= -248 && x <= 212 && z >= -228 && z <= 192;
+  // Mainland peninsula boundary with natural curved eastern beach shoreline
+  const shoreLimitX = z >= -186 && z <= 192 ? getShorelineX(z) + 1.5 : 212;
+  const onMainland = x >= -248 && x <= shoreLimitX && z >= -228 && z <= 192.8;
   if (onMainland) {
     // Cutout North Bay inlet east of Ocean Drive (north of Z = -182)
     if (x > 156 && z < -182) {
@@ -586,11 +654,11 @@ export function createCityBlueprint(): CityBlueprint {
     });
   }
 
-  // 7. Beach lifeguard towers & umbrellas
+  // 7. Beach lifeguard towers & umbrellas following the curving shoreline
   const lifeguardZs = [-95, 10, 105];
   const lifeguardColors = [0xff6f9c, 0x3ce8f5, 0xffd166];
   lifeguardZs.forEach((z, idx) => {
-    const x = 192;
+    const x = getShorelineX(z) - 14.5;
     beachProps.push({
       kind: 'lifeguard',
       x,
@@ -604,7 +672,8 @@ export function createCityBlueprint(): CityBlueprint {
   const umbrellaColors = [0xff5e8e, 0x2cf3ff, 0xffcf5c, 0x46f7b4, 0xffffff];
   for (let z = -150; z <= 135; z += 22) {
     if (Math.abs(z - SOUTH_PIER.centerZ) < 18) continue;
-    const x = 180 + (rng() - 0.5) * 14;
+    const shore = getShorelineX(z);
+    const x = 180 + rng() * Math.max(4, shore - 192);
     beachProps.push({
       kind: 'umbrella',
       x,

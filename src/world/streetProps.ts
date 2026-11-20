@@ -427,6 +427,35 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     }
   }
 
+  // 6b. Beach Loungers & Colorful Towels resting flush on the sculpted Sol Beach dunes
+  const towelColors = [0xff5e8e, 0x22d3ee, 0xffd166, 0x34d399, 0xa855f7];
+  const loungerFrameMat = new THREE.MeshStandardMaterial({ color: 0xf4f6fa, roughness: 0.45 });
+  for (const prop of blueprint.beachProps) {
+    if (prop.kind !== 'umbrella') continue;
+    const tx = prop.x + 1.5;
+    const tz = prop.z + 0.8;
+    const ty = getGroundHeight(tx, tz);
+    const col = towelColors[Math.abs(Math.round(prop.z)) % towelColors.length];
+    const towelMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.86 });
+
+    const lounger = new THREE.Group();
+    lounger.position.set(tx, ty + 0.02, tz);
+    lounger.rotation.y = Math.PI * 0.5 + (rng() - 0.5) * 0.35;
+    // Slight tilt to match local sand slope
+    const slopeX = getGroundHeight(tx + 1, tz) - getGroundHeight(tx - 1, tz);
+    lounger.rotation.x = Math.atan2(slopeX, 2) * 0.65;
+
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.08, 1.85), loungerFrameMat);
+    base.position.y = 0.24;
+    const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 1.45), towelMat);
+    cushion.position.set(0, 0.3, 0.16);
+    const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 0.62), towelMat);
+    backrest.position.set(0, 0.44, -0.68);
+    backrest.rotation.x = 0.52;
+    lounger.add(base, cushion, backrest);
+    root.add(lounger);
+  }
+
   // 7. Additive Streetlamp Light Halos (creates real cinematic night atmosphere!)
   for (const sl of blueprint.streetLights) {
     const mat = new THREE.SpriteMaterial({
