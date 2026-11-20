@@ -12,6 +12,7 @@ import {
 } from '../core/math';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
+import { createHumanRigController, type HumanRigController } from './humanRig';
 import type { VehicleState } from './vehicle';
 
 export interface PlayerState {
@@ -597,11 +598,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const leftLeg = makeLeg(-1);
   const rightLeg = makeLeg(1);
 
-  let gltfMixer: THREE.AnimationMixer | null = null;
-  let idleAction: THREE.AnimationAction | null = null;
-  let walkAction: THREE.AnimationAction | null = null;
-  let runAction: THREE.AnimationAction | null = null;
-  let activeClip: 'idle' | 'walk' | 'run' = 'idle';
+  let humanRig: HumanRigController | null = null;
 
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
     body.visible = false;
@@ -612,29 +609,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
       }
     });
     root.add(model);
-
-    const mixer = new THREE.AnimationMixer(model);
-    const findFirstClip = (names: string[]) => {
-      for (const name of names) {
-        const match = animations.find((a) => a.name.toLowerCase() === name.toLowerCase());
-        if (match) return match;
-      }
-      return null;
-    };
-
-    const cIdle = findFirstClip(['Idle_Standing', 'Idle']);
-    const cWalk = findFirstClip(['Walk_Brisk', 'Walk_Relaxed', 'Walk']);
-    const cRun = findFirstClip(['Run', 'Jog']);
-
-    idleAction = cIdle ? mixer.clipAction(cIdle) : null;
-    walkAction = cWalk ? mixer.clipAction(cWalk) : null;
-    runAction = cRun ? mixer.clipAction(cRun) : null;
-
-    if (idleAction) {
-      idleAction.reset().play();
-      activeClip = 'idle';
-    }
-    gltfMixer = mixer;
+    humanRig = createHumanRigController(model, animations);
   };
 
   scene.add(root);
@@ -645,31 +620,8 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
 
-    if (gltfMixer) {
-      const desired: 'idle' | 'walk' | 'run' =
-        s.speed < 0.35 ? 'idle' : s.sprinting || s.speed > 7.5 ? 'run' : 'walk';
-
-      if (desired !== activeClip) {
-        const from =
-          activeClip === 'idle' ? idleAction : activeClip === 'walk' ? walkAction : runAction;
-        const to =
-          desired === 'idle' ? idleAction : desired === 'walk' ? walkAction : runAction;
-        if (to) {
-          to.enabled = true;
-          to.reset().play();
-          if (from && from !== to) {
-            from.crossFadeTo(to, 0.18, true);
-          }
-          activeClip = desired;
-        }
-      }
-
-      if (walkAction && activeClip === 'walk') {
-        walkAction.timeScale = clamp(s.speed / 3.8, 0.7, 1.85);
-      } else if (runAction && activeClip === 'run') {
-        runAction.timeScale = clamp(s.speed / 7.8, 0.9, 1.75);
-      }
-      gltfMixer.update(dt);
+    if (humanRig) {
+      humanRig.update(dt, s.speed, s.sprinting, s.grounded, elapsed);
       return;
     }
 

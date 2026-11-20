@@ -3,6 +3,7 @@ import { clamp, createRng, distXZ, lerpAngle, yawFromDir } from '../core/math';
 import type { ClonedPerson } from '../world/assets';
 import { getGroundHeight } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
+import { createHumanRigController, type HumanRigController } from './humanRig';
 import type { VehicleState } from './vehicle';
 
 export interface PedestrianState {
@@ -155,12 +156,12 @@ export interface PedestrianRenderer {
 
 interface PedInstance {
   root: THREE.Group;
-  mixer: THREE.AnimationMixer | null;
+  rig: HumanRigController | null;
 }
 
 /**
  * Renders sidewalk pedestrians strictly using real skeletal-rigged CC0 civilian GLB models
- * (Sam, Maya, Jordan, Harper) with motion-captured walking animations — zero stickmen!
+ * (Sam, Maya, Jordan, Harper) with upright posture and counter-swinging human arms.
  */
 export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Scene): PedestrianRenderer {
   const container = new THREE.Group();
@@ -181,9 +182,11 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
     pedRoot.rotation.y = -p.yaw;
     pedRoot.visible = false; // Stay hidden until real rigged GLB humans finish loading
     container.add(pedRoot);
-    instances.push({ root: pedRoot, mixer: null });
+    instances.push({ root: pedRoot, rig: null });
   }
   scene.add(container);
+
+  let elapsedAccum = 0;
 
   return {
     attachGltfPeople(clonePerson) {
@@ -199,29 +202,22 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         inst.root.add(cloned.scene);
         inst.root.visible = true;
 
-        const mixer = new THREE.AnimationMixer(cloned.scene);
-        const clip =
-          cloned.animations.find((a) => a.name === (i % 2 === 0 ? 'Walk_Relaxed' : 'Walk_Brisk')) ??
-          cloned.animations.find((a) => /walk/i.test(a.name)) ??
-          cloned.animations[0];
-        if (clip) {
-          const action = mixer.clipAction(clip);
-          action.timeScale = 0.92 + (i % 4) * 0.08;
-          action.play();
-          // Desynchronize walking strides across the crowd
-          mixer.setTime((i * 0.73) % (clip.duration || 1));
-        }
-        inst.mixer = mixer;
+        const rig = createHumanRigController(cloned.scene, cloned.animations);
+        // Prime into walking state at a desynchronized phase offset across the crowd
+        rig.update(0.016, 4.0, false, true, i * 0.73);
+        rig.mixer.setTime((i * 0.73) % 2.0);
+        inst.rig = rig;
       }
     },
 
     syncFromState(statePeds: PedestrianState[], dt: number) {
+      elapsedAccum += dt;
       for (let i = 0; i < statePeds.length && i < instances.length; i++) {
         const p = statePeds[i];
         const inst = instances[i];
         inst.root.position.set(p.x, p.y, p.z);
         inst.root.rotation.y = -p.yaw;
-        inst.mixer?.update(dt);
+        inst.rig?.update(dt, p.speed * 2.4, false, true, elapsedAccum + i);
       }
     },
   };

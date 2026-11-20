@@ -1,6 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
+import { createHumanRigController } from '../src/entities/humanRig';
 import { createPedestrians, stepPedestrians } from '../src/entities/pedestrians';
 import {
   computeCharacterPose,
@@ -177,5 +181,56 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     const walked = peds.filter((p, i) => Math.hypot(p.x - startPos[i].x, p.z - startPos[i].z) > 1.2).length;
     expect(walked).toBeGreaterThanOrEqual(8);
+  });
+
+  it('drives person_sam.glb with relaxed idle arms, upright pelvis, and opposite counter-swinging walk/run arms', async () => {
+    const glbPath = path.resolve(__dirname, '../public/assets/models/person_sam.glb');
+    const buf = fs.readFileSync(glbPath);
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+
+    (globalThis as unknown as { self: unknown; createImageBitmap: unknown }).self = globalThis;
+    (globalThis as unknown as { createImageBitmap: unknown }).createImageBitmap = async () => ({
+      width: 1,
+      height: 1,
+      close() {},
+    });
+
+    const gltf = await new Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>((resolve, reject) => {
+      new GLTFLoader().parse(ab, '', resolve, reject);
+    });
+
+    const model = gltf.scene;
+    const rig = createHumanRigController(model, gltf.animations);
+    const wp = (name: string) => model.getObjectByName(name)!.getWorldPosition(new THREE.Vector3());
+
+    // 1. Idle: arms hang relaxed near hips (not bowed outward like A-pose)
+    rig.update(0.016, 0, false, true, 0);
+    const uArmL = wp('upperarm_l');
+    const lArmL = wp('lowerarm_l');
+    const handL = wp('hand_l');
+    const handR = wp('hand_r');
+    expect(Math.abs(lArmL.x)).toBeLessThan(0.25);
+    expect(Math.abs(handL.x)).toBeLessThan(0.27);
+    expect(handL.y).toBeLessThan(lArmL.y);
+    expect(lArmL.y).toBeLessThan(uArmL.y);
+    expect(Math.abs(handL.z - handR.z)).toBeLessThan(0.05);
+
+    // 2. Walk: step until left foot is clearly ahead of right foot (+Z in unrotated GLB),
+    // then verify right hand swings forward ahead of left hand AND pelvis stays upright!
+    let sawCounterSwing = false;
+    for (let step = 0; step < 60; step++) {
+      rig.update(0.05, 5.5, false, true, step * 0.05);
+      const footL = wp('foot_l');
+      const footR = wp('foot_r');
+      const hL = wp('hand_l');
+      const hR = wp('hand_r');
+      const pelv = wp('pelvis');
+      expect(pelv.y).toBeGreaterThan(0.86);
+      if (footL.z - footR.z > 0.35) {
+        expect(hR.z).toBeGreaterThan(hL.z + 0.12);
+        sawCounterSwing = true;
+      }
+    }
+    expect(sawCounterSwing).toBe(true);
   });
 });
