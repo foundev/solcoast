@@ -66,19 +66,24 @@ function bootstrap(): void {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  renderer.toneMappingExposure = 0.94;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 2200);
 
-  // Full cinematic post-processing pipeline: PBR Render -> Unreal Bloom -> Tone Mapping -> Miami Color Grade
-  const composer = new EffectComposer(renderer);
+  // MSAA HDR render target + tight high-threshold bloom (only bright night neon/LEDs glow,
+  // keeping daytime sky, buildings, road, and cars razor-sharp with zero fuzzy washout!)
+  const composerTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+    type: THREE.HalfFloatType,
+    samples: 4,
+  });
+  const composer = new EffectComposer(renderer, composerTarget);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.26, // strength
-    0.46, // radius
-    0.92, // threshold
+    0.08, // subtle strength (scales up gently only at night)
+    0.22, // tight radius (no full-screen haze)
+    2.6, // high HDR threshold so sunlit surfaces & sky NEVER bloom
   );
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
@@ -496,6 +501,8 @@ function bootstrap(): void {
     const speedNorm = activeVehicle
       ? clamp(Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed, 0, 1)
       : 0;
+    // Keep bloom almost off in daylight (crisp & sharp), subtle glow on neon/headlights at night
+    bloomPass.strength = 0.04 + skyRes.nightFactor * 0.18;
     gradePass.uniforms.uNightFactor.value = skyRes.nightFactor;
     gradePass.uniforms.uSpeedNorm.value = speedNorm;
 

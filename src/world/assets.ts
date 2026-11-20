@@ -10,10 +10,15 @@ export interface LoadedPbrTextures {
   roughnessMap: THREE.Texture;
 }
 
+export interface HdriPair {
+  env: THREE.Texture;
+  bg: THREE.Texture;
+}
+
 export interface LoadedHdriSet {
-  sunset: THREE.Texture;
-  midday: THREE.Texture;
-  night: THREE.Texture;
+  sunset: HdriPair;
+  midday: HdriPair;
+  night: HdriPair;
 }
 
 export interface ClonedPerson {
@@ -82,15 +87,18 @@ function loadHdri(
   rgbe: RGBELoader,
   pmrem: THREE.PMREMGenerator,
   url: string,
-): Promise<THREE.Texture | undefined> {
+): Promise<HdriPair | undefined> {
   return new Promise((resolve) => {
     rgbe.load(
       url,
       (dataTex) => {
         dataTex.mapping = THREE.EquirectangularReflectionMapping;
+        dataTex.minFilter = THREE.LinearFilter;
+        dataTex.magFilter = THREE.LinearFilter;
         const envTex = pmrem.fromEquirectangular(dataTex).texture;
-        dataTex.dispose();
-        resolve(envTex);
+        // Keep the crisp unfiltered equirectangular HDR texture for scene.background
+        // and the PMREM cubemap strictly for PBR IBL scene.environment reflections!
+        resolve({ env: envTex, bg: dataTex });
       },
       undefined,
       (err) => {

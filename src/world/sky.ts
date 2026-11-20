@@ -285,13 +285,13 @@ export class SkySystem {
     if (loadedHdri) {
       if (this.activeHdriKey !== desiredKey) {
         this.activeHdriKey = desiredKey;
-        this.scene.environment = loadedHdri;
-        this.scene.background = loadedHdri;
-        this.scene.backgroundBlurriness = 0.015;
+        this.scene.environment = loadedHdri.env;
+        this.scene.background = loadedHdri.bg;
+        this.scene.backgroundBlurriness = 0;
         this.skyMesh.visible = false;
       }
-      this.scene.environmentIntensity = lerp(1.2, 0.48, nightFactor);
-      this.scene.backgroundIntensity = lerp(1.05, 0.42, nightFactor);
+      this.scene.environmentIntensity = lerp(0.88, 0.36, nightFactor);
+      this.scene.backgroundIntensity = lerp(0.85, 0.38, nightFactor);
     } else {
       this.skyMesh.visible = true;
       const hourDiff = Math.abs(h - this.lastEnvHour);
@@ -299,7 +299,7 @@ export class SkySystem {
         this.lastEnvHour = h;
         const nextRT = this.pmrem.fromScene(this.envScene, 0.035);
         this.scene.environment = nextRT.texture;
-        this.scene.environmentIntensity = lerp(1.15, 0.42, nightFactor);
+        this.scene.environmentIntensity = lerp(0.88, 0.36, nightFactor);
         this.envRenderTarget?.dispose();
         this.envRenderTarget = nextRT;
       }
@@ -309,14 +309,15 @@ export class SkySystem {
     this.sunLight.target.position.copy(focusPos);
     this.sunLight.target.updateMatrixWorld();
     this.sunLight.color.copy(this.tmpSunColor);
-    this.sunLight.intensity = lerp(2.85, 0.55, nightFactor) - sunsetBand * 0.2;
+    this.sunLight.intensity = lerp(2.25, 0.48, nightFactor) - sunsetBand * 0.15;
 
     this.hemiLight.color.copy(this.tmpHorizon);
     this.hemiLight.groundColor.setHex(0x3a2d40).lerp(new THREE.Color(0x101424), nightFactor);
-    this.hemiLight.intensity = lerp(0.75, 0.34, nightFactor);
+    this.hemiLight.intensity = lerp(0.55, 0.28, nightFactor);
 
-    this.fog.color.copy(this.tmpHorizon).lerp(this.tmpZenith, 0.25);
-    this.fog.density = lerp(0.00105, 0.00155, nightFactor) + sunsetBand * 0.0002;
+    this.fog.color.copy(this.tmpHorizon).lerp(this.tmpZenith, 0.28);
+    // Crisp, clear Miami coastal air — light distant horizon haze only, never foggy soup
+    this.fog.density = lerp(0.00036, 0.00062, nightFactor) + sunsetBand * 0.00008;
 
     return {
       sunDirection: this.tmpSunDir.clone(),

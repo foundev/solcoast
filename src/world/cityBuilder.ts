@@ -138,9 +138,9 @@ const OCEAN_FRAGMENT_SHADER = /* glsl */ `
     float foam = shoreBand * smoothstep(0.45, 0.82, surfWave * 0.65 + foamNoise * 0.55);
     waterCol = mix(waterCol, vec3(0.93, 0.97, 1.0), foam * 0.65 * (1.0 - uNightFactor * 0.55));
 
-    // Distance fog matching scene FogExp2
+    // Crisp distant horizon fog matching scene FogExp2
     float dist = length(cameraPosition - vWorldPos);
-    float fogFactor = 1.0 - exp(-pow(dist * 0.00118, 2.0));
+    float fogFactor = 1.0 - exp(-pow(dist * 0.00044, 2.0));
     waterCol = mix(waterCol, uFogColor, clamp(fogFactor, 0.0, 1.0));
 
     gl_FragColor = vec4(waterCol, 0.96);
