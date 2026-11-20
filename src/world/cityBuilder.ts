@@ -342,8 +342,12 @@ function buildBuildingMesh(
   const group = new THREE.Group();
   group.position.set(b.x, b.baseY, b.z);
 
-  const rx = Math.max(1, Math.round(b.width / 11));
-  const ry = Math.max(1, Math.round(b.height / 13));
+  // True architectural story height scaling (~3.5m per story so windows match 1.8m humans & 1.2m cars)
+  const rx = Math.max(1, Math.round(b.width / 16));
+  const ry =
+    b.style === 'skyscraper'
+      ? Math.max(1, Math.round(b.height / 48))
+      : Math.max(1, Math.round(b.height / 24));
   const key = `${b.style}-${b.wallColor}-${rx}-${ry}`;
 
   let wallMat = facadeCache.get(key);
@@ -640,7 +644,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     uFogColor: { value: new THREE.Color(0xd78f8c) },
     uNightFactor: { value: 0.15 },
   };
-  const oceanGeo = new THREE.PlaneGeometry(1850, 1850, 128, 128);
+  const oceanGeo = new THREE.PlaneGeometry(4200, 4200, 140, 140);
   oceanGeo.rotateX(-Math.PI * 0.5);
   const oceanMat = new THREE.ShaderMaterial({
     vertexShader: OCEAN_VERTEX_SHADER,

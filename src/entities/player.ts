@@ -606,7 +606,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
     body.visible = false;
     model.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
+      if (obj instanceof THREE.Mesh && obj.visible) {
         obj.castShadow = true;
         obj.receiveShadow = true;
       }
@@ -614,12 +614,17 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     root.add(model);
 
     const mixer = new THREE.AnimationMixer(model);
-    const findClip = (name: string) =>
-      animations.find((a) => a.name.toLowerCase() === name.toLowerCase()) ?? null;
+    const findFirstClip = (names: string[]) => {
+      for (const name of names) {
+        const match = animations.find((a) => a.name.toLowerCase() === name.toLowerCase());
+        if (match) return match;
+      }
+      return null;
+    };
 
-    const cIdle = findClip('Idle');
-    const cWalk = findClip('Walk');
-    const cRun = findClip('Run');
+    const cIdle = findFirstClip(['Idle_Standing', 'Idle']);
+    const cWalk = findFirstClip(['Walk_Brisk', 'Walk_Relaxed', 'Walk']);
+    const cRun = findFirstClip(['Run', 'Jog']);
 
     idleAction = cIdle ? mixer.clipAction(cIdle) : null;
     walkAction = cWalk ? mixer.clipAction(cWalk) : null;

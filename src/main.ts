@@ -69,7 +69,7 @@ function bootstrap(): void {
   renderer.toneMappingExposure = 1.06;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1350);
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 2200);
 
   // Full cinematic post-processing pipeline: PBR Render -> Unreal Bloom -> Tone Mapping -> Miami Color Grade
   const composer = new EffectComposer(renderer);
@@ -138,8 +138,14 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Stream local photorealistic GLB models (Ferrari 458, rigged mocap character),
-  // Poly Haven CC0 HDRI skies, and photographic PBR textures asynchronously!
+  // Ambient AI traffic cars + strolling sidewalk pedestrians (upgraded to real rigged CC0 humans on load)
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
+  const trafficMeshes = createTrafficMeshes(trafficCars, scene);
+  const pedestrians = createPedestrians(16);
+  const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
+
+  // Stream local photorealistic GLB models (Ferrari 458, 4 CC0 civilian mocap humans),
+  // Poly Haven Pure Sky CC0 HDRIs, and photographic PBR textures asynchronously!
   void loadGameAssets(renderer).then((assets) => {
     sky.setHdriSet(assets.hdris);
     cityHandles.applyPhotoTextures(assets.textures);
@@ -153,21 +159,19 @@ function bootstrap(): void {
       }
     }
 
-    const riggedChar = assets.cloneCharacter();
-    if (riggedChar) {
-      playerMesh.attachGltfCharacter(riggedChar.scene, riggedChar.animations);
+    const playerPerson = assets.clonePerson(0);
+    if (playerPerson) {
+      playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
     }
 
-    if (assets.ferrariGltf || assets.characterGltf) {
-      hud.showToast('HD Assets Ready: Ferrari 458, Mocap Character & HDRI Sky loaded!', 'success');
+    if (assets.peopleGltfs.length > 0) {
+      pedestrianMeshes.attachGltfPeople((idx) => assets.clonePerson(idx));
+    }
+
+    if (assets.ferrariGltf || assets.peopleGltfs.length > 0) {
+      hud.showToast('HD Assets Ready: Ferrari 458, Civilian Cast & Pure-Sky HDRI loaded!', 'success');
     }
   });
-
-  // Ambient AI traffic cars + strolling sidewalk pedestrians
-  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
-  const trafficMeshes = createTrafficMeshes(trafficCars, scene);
-  const pedestrians = createPedestrians(26);
-  const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
 
   const input = new InputManager(canvas);
   const cameraCtrl = new CameraController();
@@ -484,7 +488,7 @@ function bootstrap(): void {
     }
     playerMesh.syncFromState(player, elapsed, dt);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
-    pedestrianMeshes.syncFromState(pedestrians, elapsed);
+    pedestrianMeshes.syncFromState(pedestrians, dt);
     beaconRenderer.update(elapsed, missions);
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
