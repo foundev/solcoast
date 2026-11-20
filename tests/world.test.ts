@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { resolveCircleAABB } from '../src/core/math';
 import { MISSIONS } from '../src/systems/missions';
 import {
+  BOARDWALK_HEIGHT,
   CAUSEWAY,
   KEY_SOL_BOUNDS,
+  SIDEWALK_HEIGHT,
   SOUTH_PIER,
   createCityBlueprint,
   getDistrictAt,
@@ -28,8 +30,10 @@ describe('Sol Coast World Blueprint', () => {
     }
   });
 
-  it('provides smooth elevation for South Pier, Causeway Arch, Key Sol, and Beach', () => {
-    expect(getGroundHeight(140, 0)).toBe(0); // Ocean Drive
+  it('provides smooth elevation for Sidewalks, Boardwalk, South Pier, Causeway Arch, Key Sol, and Beach', () => {
+    expect(getGroundHeight(140, 0)).toBe(0); // Ocean Drive asphalt
+    expect(getGroundHeight(128, 20)).toBeCloseTo(SIDEWALK_HEIGHT, 3); // Raised city block sidewalk
+    expect(getGroundHeight(159, 20)).toBeCloseTo(BOARDWALK_HEIGHT, 3); // Elevated boardwalk
     expect(getGroundHeight(200, CAUSEWAY.centerZ)).toBeGreaterThan(3.5); // Bridge crest
     expect(getGroundHeight(280, -200)).toBeCloseTo(KEY_SOL_BOUNDS.baseY, 3); // Key Sol Island
     expect(getGroundHeight(240, SOUTH_PIER.centerZ)).toBeCloseTo(SOUTH_PIER.deckY, 3); // South Pier deck

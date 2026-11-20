@@ -158,12 +158,19 @@ export function stepPlayerOnFoot(
     p.vy = 8.4;
     p.grounded = false;
   }
-  p.vy -= 24.0 * safeDt;
-  p.y += p.vy * safeDt;
-  if (p.y <= groundY) {
-    p.y = groundY;
+  if (p.grounded) {
+    // Smoothly step up/down curbs, ramps, and boardwalk edges without sinking into geometry
+    p.y = lerp(p.y, groundY, clamp(safeDt * 24, 0, 1));
+    if (Math.abs(p.y - groundY) < 0.015) p.y = groundY;
     p.vy = 0;
-    p.grounded = true;
+  } else {
+    p.vy -= 24.0 * safeDt;
+    p.y += p.vy * safeDt;
+    if (p.y <= groundY) {
+      p.y = groundY;
+      p.vy = 0;
+      p.grounded = true;
+    }
   }
 
   const moved = Math.hypot(p.x - prevX, p.z - prevZ);

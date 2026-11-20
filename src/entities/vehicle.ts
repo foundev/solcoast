@@ -286,7 +286,9 @@ export function stepVehiclePhysics(
 
   v.x = nextX;
   v.z = nextZ;
-  v.y = lerp(v.y, getGroundHeight(v.x, v.z), clamp(safeDt * 18, 0, 1));
+  const targetGroundY = getGroundHeight(v.x, v.z);
+  const curbDelta = targetGroundY - v.y;
+  v.y = lerp(v.y, targetGroundY, clamp(safeDt * 22, 0, 1));
 
   const moved = Math.hypot(v.x - prevX, v.z - prevZ);
   v.odometerMeters += moved;
@@ -296,7 +298,8 @@ export function stepVehiclePhysics(
   v.wheelSpin += (v.speed / 0.37) * safeDt;
 
   const accelInstant = (forwardSpeed - prevForward) / safeDt;
-  const targetPitch = clamp(-accelInstant * 0.0022, -0.05, 0.055);
+  const curbBump = Math.abs(curbDelta) > 0.06 && Math.abs(v.speed) > 2 ? clamp(curbDelta * 0.22, -0.05, 0.05) : 0;
+  const targetPitch = clamp(-accelInstant * 0.0022 - curbBump, -0.065, 0.065);
   const targetRoll = clamp(-input.steer * clamp(absSpeed / 22, 0, 1) * 0.06, -0.07, 0.07);
   v.pitchTilt = lerp(v.pitchTilt, targetPitch, clamp(safeDt * 10, 0, 1));
   v.rollTilt = lerp(v.rollTilt, targetRoll, clamp(safeDt * 10, 0, 1));

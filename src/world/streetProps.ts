@@ -3,6 +3,7 @@ import { createRng } from '../core/math';
 import {
   AVENUE_XS,
   ROAD_WIDTH,
+  SIDEWALK_HEIGHT,
   SOUTH_PIER,
   STREET_ZS,
   getGroundHeight,
@@ -145,8 +146,8 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       const cx = (minX + maxX) * 0.5;
       const cz = (minZ + maxZ) * 0.5;
 
-      const blockSlab = new THREE.Mesh(new THREE.BoxGeometry(w, 0.24, d), curbMat);
-      blockSlab.position.set(cx, 0.12, cz);
+      const blockSlab = new THREE.Mesh(new THREE.BoxGeometry(w, SIDEWALK_HEIGHT, d), curbMat);
+      blockSlab.position.set(cx, SIDEWALK_HEIGHT * 0.5, cz);
       blockSlab.receiveShadow = true;
       root.add(blockSlab);
     }
@@ -340,7 +341,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
 
     // Bistro café table + 2 chairs + parasol on west sidewalk of Ocean Drive
     const cafe = new THREE.Group();
-    cafe.position.set(129.2, 0.24, z);
+    cafe.position.set(129.2, SIDEWALK_HEIGHT, z);
     const tablePost = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.78, 8), poleMat);
     tablePost.position.y = 0.39;
     cafe.add(tablePost);
@@ -393,7 +394,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   ];
   for (const bc of benchCoords) {
     const bench = new THREE.Group();
-    bench.position.set(bc.x, 0.14, bc.z);
+    bench.position.set(bc.x, getGroundHeight(bc.x, bc.z), bc.z);
     bench.rotation.y = bc.yaw;
     const seat = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.1, 0.56), woodBenchMat);
     seat.position.y = 0.48;

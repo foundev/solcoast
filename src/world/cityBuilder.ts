@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LoadedGameAssets } from './assets';
 import {
+  BOARDWALK_HEIGHT,
   CAUSEWAY,
   KEY_SOL_BOUNDS,
+  SIDEWALK_HEIGHT,
   SOUTH_PIER,
   getGroundHeight,
 } from './cityData';
@@ -668,8 +670,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roughnessMap: woodPbr.roughnessMap,
     roughness: 1.0,
   });
-  const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(14, 0.32, 376), boardwalkMat);
-  boardwalk.position.set(159, -0.05, 0);
+  const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(14, BOARDWALK_HEIGHT + 0.18, 376), boardwalkMat);
+  boardwalk.position.set(159, BOARDWALK_HEIGHT - (BOARDWALK_HEIGHT + 0.18) * 0.5, 0);
   boardwalk.receiveShadow = true;
   root.add(boardwalk);
 
@@ -928,25 +930,26 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     root.add(dock);
   }
 
-  // 10. Palm Plaza Central Park & Tiered Fountain
+  // 10. Palm Plaza Central Park & Tiered Fountain (resting cleanly atop raised sidewalk slab)
+  const parkY = SIDEWALK_HEIGHT;
   const parkGrass = new THREE.Mesh(
-    new THREE.BoxGeometry(66, 0.14, 66),
+    new THREE.BoxGeometry(66, 0.04, 66),
     new THREE.MeshStandardMaterial({ color: 0x38854f, roughness: 0.92 }),
   );
-  parkGrass.position.set(25, 0.05, 25);
+  parkGrass.position.set(25, parkY + 0.015, 25);
   parkGrass.receiveShadow = true;
   root.add(parkGrass);
 
   const pathMat = new THREE.MeshStandardMaterial({ color: 0xe2d7c8, roughness: 0.78 });
-  const pathNS = new THREE.Mesh(new THREE.BoxGeometry(7, 0.17, 66), pathMat);
-  pathNS.position.set(25, 0.06, 25);
+  const pathNS = new THREE.Mesh(new THREE.BoxGeometry(7, 0.05, 66), pathMat);
+  pathNS.position.set(25, parkY + 0.02, 25);
   root.add(pathNS);
-  const pathEW = new THREE.Mesh(new THREE.BoxGeometry(66, 0.17, 7), pathMat);
-  pathEW.position.set(25, 0.06, 25);
+  const pathEW = new THREE.Mesh(new THREE.BoxGeometry(66, 0.05, 7), pathMat);
+  pathEW.position.set(25, parkY + 0.02, 25);
   root.add(pathEW);
 
   const fountainRim = new THREE.Mesh(new THREE.CylinderGeometry(6.2, 6.6, 1.1, 24), seawallMat);
-  fountainRim.position.set(25, 0.55, 25);
+  fountainRim.position.set(25, parkY + 0.55, 25);
   root.add(fountainRim);
 
   const fountainWaterMat = new THREE.MeshPhysicalMaterial({
@@ -958,11 +961,11 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   });
   neonMaterials.push(fountainWaterMat);
   const fountainWater = new THREE.Mesh(new THREE.CylinderGeometry(5.6, 5.6, 1.15, 24), fountainWaterMat);
-  fountainWater.position.set(25, 0.62, 25);
+  fountainWater.position.set(25, parkY + 0.62, 25);
   root.add(fountainWater);
 
   const fountainSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.65, 3.6, 16), seawallMat);
-  fountainSpire.position.set(25, 1.8, 25);
+  fountainSpire.position.set(25, parkY + 1.8, 25);
   root.add(fountainSpire);
 
   // 11. PBR Buildings

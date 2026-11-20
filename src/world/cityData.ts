@@ -17,6 +17,8 @@ export const AVENUE_XS = [-200, -110, -20, 70, 140];
 export const STREET_ZS = [-200, -110, -20, 70, 160];
 export const ROAD_WIDTH = 16;
 export const SIDEWALK_WIDTH = 4;
+export const SIDEWALK_HEIGHT = 0.22;
+export const BOARDWALK_HEIGHT = 0.14;
 
 export const KEY_SOL_BOUNDS = {
   minX: 246,
@@ -132,13 +134,42 @@ export function getGroundHeight(x: number, z: number): number {
     return 0.45;
   }
 
+  // Boardwalk Promenade (elevated timber walkway east of Ocean Drive)
+  if (x >= 152 && x <= 166 && z >= -188 && z <= 188) {
+    return BOARDWALK_HEIGHT;
+  }
+
   // Golden Sandy Beach (sloping gently into surf)
-  if (x > 165 && x <= 220 && z >= -184 && z <= 192) {
-    const t = clamp((x - 165) / 52, 0, 1);
+  if (x > 166 && x <= 220 && z >= -184 && z <= 192) {
+    const t = clamp((x - 166) / 52, 0, 1);
     return -0.55 * t;
   }
 
+  // Raised city-block concrete sidewalks between roads
+  if (isOnCityBlockSidewalk(x, z)) {
+    return SIDEWALK_HEIGHT;
+  }
+
   return 0;
+}
+
+export function isOnCityBlockSidewalk(x: number, z: number): boolean {
+  const halfRoad = ROAD_WIDTH * 0.5 + 0.4;
+  if (
+    x < AVENUE_XS[0] + halfRoad ||
+    x > AVENUE_XS[AVENUE_XS.length - 1] - halfRoad ||
+    z < STREET_ZS[0] + halfRoad ||
+    z > STREET_ZS[STREET_ZS.length - 1] - halfRoad
+  ) {
+    return false;
+  }
+  for (const ax of AVENUE_XS) {
+    if (Math.abs(x - ax) < halfRoad) return false;
+  }
+  for (const sz of STREET_ZS) {
+    if (Math.abs(z - sz) < halfRoad) return false;
+  }
+  return true;
 }
 
 export function isOnMarinaDock(x: number, z: number): boolean {
