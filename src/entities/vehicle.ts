@@ -8,6 +8,7 @@ import {
   wrapAngle,
   type AABB,
 } from '../core/math';
+import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
 import { createContactShadowTexture, createSmokePuffTexture } from '../world/textures';
@@ -38,6 +39,7 @@ export interface VehicleConfig {
   id: string;
   name: string;
   style: VehicleBodyStyle;
+  modelKind: CarModelKind;
   defaultPaintIndex: number;
   spawnX: number;
   spawnZ: number;
@@ -53,6 +55,7 @@ export const DEFAULT_VEHICLES: VehicleConfig[] = [
     id: 'solstice-gt',
     name: 'Solstice GT',
     style: 'supercar',
+    modelKind: 'ferrari',
     defaultPaintIndex: 0,
     spawnX: 144,
     spawnZ: 28,
@@ -66,6 +69,7 @@ export const DEFAULT_VEHICLES: VehicleConfig[] = [
     id: 'biscayne-ev',
     name: 'Biscayne EV',
     style: 'sedan',
+    modelKind: 'ev',
     defaultPaintIndex: 1,
     spawnX: -196,
     spawnZ: -38,
@@ -79,6 +83,7 @@ export const DEFAULT_VEHICLES: VehicleConfig[] = [
     id: 'keysol-spyder',
     name: 'Key Sol Spyder',
     style: 'spyder',
+    modelKind: 'spyder',
     defaultPaintIndex: 2,
     spawnX: 18,
     spawnZ: 164,
@@ -92,6 +97,7 @@ export const DEFAULT_VEHICLES: VehicleConfig[] = [
     id: 'neon-apex',
     name: 'Neon Apex',
     style: 'coupe',
+    modelKind: 'gt',
     defaultPaintIndex: 3,
     spawnX: -16,
     spawnZ: -90,
@@ -100,6 +106,34 @@ export const DEFAULT_VEHICLES: VehicleConfig[] = [
     accel: 25,
     brakeDecel: 38,
     turnRate: 2.4,
+  },
+  {
+    id: 'ocean-taxi',
+    name: 'Sol City Taxi',
+    style: 'sedan',
+    modelKind: 'taxi',
+    defaultPaintIndex: 5,
+    spawnX: 74,
+    spawnZ: 18,
+    spawnYaw: 0,
+    maxSpeed: 47,
+    accel: 21,
+    brakeDecel: 35,
+    turnRate: 2.2,
+  },
+  {
+    id: 'midnight-jdm',
+    name: 'Biscayne JDM',
+    style: 'coupe',
+    modelKind: 'jdm',
+    defaultPaintIndex: 4,
+    spawnX: -66,
+    spawnZ: 164,
+    spawnYaw: Math.PI * 0.5,
+    maxSpeed: 51,
+    accel: 24,
+    brakeDecel: 37,
+    turnRate: 2.5,
   },
 ];
 
@@ -371,6 +405,7 @@ export interface VehicleMeshHandles {
   syncFromState: (state: VehicleState, nightFactor: number, dt?: number, isOccupied?: boolean) => void;
   applyPaint: (paintIndex: number) => void;
   attachGltfSupercar: (ferrariRoot: THREE.Group) => void;
+  attachGltfCar: (carRoot: THREE.Group, isFerrari?: boolean) => void;
 }
 
 let sharedContactShadowTex: THREE.CanvasTexture | null = null;
@@ -895,7 +930,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     }
   };
 
-  const attachGltfSupercar = (ferrariRoot: THREE.Group) => {
+  const attachGltfCar = (carRoot: THREE.Group, isFerrari = false) => {
     // Hide procedural car shell & procedural wheel pivots while preserving glow halos, spotlights & contact shadow
     for (const child of bodyGroup.children) {
       if (!(child instanceof THREE.Sprite)) {
@@ -906,7 +941,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       wp.visible = false;
     }
 
-    ferrariRoot.traverse((obj) => {
+    carRoot.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
       obj.castShadow = true;
       obj.receiveShadow = true;
@@ -916,48 +951,72 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
         ? ''
         : (obj.material?.name ?? '').toLowerCase();
 
-      if (name === 'body' || matName === 'body_color') {
+      if (
+        name === 'body' ||
+        matName === 'body_color' ||
+        matName === 'paint' ||
+        matName.startsWith('body paint')
+      ) {
         obj.material = paintMaterial;
-      } else if (name === 'glass' || matName === 'glass_gray') {
+      } else if (
+        name === 'glass' ||
+        matName === 'glass_gray' ||
+        matName.startsWith('glass') ||
+        matName.includes('tinted glass')
+      ) {
         obj.material = glassMat;
-      } else if (name === 'lights_red' || matName === 'taillight_glass') {
+      } else if (
+        name === 'lights_red' ||
+        matName === 'taillight_glass' ||
+        matName === 'redlens' ||
+        matName.includes('tail lamp')
+      ) {
         obj.material = brakeLightMaterial;
-      } else if (name === 'lights' || name === 'leds' || matName === 'projector_glass') {
+      } else if (
+        name === 'lights' ||
+        name === 'leds' ||
+        matName === 'projector_glass' ||
+        matName === 'clearlens' ||
+        matName.includes('clear lamp')
+      ) {
         obj.material = headlightMaterial;
       } else if (name === 'trim' || matName === 'carbon_fiber') {
         obj.material = carbonMat;
-      } else if (matName === 'metal_chrome') {
+      } else if (matName === 'metal_chrome' || matName === 'chrome') {
         obj.material = chromeMat;
-      } else if (name === 'brakes') {
+      } else if (name === 'brakes' || matName.includes('brake caliper')) {
         obj.material = caliperMaterial;
       }
     });
 
-    // Rewire steering & spinning wheels to Ferrari's authentic wheel nodes
+    // Rewire steering & spinning wheels when the model provides dedicated wheel nodes (e.g. Ferrari 458)
     wheelMeshes.length = 0;
     frontWheelPivots.length = 0;
-    gltfWheelBaseRotX = -Math.PI * 0.5;
-
-    const wheelNames = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'];
-    for (const wn of wheelNames) {
-      const wheelObj = ferrariRoot.getObjectByName(wn);
-      if (!wheelObj) continue;
-      if (wn === 'wheel_fl' || wn === 'wheel_fr') {
-        const parent = wheelObj.parent;
-        if (parent) {
-          const steerPivot = new THREE.Group();
-          steerPivot.position.copy(wheelObj.position);
-          wheelObj.position.set(0, 0, 0);
-          parent.add(steerPivot);
-          steerPivot.add(wheelObj);
-          frontWheelPivots.push(steerPivot);
+    if (isFerrari) {
+      gltfWheelBaseRotX = -Math.PI * 0.5;
+      const wheelNames = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'];
+      for (const wn of wheelNames) {
+        const wheelObj = carRoot.getObjectByName(wn);
+        if (!wheelObj) continue;
+        if (wn === 'wheel_fl' || wn === 'wheel_fr') {
+          const parent = wheelObj.parent;
+          if (parent) {
+            const steerPivot = new THREE.Group();
+            steerPivot.position.copy(wheelObj.position);
+            wheelObj.position.set(0, 0, 0);
+            parent.add(steerPivot);
+            steerPivot.add(wheelObj);
+            frontWheelPivots.push(steerPivot);
+          }
         }
+        wheelMeshes.push(wheelObj);
       }
-      wheelMeshes.push(wheelObj);
     }
 
-    bodyGroup.add(ferrariRoot);
+    bodyGroup.add(carRoot);
   };
+
+  const attachGltfSupercar = (ferrariRoot: THREE.Group) => attachGltfCar(ferrariRoot, true);
 
   syncFromState(state, 0.2, 0.016, false);
 
@@ -976,5 +1035,6 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     syncFromState,
     applyPaint,
     attachGltfSupercar,
+    attachGltfCar,
   };
 }

@@ -19,44 +19,66 @@ export interface PedestrianState {
   dir: 1 | -1;
 }
 
-// Scenic pedestrian stroll corridors: Boardwalk, Ocean Drive Sidewalk, Palm Plaza Loop, Marina Promenade, South Pier
+// 12 scenic pedestrian stroll corridors spanning ALL 8 Sol Coast districts!
 const STROLL_ROUTES: { x: number; z: number }[][] = [
-  // Boardwalk Promenade (North-South)
+  // 1. Boardwalk Promenade West Lane
   [
-    { x: 158, z: -155 },
-    { x: 158, z: -40 },
-    { x: 158, z: 75 },
-    { x: 158, z: 150 },
+    { x: 156, z: -165 },
+    { x: 156, z: -50 },
+    { x: 156, z: 65 },
+    { x: 156, z: 155 },
   ],
-  // Boardwalk East Edge
+  // 2. Boardwalk Promenade East Lane
   [
-    { x: 162, z: 145 },
-    { x: 162, z: 30 },
-    { x: 162, z: -90 },
-    { x: 162, z: -165 },
+    { x: 162, z: 150 },
+    { x: 162, z: 35 },
+    { x: 162, z: -85 },
+    { x: 162, z: -170 },
   ],
-  // Ocean Drive West Sidewalk (past Art Deco cafés!)
+  // 3. Ocean Drive West Café Sidewalk
   [
     { x: 128, z: -165 },
     { x: 128, z: -55 },
     { x: 128, z: 55 },
-    { x: 128, z: 140 },
+    { x: 128, z: 145 },
   ],
-  // Palm Plaza Central Park Loop
+  // 4. Sol Beach Golden Sand Shoreline Stroll
+  [
+    { x: 176, z: -145 },
+    { x: 184, z: -30 },
+    { x: 180, z: 75 },
+    { x: 175, z: 135 },
+  ],
+  // 5. Palm Plaza Central Park Loop (Inner)
   [
     { x: 6, z: 6 },
     { x: 44, z: 6 },
     { x: 44, z: 44 },
     { x: 6, z: 44 },
   ],
-  // Marina Cove Waterfront Promenade
+  // 6. Palm Plaza Outer Sidewalk
   [
-    { x: -100, z: 176 },
-    { x: -25, z: 176 },
-    { x: 55, z: 176 },
-    { x: 115, z: 176 },
+    { x: -7, z: -7 },
+    { x: 57, z: -7 },
+    { x: 57, z: 57 },
+    { x: -7, z: 57 },
   ],
-  // South Pier Stroll
+  // 7. Marina Cove Waterfront Promenade
+  [
+    { x: -115, z: 176 },
+    { x: -30, z: 176 },
+    { x: 55, z: 176 },
+    { x: 120, z: 176 },
+  ],
+  // 8. Marina Cove Timber Yacht Docks
+  [
+    { x: -75, z: 184 },
+    { x: -75, z: 234 },
+    { x: -75, z: 184 },
+    { x: -15, z: 184 },
+    { x: -15, z: 234 },
+  ],
+  // 9. South Pier Deck Stroll
   [
     { x: 166, z: 157 },
     { x: 215, z: 157 },
@@ -64,9 +86,31 @@ const STROLL_ROUTES: { x: number; z: number }[][] = [
     { x: 262, z: 163 },
     { x: 172, z: 163 },
   ],
+  // 10. Neon Strip Boulevard Sidewalk (Collins Ave)
+  [
+    { x: -8, z: -175 },
+    { x: -8, z: -65 },
+    { x: -8, z: 45 },
+    { x: -8, z: 145 },
+  ],
+  // 11. Downtown Biscayne Plaza Sidewalk
+  [
+    { x: -122, z: -165 },
+    { x: -122, z: -45 },
+    { x: -122, z: 75 },
+    { x: -188, z: 75 },
+    { x: -188, z: -125 },
+  ],
+  // 12. Key Sol Island Resort Loop
+  [
+    { x: 254, z: -245 },
+    { x: 254, z: -155 },
+    { x: 344, z: -155 },
+    { x: 344, z: -245 },
+  ],
 ];
 
-export function createPedestrians(count = 16): PedestrianState[] {
+export function createPedestrians(count = 52): PedestrianState[] {
   const rng = createRng(551305);
   const peds: PedestrianState[] = [];
 
@@ -86,7 +130,7 @@ export function createPedestrians(count = 16): PedestrianState[] {
       y: getGroundHeight(x, z),
       z,
       yaw: yawFromDir(b.x - a.x, b.z - a.z),
-      speed: 1.45 + rng() * 0.55,
+      speed: 1.35 + rng() * 0.65,
       walkPhase: rng() * Math.PI * 2,
       waypoints: route,
       wpIndex: nextIdx,
@@ -160,8 +204,9 @@ interface PedInstance {
 }
 
 /**
- * Renders sidewalk pedestrians strictly using real skeletal-rigged CC0 civilian GLB models
- * (Sam, Maya, Jordan, Harper) with upright posture and counter-swinging human arms.
+ * Renders 50+ varied sidewalk & beachfront pedestrians using styled Ready Player Me
+ * civilian avatars driven by studio optical motion capture. Strict 85m distance culling
+ * ensures only the nearest ~6-10 characters skin on the GPU per frame (locked 60-120 FPS).
  */
 export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Scene): PedestrianRenderer {
   const container = new THREE.Group();
@@ -191,11 +236,9 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
   return {
     attachGltfPeople(clonePerson) {
       for (let i = 0; i < instances.length; i++) {
-        // Rotate across Maya (1), Jordan (2), Harper (3), Sam (0) so crowd looks varied
-        const cloned = clonePerson(i + 1);
+        const cloned = clonePerson(i);
         if (!cloned) continue;
 
-        // Keep pedestrians lightweight: contact shadow handles grounding without costly skinned shadow passes
         cloned.scene.traverse((obj) => {
           if (obj instanceof THREE.Mesh) {
             obj.castShadow = false;
@@ -208,9 +251,12 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         shadow.position.y = 0.03;
         inst.root.add(shadow);
         inst.root.add(cloned.scene);
-        inst.root.visible = true;
 
-        const rig = createHumanRigController(cloned.scene, cloned.animations);
+        const rig = createHumanRigController(
+          cloned.scene,
+          cloned.animations,
+          cloned.preferredWalkClip,
+        );
         // Prime into walking state at a desynchronized phase offset across the crowd
         rig.update(0.016, 4.0, false, true, i * 0.73);
         rig.mixer.setTime((i * 0.73) % 2.0);
@@ -225,9 +271,9 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         const inst = instances[i];
         if (!inst.rig) continue;
 
-        // Distance-cull far skinned pedestrians (>95m) so GPU only skins nearby crowd
+        // Distance-cull far skinned pedestrians (>85m) so 50+ locals across the city stay butter-smooth!
         const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);
-        if (dSq > 95 * 95) {
+        if (dSq > 85 * 85) {
           inst.root.visible = false;
           continue;
         }

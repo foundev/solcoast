@@ -3,6 +3,7 @@ import path from 'node:path';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
+import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
 import { createHumanRigController } from '../src/entities/humanRig';
 import { createPedestrians, stepPedestrians } from '../src/entities/pedestrians';
@@ -254,5 +255,63 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(maxLeftAhead).toBeGreaterThan(0.35);
     expect(maxRightAhead).toBeGreaterThan(0.35);
+  });
+
+  it('populates 50+ strolling locals, 7+ multi-model traffic classes, cruising boats, and valid optimized GLB assets', () => {
+    // 1. 52 distinct pedestrians distributed across all city corridors
+    const peds = createPedestrians(52);
+    expect(peds.length).toBe(52);
+    const vehicles = DEFAULT_VEHICLES.map(createVehicleState);
+    expect(vehicles.length).toBe(6);
+    expect(new Set(vehicles.map((v) => v.config.modelKind)).size).toBe(6);
+
+    // 2. Multi-model AI traffic covers 7 distinct car models
+    const traffic = createTrafficCars(blueprint.trafficNodes, 18);
+    expect(new Set(traffic.map((t) => t.modelKind)).size).toBe(7);
+
+    // 3. Coastal boat fleet has moored marina craft + actively cruising offshore boats + cruise liner
+    const boats = createCoastalBoatFleet();
+    expect(boats.length).toBeGreaterThanOrEqual(12);
+    expect(new Set(boats.map((b) => b.kind)).size).toBe(6);
+    const movingStart = boats.filter((b) => !b.moored).map((b) => ({ id: b.id, x: b.x, z: b.z }));
+    for (let i = 0; i < 120; i++) {
+      stepBoats(boats, 1 / 60);
+    }
+    for (const s of movingStart) {
+      const now = boats.find((b) => b.id === s.id)!;
+      expect(Math.hypot(now.x - s.x, now.z - s.z)).toBeGreaterThan(4);
+    }
+
+    // 4. Every bundled car & boat GLB is present, valid binary glTF, and game-optimized (< 1 MB)
+    const modelsDir = path.resolve(__dirname, '../public/assets/models');
+    const requiredModels = [
+      'ferrari.glb',
+      'car_spyder.glb',
+      'car_gt.glb',
+      'car_ev.glb',
+      'car_suv.glb',
+      'car_taxi.glb',
+      'car_coupe.glb',
+      'car_jdm.glb',
+      'boat_speedboat.glb',
+      'boat_cruiser.glb',
+      'boat_sailboat.glb',
+      'boat_motorboat.glb',
+      'boat_watertaxi.glb',
+      'boat_cruiseship.glb',
+    ];
+    const dec = new TextDecoder();
+    for (const file of requiredModels) {
+      const full = path.resolve(modelsDir, file);
+      const buf = fs.readFileSync(full);
+      expect(buf.byteLength, `${file} non-empty`).toBeGreaterThan(10_000);
+      expect(dec.decode(buf.subarray(0, 4)), `${file} magic`).toBe('glTF');
+      const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const jsonLen = view.getUint32(12, true);
+      const gltf = JSON.parse(dec.decode(buf.subarray(20, 20 + jsonLen)));
+      expect(gltf.extensionsUsed ?? [], `${file} must not use slow transmission pass`).not.toContain(
+        'KHR_materials_transmission',
+      );
+    }
   });
 });

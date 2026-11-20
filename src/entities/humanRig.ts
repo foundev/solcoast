@@ -42,14 +42,18 @@ export interface HumanRigController {
 export function createHumanRigController(
   model: THREE.Object3D,
   clips: THREE.AnimationClip[],
+  preferredWalkClip?: string,
 ): HumanRigController {
   const mixer = new THREE.AnimationMixer(model);
 
   const findByPattern = (re: RegExp) => clips.find((c) => re.test(c.name)) ?? null;
-  const idleClip = findByPattern(/idle/i);
-  const walkClip = findByPattern(/walk(?!.*jump)/i);
-  const runClip = findByPattern(/run|jog/i);
-  const jumpClip = findByPattern(/jump/i);
+  const idleClip = findByPattern(/^idle$/i) ?? findByPattern(/idle/i);
+  const walkClip =
+    (preferredWalkClip ? clips.find((c) => c.name === preferredWalkClip) : null) ??
+    findByPattern(/^walk$/i) ??
+    findByPattern(/walk(?!.*jump)/i);
+  const runClip = findByPattern(/^run$/i) ?? findByPattern(/run|jog/i);
+  const jumpClip = findByPattern(/^jump$/i) ?? findByPattern(/jump/i);
 
   const idleAction = idleClip ? mixer.clipAction(makeInPlaceClip(idleClip)) : null;
   const walkAction = walkClip ? mixer.clipAction(makeInPlaceClip(walkClip)) : null;

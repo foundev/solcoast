@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, createRng, distXZ, lerp, lerpAngle, yawFromDir } from '../core/math';
+import type { CarModelKind } from '../world/assets';
 import { getGroundHeight } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
 import { createContactShadowTexture } from '../world/textures';
@@ -9,6 +10,7 @@ import type { VehicleState } from './vehicle';
 
 export interface TrafficCarState {
   id: number;
+  modelKind: CarModelKind;
   x: number;
   y: number;
   z: number;
@@ -20,6 +22,8 @@ export interface TrafficCarState {
   toNode: number;
   progress: number;
 }
+
+const TRAFFIC_MODELS: CarModelKind[] = ['taxi', 'suv', 'ev', 'coupe', 'gt', 'jdm', 'spyder'];
 
 const TRAFFIC_COLORS = [
   0xeef2f7, 0x2254a4, 0xd85c18, 0x158a64, 0xc42848, 0xd1a024, 0x5842a4, 0x1c7a88, 0x36404f,
@@ -38,15 +42,17 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
     const to = nodes[toIdx];
     const progress = rng();
     const pos = lanePosition(from, to, progress);
+    const modelKind = TRAFFIC_MODELS[i % TRAFFIC_MODELS.length];
     cars.push({
       id: i,
+      modelKind,
       x: pos.x,
       y: getGroundHeight(pos.x, pos.z),
       z: pos.z,
       yaw: pos.yaw,
       speed: 11 + rng() * 6,
       cruiseSpeed: 12 + rng() * 6,
-      color: TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
+      color: modelKind === 'taxi' ? 0xf5b81d : TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
       fromNode: fromIdx,
       toNode: toIdx,
       progress,
@@ -145,7 +151,8 @@ export function stepTraffic(
 }
 
 export interface TrafficRenderer {
-  syncFromState: (cars: TrafficCarState[], nightFactor: number) => void;
+  attachGltfCars: (cloneCar: (kind: CarModelKind) => THREE.Group | null) => void;
+  syncFromState: (cars: TrafficCarState[], nightFactor: number, focusX?: number, focusZ?: number) => void;
 }
 
 export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene): TrafficRenderer {
@@ -179,42 +186,58 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
   shadowGeo.rotateX(-Math.PI * 0.5);
 
   const groups: THREE.Group[] = [];
+  const proceduralShells: THREE.Group[] = [];
+  const paintMats: THREE.MeshPhysicalMaterial[] = [];
   const headGlows: THREE.Sprite[] = [];
 
   for (const c of cars) {
-    const isSuv = c.id % 3 === 0;
+    const isSuv = c.modelKind === 'suv';
     const geos = isSuv ? suvGeos : sedanGeos;
 
     const g = new THREE.Group();
     const paint = new THREE.MeshPhysicalMaterial({
       color: c.color,
-      metalness: 0.54,
-      roughness: 0.19,
+      metalness: 0.58,
+      roughness: 0.18,
       clearcoat: 0.95,
-      clearcoatRoughness: 0.07,
-      envMapIntensity: 1.55,
+      clearcoatRoughness: 0.06,
+      envMapIntensity: 1.65,
     });
+    paintMats.push(paint);
 
     const shadow = new THREE.Mesh(shadowGeo, shadowMat);
     shadow.position.y = 0.04;
     g.add(shadow);
 
+    const proc = new THREE.Group();
     const body = new THREE.Mesh(geos.body, paint);
-    body.castShadow = true;
+    body.castShadow = false;
     body.receiveShadow = true;
-    g.add(body);
+    proc.add(body);
 
     const cabin = new THREE.Mesh(geos.cabin, glassMat);
-    cabin.castShadow = true;
-    g.add(cabin);
+    proc.add(cabin);
 
     const hl = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.11, 0.08), headMat);
     hl.position.set(0, isSuv ? 0.68 : 0.56, -2.18);
-    g.add(hl);
+    proc.add(hl);
 
     const tl = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.11, 0.08), tailMat);
     tl.position.set(0, isSuv ? 0.76 : 0.66, 2.16);
-    g.add(tl);
+    proc.add(tl);
+
+    for (const wx of [-0.94, 0.94]) {
+      for (const wz of [-1.28, 1.28]) {
+        const w = new THREE.Mesh(wheelGeo, tireMat);
+        w.position.set(wx, 0.34, wz);
+        proc.add(w);
+        const h = new THREE.Mesh(hubGeo, rimMat);
+        h.position.set(wx, 0.34, wz);
+        proc.add(h);
+      }
+    }
+    g.add(proc);
+    proceduralShells.push(proc);
 
     // Subtle additive headlight glare halo at night
     const hGlow = new THREE.Sprite(
@@ -227,21 +250,10 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
         depthWrite: false,
       }),
     );
-    hGlow.position.set(0, isSuv ? 0.68 : 0.56, -2.3);
+    hGlow.position.set(0, isSuv ? 0.68 : 0.56, -2.35);
     hGlow.scale.set(2.0, 0.9, 1);
     g.add(hGlow);
     headGlows.push(hGlow);
-
-    for (const wx of [-0.94, 0.94]) {
-      for (const wz of [-1.28, 1.28]) {
-        const w = new THREE.Mesh(wheelGeo, tireMat);
-        w.position.set(wx, 0.34, wz);
-        g.add(w);
-        const h = new THREE.Mesh(hubGeo, rimMat);
-        h.position.set(wx, 0.34, wz);
-        g.add(h);
-      }
-    }
 
     g.position.set(c.x, c.y, c.z);
     g.rotation.y = -c.yaw;
@@ -252,7 +264,39 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
   scene.add(root);
 
   return {
-    syncFromState(stateCars: TrafficCarState[], nightFactor: number) {
+    attachGltfCars(cloneCar) {
+      for (let i = 0; i < cars.length && i < groups.length; i++) {
+        const c = cars[i];
+        const model = cloneCar(c.modelKind);
+        if (!model) continue;
+
+        const paint = paintMats[i];
+        model.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return;
+          // Contact shadow plane grounds traffic cars with zero extra shadow-pass cost
+          obj.castShadow = false;
+          obj.receiveShadow = false;
+
+          const matName = Array.isArray(obj.material)
+            ? ''
+            : (obj.material?.name ?? '').toLowerCase();
+          if (matName === 'paint' || matName.startsWith('body paint')) {
+            obj.material = paint;
+          } else if (matName.startsWith('glass') || matName.includes('tinted glass')) {
+            obj.material = glassMat;
+          } else if (matName === 'redlens' || matName.includes('tail lamp')) {
+            obj.material = tailMat;
+          } else if (matName === 'clearlens' || matName.includes('clear lamp')) {
+            obj.material = headMat;
+          }
+        });
+
+        proceduralShells[i].visible = false;
+        groups[i].add(model);
+      }
+    },
+
+    syncFromState(stateCars: TrafficCarState[], nightFactor: number, focusX?: number, focusZ?: number) {
       headMat.emissiveIntensity = 0.6 + nightFactor * 2.5;
       tailMat.emissiveIntensity = 0.7 + nightFactor * 2.1;
       for (const sp of headGlows) {
@@ -260,6 +304,11 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
       }
       for (let i = 0; i < stateCars.length && i < groups.length; i++) {
         const c = stateCars[i];
+        if (focusX !== undefined && focusZ !== undefined) {
+          const dSq = (c.x - focusX) * (c.x - focusX) + (c.z - focusZ) * (c.z - focusZ);
+          groups[i].visible = dSq <= 185 * 185;
+          if (!groups[i].visible) continue;
+        }
         groups[i].position.set(c.x, c.y, c.z);
         groups[i].rotation.y = -c.yaw;
       }

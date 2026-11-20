@@ -36,6 +36,7 @@ export interface CitySceneHandles {
   yachts: { group: THREE.Group; baseY: number; phase: number }[];
   palmCrowns: { group: THREE.Group; phase: number }[];
   applyPhotoTextures: (textures: LoadedGameAssets['textures']) => void;
+  hideFallbackYachts: () => void;
   updateAnimation: (
     elapsed: number,
     nightFactor: number,
@@ -1204,6 +1205,12 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  const hideFallbackYachts = () => {
+    for (const y of yachts) {
+      y.group.visible = false;
+    }
+  };
+
   return {
     root,
     waterUniforms,
@@ -1214,6 +1221,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     yachts,
     palmCrowns,
     applyPhotoTextures,
+    hideFallbackYachts,
     updateAnimation,
   };
 }

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { SoundEngine } from './core/audio';
 import { InputManager } from './core/input';
 import { clamp } from './core/math';
+import { createCoastalBoatFleet, createCoastalBoatMeshes } from './entities/boats';
 import {
   createPedestrianMeshes,
   createPedestrians,
@@ -120,26 +121,29 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Ambient AI traffic cars + nearby strolling sidewalk pedestrians (distance-culled for 60-120 FPS)
-  const trafficCars = createTrafficCars(blueprint.trafficNodes, 14);
+  // Ambient AI traffic cars (18 across 7 real 3D models), 52 varied pedestrians, & 13 coastal boats/ships
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
-  const pedestrians = createPedestrians(8);
+  const pedestrians = createPedestrians(52);
   const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
+  const coastalBoats = createCoastalBoatFleet();
+  const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
 
-  // Stream local photorealistic GLB models (Ferrari 458, 4 CC0 civilian mocap humans),
-  // Poly Haven Pure Sky CC0 HDRIs, and photographic PBR textures asynchronously!
+  // Stream all local 3D GLB cars, boats, street-tough protagonist, 52 styled citizens,
+  // studio optical mocap clips, Poly Haven Pure Sky HDRIs & photographic PBR textures asynchronously!
   void loadGameAssets(renderer).then((assets) => {
     sky.setHdriSet(assets.hdris);
     cityHandles.applyPhotoTextures(assets.textures);
 
     for (const v of vehicles) {
-      if (v.id === 'solstice-gt' || v.id === 'neon-apex') {
-        const ferrari = assets.cloneFerrari();
-        if (ferrari) {
-          vehicleMeshes.get(v.id)?.attachGltfSupercar(ferrari);
-        }
+      const carModel = assets.cloneCarModel(v.config.modelKind);
+      if (carModel) {
+        vehicleMeshes.get(v.id)?.attachGltfCar(carModel, v.config.modelKind === 'ferrari');
       }
     }
+
+    trafficMeshes.attachGltfCars((kind) => assets.cloneCarModel(kind));
+    boatMeshes.attachGltfBoats((kind) => assets.cloneBoatModel(kind));
 
     const playerPerson = assets.cloneProtagonist();
     if (playerPerson) {
@@ -150,8 +154,13 @@ function bootstrap(): void {
       pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
     }
 
-    if (assets.ferrariGltf || assets.protagonistGltf) {
-      hud.showToast('HD Assets Ready: Ferrari 458, Street Protagonist & Pure-Sky HDRI loaded!', 'success');
+    const carCount = Object.keys(assets.carGltfs).length;
+    const boatCount = Object.keys(assets.boatGltfs).length;
+    if (carCount > 0 || boatCount > 0 || assets.protagonistGltf) {
+      hud.showToast(
+        `HD Assets Ready: ${carCount} car models, ${boatCount} boat & ship models, & 52 locals loaded!`,
+        'success',
+      );
     }
   });
 
@@ -480,8 +489,9 @@ function bootstrap(): void {
       vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
     }
     playerMesh.syncFromState(player, elapsed, dt);
-    trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor);
+    trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, player.x, player.z);
     pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z);
+    boatMeshes.update(elapsed, dt, skyRes.nightFactor);
     beaconRenderer.update(elapsed, missions);
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
