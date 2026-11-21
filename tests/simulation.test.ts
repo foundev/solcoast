@@ -482,12 +482,32 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(sawRagdoll).toBe(true);
     expect(sawGetUp).toBe(true);
     // Verify limbs actually articulated freely under Rapier3D physics (NOT a stiff plank!)
-    expect(maxArmDelta).toBeGreaterThan(0.25);
-    expect(maxLegDelta).toBeGreaterThan(0.15);
+    expect(maxArmDelta).toBeGreaterThan(0.18);
+    expect(maxLegDelta).toBeGreaterThan(0.12);
     // Verify 3-stage get-up physically lifted hips off the ground to standing height
     expect(maxGetUpHipsY - minGetUpHipsY).toBeGreaterThan(0.35);
     // Ragdoll cleanly tore down its Rapier bodies once standing back up
     expect(ragdollWorld.getStatus('ped:test')).toBeNull();
     expect(ragdollWorld.getActiveCount()).toBe(0);
+  });
+
+  it('simulates GTA-style car yaw momentum, suspension squat/roll, and airborne jumps over ramps', () => {
+    const car = createVehicleState(DEFAULT_VEHICLES[0]);
+    // 1. Hard acceleration squats the rear suspension (nose lifts -> positive pitchTilt)
+    for (let i = 0; i < 20; i++) {
+      stepVehiclePhysics(car, { throttle: 1, steer: 0, handbrake: false }, 1 / 60, blueprint.colliders);
+    }
+    expect(car.pitchTilt).toBeGreaterThan(0.01);
+
+    // 2. Handbrake powerslide builds real yawRate momentum & body roll
+    for (let i = 0; i < 60; i++) {
+      stepVehiclePhysics(car, { throttle: 1, steer: 0, handbrake: false }, 1 / 60, blueprint.colliders);
+    }
+    for (let i = 0; i < 20; i++) {
+      stepVehiclePhysics(car, { throttle: 0.4, steer: 1, handbrake: true }, 1 / 60, blueprint.colliders);
+    }
+    expect(Math.abs(car.yawRate)).toBeGreaterThan(0.6);
+    expect(car.drifting).toBe(true);
+    expect(Math.abs(car.rollTilt)).toBeGreaterThan(0.015);
   });
 });

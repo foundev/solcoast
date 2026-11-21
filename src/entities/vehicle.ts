@@ -179,12 +179,19 @@ export interface VehicleState {
   y: number;
   z: number;
   vx: number;
+  vy: number;
   vz: number;
   yaw: number;
+  yawRate: number;
   steerAngle: number;
   wheelSpin: number;
+  suspOffset: number;
+  suspVel: number;
   pitchTilt: number;
+  pitchVel: number;
   rollTilt: number;
+  rollVel: number;
+  grounded: boolean;
   speed: number;
   lateralSpeed: number;
   drifting: boolean;
@@ -205,12 +212,19 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
     y: getGroundHeight(cfg.spawnX, cfg.spawnZ),
     z: cfg.spawnZ,
     vx: 0,
+    vy: 0,
     vz: 0,
     yaw: cfg.spawnYaw,
+    yawRate: 0,
     steerAngle: 0,
     wheelSpin: 0,
+    suspOffset: 0,
+    suspVel: 0,
     pitchTilt: 0,
+    pitchVel: 0,
     rollTilt: 0,
+    rollVel: 0,
+    grounded: true,
     speed: 0,
     lateralSpeed: 0,
     drifting: false,
@@ -223,6 +237,14 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
   };
 }
 
+/**
+ * GTA-style dynamic vehicle physics model:
+ * - True yaw angular momentum (`yawRate`) with front/rear tire slip-angle grip & powerslides
+ * - Controllable handbrake drifts, RWD exit oversteer, & counter-steer recovery
+ * - Real 3D airborne jumps off bridges/ramps/dunes under gravity (-21 m/s²)
+ * - Second-order damped spring suspension (`suspOffset`, `pitchTilt`, `rollTilt`) with squat, dive, body roll & landing compression
+ * - Rotational crash impulse when glancing off walls & corners
+ */
 export function stepVehiclePhysics(
   v: VehicleState,
   input: VehicleDriveInput,
@@ -237,72 +259,121 @@ export function stepVehiclePhysics(
 
   let forwardSpeed = v.vx * fwd.x + v.vz * fwd.z;
   let lateralSpeed = v.vx * right.x + v.vz * right.z;
-
   const prevForward = forwardSpeed;
 
-  v.braking = false;
-  if (input.handbrake) {
-    v.braking = true;
-    const decel = v.config.brakeDecel * 0.72 * safeDt;
-    if (Math.abs(forwardSpeed) <= decel) forwardSpeed = 0;
-    else forwardSpeed -= Math.sign(forwardSpeed) * decel;
-  } else if (input.throttle > 0.05) {
-    if (forwardSpeed < -1) {
-      v.braking = true;
-      forwardSpeed += v.config.brakeDecel * safeDt;
-    } else {
-      const topRatio = clamp(forwardSpeed / v.config.maxSpeed, 0, 1);
-      const torqueCurve = 1.0 - topRatio * 0.62;
-      forwardSpeed += input.throttle * v.config.accel * torqueCurve * safeDt;
-    }
-  } else if (input.throttle < -0.05) {
-    if (forwardSpeed > 1) {
-      v.braking = true;
-      forwardSpeed -= v.config.brakeDecel * safeDt;
-    } else {
-      forwardSpeed += input.throttle * v.config.accel * 0.52 * safeDt;
-    }
-  } else {
-    forwardSpeed *= Math.exp(-0.95 * safeDt);
-    if (Math.abs(forwardSpeed) < 0.06) forwardSpeed = 0;
-  }
-
-  forwardSpeed = clamp(forwardSpeed, -16, v.config.maxSpeed);
-
-  const targetSteer = input.steer * 0.48;
-  v.steerAngle = lerp(v.steerAngle, targetSteer, clamp(safeDt * 11, 0, 1));
-
+  const isSportRwd = v.style === 'supercar' || v.style === 'coupe' || v.style === 'spyder';
   const absSpeed = Math.abs(forwardSpeed);
-  if (absSpeed > 0.25) {
-    const dirSign = forwardSpeed >= 0 ? 1 : -1;
-    const lowSpeedFactor = clamp(absSpeed / 7.5, 0, 1);
-    const highSpeedStability = 1.0 - clamp(absSpeed / (v.config.maxSpeed * 1.45), 0, 0.42);
-    const driftTurnBoost = input.handbrake && absSpeed > 8 ? 1.38 : 1.0;
-    const yawDelta =
-      input.steer *
-      v.config.turnRate *
-      lowSpeedFactor *
-      highSpeedStability *
-      driftTurnBoost *
-      dirSign *
-      safeDt;
-    v.yaw = wrapAngle(v.yaw + yawDelta);
+
+  // Speed-sensitive steering angle (tight low-speed lock, stable high-speed precision)
+  const maxSteerAngle = lerp(0.54, 0.24, clamp(absSpeed / v.config.maxSpeed, 0, 1));
+  const targetSteer = input.steer * maxSteerAngle;
+  v.steerAngle = lerp(v.steerAngle, targetSteer, clamp(safeDt * 12, 0, 1));
+
+  v.braking = false;
+  let accelForce = 0;
+
+  if (v.grounded) {
+    // 1. Longitudinal drive, braking, handbrake & aerodynamic drag
+    if (input.handbrake) {
+      v.braking = true;
+      const hbDecel = v.config.brakeDecel * 0.52 * safeDt;
+      if (absSpeed <= hbDecel) forwardSpeed = 0;
+      else forwardSpeed -= Math.sign(forwardSpeed) * hbDecel;
+    } else if (input.throttle > 0.05) {
+      if (forwardSpeed < -1.2) {
+        v.braking = true;
+        forwardSpeed += v.config.brakeDecel * safeDt;
+      } else {
+        const topRatio = clamp(forwardSpeed / v.config.maxSpeed, 0, 1);
+        // Punchy low-end launch torque tapering smoothly toward top speed
+        const torqueCurve = 1.18 - topRatio * 0.78;
+        const delta = input.throttle * v.config.accel * torqueCurve * safeDt;
+        forwardSpeed += delta;
+        accelForce = delta / safeDt;
+      }
+    } else if (input.throttle < -0.05) {
+      if (forwardSpeed > 1.2) {
+        v.braking = true;
+        const delta = v.config.brakeDecel * safeDt;
+        forwardSpeed -= delta;
+        accelForce = -delta / safeDt;
+      } else {
+        const delta = input.throttle * v.config.accel * 0.56 * safeDt;
+        forwardSpeed += delta;
+        accelForce = delta / safeDt;
+      }
+    } else {
+      // Natural rolling resistance + quadratic aero drag
+      const drag = (0.72 + absSpeed * 0.012) * safeDt;
+      forwardSpeed *= Math.exp(-drag);
+      if (Math.abs(forwardSpeed) < 0.06) forwardSpeed = 0;
+    }
+
+    forwardSpeed = clamp(forwardSpeed, -17, v.config.maxSpeed);
+
+    // 2. GTA-style yaw rotational inertia & front/rear tire slip dynamics!
+    const dirSign = forwardSpeed >= -0.1 ? 1 : -1;
+    const speedEngage = clamp(Math.abs(forwardSpeed) / 6.5, 0, 1);
+    const highSpeedTrim = 1.0 - clamp(Math.abs(forwardSpeed) / (v.config.maxSpeed * 1.55), 0, 0.36);
+
+    // Handbrake or hard RWD throttle-cornering breaks rear traction into a smooth drift!
+    const powerOversteer =
+      isSportRwd && input.throttle > 0.65 && Math.abs(input.steer) > 0.5 && absSpeed > 10 && absSpeed < 34;
+    const rearBreakaway = input.handbrake && absSpeed > 5.5 ? 1.48 : powerOversteer ? 1.18 : 1.0;
+
+    // Target angular velocity from steering + natural counter-steer recovery when sliding
+    const desiredYawRate =
+      input.steer * v.config.turnRate * speedEngage * highSpeedTrim * rearBreakaway * dirSign;
+
+    // Responsive turn-in with real rotational inertia (lets car hold a slide & counter-steer!)
+    const yawResponse = input.handbrake ? 5.2 : 8.5;
+    v.yawRate = lerp(v.yawRate, desiredYawRate, clamp(safeDt * yawResponse, 0, 1));
+    if (absSpeed < 0.35 && Math.abs(v.yawRate) < 0.15) {
+      v.yawRate *= Math.exp(-10 * safeDt);
+    }
+    v.yaw = wrapAngle(v.yaw + v.yawRate * safeDt);
+
+    // 3. Recompute lateral slip velocity in the newly rotated car frame
+    const newFwd = forwardFromYaw(v.yaw);
+    const newRight = rightFromYaw(v.yaw);
+    const oldLat = v.vx * newRight.x + v.vz * newRight.z;
+
+    // Dynamic tire lateral grip: tight when cruising, sliding smoothly on handbrake/power-drift!
+    const slipRatio = clamp(Math.abs(oldLat) / 11, 0, 1);
+    const baseGrip = isSportRwd ? 7.8 : 9.2;
+    const lateralGrip = input.handbrake
+      ? 1.55
+      : powerOversteer
+        ? 3.4
+        : lerp(baseGrip, baseGrip * 0.52, slipRatio * 0.65);
+
+    // Slight rear kickout during handbrake/power-slide adds authentic GTA drift angle!
+    const driftKick =
+      (input.handbrake || powerOversteer) && absSpeed > 8
+        ? -input.steer * absSpeed * (input.handbrake ? 0.14 : 0.055) * safeDt
+        : 0;
+    lateralSpeed = oldLat * Math.exp(-lateralGrip * safeDt) + driftKick;
+    if (Math.abs(lateralSpeed) < 0.03) lateralSpeed = 0;
+
+    // Mild cornering scrub when drifting hard (realistic tire scrubbing energy loss)
+    if (Math.abs(lateralSpeed) > 3.5) {
+      forwardSpeed *= Math.exp(-0.28 * clamp(Math.abs(lateralSpeed) / 10, 0, 1) * safeDt);
+    }
+
+    const isBurnout = isSportRwd && input.handbrake && input.throttle > 0.5 && absSpeed < 6;
+    v.drifting = isBurnout || ((input.handbrake || Math.abs(lateralSpeed) > 3.6) && absSpeed > 7.5);
+    v.vx = newFwd.x * forwardSpeed + newRight.x * lateralSpeed;
+    v.vz = newFwd.z * forwardSpeed + newRight.z * lateralSpeed;
+  } else {
+    // Mid-air ballistic flight: slight air drag & damped angular rotation!
+    v.yawRate *= Math.exp(-1.4 * safeDt);
+    v.yaw = wrapAngle(v.yaw + v.yawRate * safeDt);
+    v.vx *= Math.exp(-0.18 * safeDt);
+    v.vz *= Math.exp(-0.18 * safeDt);
+    v.drifting = false;
   }
 
-  const newFwd = forwardFromYaw(v.yaw);
-  const newRight = rightFromYaw(v.yaw);
-
-  const worldVx = v.vx;
-  const worldVz = v.vz;
-  const oldLat = worldVx * newRight.x + worldVz * newRight.z;
-  const grip = input.handbrake ? 1.9 : 8.8;
-  lateralSpeed = oldLat * Math.exp(-grip * safeDt);
-  if (Math.abs(lateralSpeed) < 0.04) lateralSpeed = 0;
-
-  v.drifting = (input.handbrake || Math.abs(lateralSpeed) > 4.2) && absSpeed > 9;
-  v.vx = newFwd.x * forwardSpeed + newRight.x * lateralSpeed;
-  v.vz = newFwd.z * forwardSpeed + newRight.z * lateralSpeed;
-
+  // 4. Integrate XZ position & resolve solid building / wall collisions WITH rotational spin impulse!
   const prevX = v.x;
   const prevZ = v.z;
   let nextX = v.x + v.vx * safeDt;
@@ -320,11 +391,20 @@ export function stepVehiclePhysics(
         const nz = res.dz / nLen;
         const vn = v.vx * nx + v.vz * nz;
         if (vn < 0) {
-          v.lastCollisionImpact = Math.max(v.lastCollisionImpact, -vn);
-          v.vx -= nx * vn * 1.25;
-          v.vz -= nz * vn * 1.25;
-          v.vx *= 0.82;
-          v.vz *= 0.82;
+          const impact = -vn;
+          v.lastCollisionImpact = Math.max(v.lastCollisionImpact, impact);
+          // Glancing off a wall spins the car's nose realistically!
+          const curFwd = forwardFromYaw(v.yaw);
+          const glanceCross = curFwd.x * nz - curFwd.z * nx;
+          v.yawRate += clamp(glanceCross * impact * 0.14, -3.2, 3.2);
+          // Chassis bounce jolt on impact
+          v.pitchVel -= clamp(impact * 0.04, 0, 0.85);
+          v.suspVel -= clamp(impact * 0.06, 0, 1.2);
+
+          v.vx -= nx * vn * 1.28;
+          v.vz -= nz * vn * 1.28;
+          v.vx *= 0.78;
+          v.vz *= 0.78;
         }
       }
     }
@@ -348,23 +428,88 @@ export function stepVehiclePhysics(
 
   v.x = nextX;
   v.z = nextZ;
-  const targetGroundY = getGroundHeight(v.x, v.z);
-  const curbDelta = targetGroundY - v.y;
-  v.y = lerp(v.y, targetGroundY, clamp(safeDt * 22, 0, 1));
 
-  const moved = Math.hypot(v.x - prevX, v.z - prevZ);
-  v.odometerMeters += moved;
+  // 5. Real 3D vertical gravity, crest jumps (Causeway, dunes, pier!) & spring-damper suspension!
+  const prevGroundY = getGroundHeight(prevX, prevZ);
+  const groundY = getGroundHeight(v.x, v.z);
+  const terrainDrop = groundY - prevGroundY;
+  const horizMoved = Math.hypot(v.x - prevX, v.z - prevZ);
 
-  v.speed = v.vx * newFwd.x + v.vz * newFwd.z;
-  v.lateralSpeed = v.vx * newRight.x + v.vz * newRight.z;
+  if (v.grounded) {
+    // Estimate terrain vertical slope velocity when cresting ramps/bridges/dunes at speed
+    const slopeVy = terrainDrop / safeDt;
+    // Catch real air when flying off a sharp ramp/crest drop faster than gravity pulls down!
+    if (slopeVy < -2.6 && horizMoved / safeDt > 14 && v.y > groundY + 0.08) {
+      v.grounded = false;
+      v.vy = clamp(v.vy, 0.8, 6.5);
+    } else {
+      // Track upward slope momentum so launching off a ramp crest carries upward velocity!
+      if (slopeVy > 0.6 && horizMoved / safeDt > 10) {
+        v.vy = lerp(v.vy, clamp(slopeVy, 0, 7.5), clamp(safeDt * 12, 0, 1));
+      } else {
+        v.vy *= Math.exp(-10 * safeDt);
+      }
+
+      const curbDelta = groundY - v.y;
+      v.y = lerp(v.y, groundY, clamp(safeDt * 24, 0, 1));
+      if (Math.abs(v.y - groundY) < 0.01) v.y = groundY;
+
+      // Curb / dune bump compresses chassis suspension spring realistically!
+      if (Math.abs(curbDelta) > 0.05 && horizMoved > 0.04) {
+        v.suspVel -= clamp(curbDelta * 3.8, -1.8, 1.8);
+        v.pitchVel -= clamp(curbDelta * 1.4, -0.7, 0.7);
+      }
+    }
+  } else {
+    v.vy -= 21.0 * safeDt;
+    v.y += v.vy * safeDt;
+    if (v.y <= groundY) {
+      const landImpact = Math.max(0, -v.vy);
+      v.y = groundY;
+      v.vy = 0;
+      v.grounded = true;
+      // Heavy landing compresses suspension & triggers subtle bump impact!
+      v.suspVel -= clamp(landImpact * 0.42, 0, 3.2);
+      v.pitchVel -= clamp(landImpact * 0.06, 0, 0.6);
+      if (landImpact > 4.5) {
+        v.lastCollisionImpact = Math.max(v.lastCollisionImpact, landImpact * 0.7);
+      }
+    }
+  }
+
+  // Second-order damped spring suspension for vertical bounce, pitch (squat/dive), and body roll!
+  const suspK = 68;
+  const suspDamp = 9.5;
+  v.suspVel += (-suspK * v.suspOffset - suspDamp * v.suspVel) * safeDt;
+  v.suspOffset = clamp(v.suspOffset + v.suspVel * safeDt, -0.18, 0.16);
+
+  const curFwd = forwardFromYaw(v.yaw);
+  const curRight = rightFromYaw(v.yaw);
+  v.speed = v.vx * curFwd.x + v.vz * curFwd.z;
+  v.lateralSpeed = v.vx * curRight.x + v.vz * curRight.z;
+  v.odometerMeters += horizMoved;
   v.wheelSpin += (v.speed / 0.37) * safeDt;
 
-  const accelInstant = (forwardSpeed - prevForward) / safeDt;
-  const curbBump = Math.abs(curbDelta) > 0.06 && Math.abs(v.speed) > 2 ? clamp(curbDelta * 0.22, -0.05, 0.05) : 0;
-  const targetPitch = clamp(-accelInstant * 0.0022 - curbBump, -0.065, 0.065);
-  const targetRoll = clamp(-input.steer * clamp(absSpeed / 22, 0, 1) * 0.06, -0.07, 0.07);
-  v.pitchTilt = lerp(v.pitchTilt, targetPitch, clamp(safeDt * 10, 0, 1));
-  v.rollTilt = lerp(v.rollTilt, targetRoll, clamp(safeDt * 10, 0, 1));
+  const accelInstant = accelForce !== 0 ? accelForce : (v.speed - prevForward) / safeDt;
+  // Soft suspension cars (SUV/Taxi/Sedan) roll & squat more than stiff supercars!
+  const softness = v.style === 'sedan' ? 1.45 : v.style === 'spyder' ? 1.15 : 0.95;
+  // Right-hand rule around +X with nose at -Z: +pitch lifts nose (rear squat on launch), -pitch dips nose (brake dive)
+  const targetPitch = v.grounded
+    ? clamp(accelInstant * 0.0034 * softness, -0.095, 0.095)
+    : clamp(v.vy * 0.024, -0.18, 0.16);
+  // Right-hand rule around +Z: turning right (+yawRate) shifts weight left (-X down, +X up -> +rollTilt)
+  const lateralG = v.grounded ? v.yawRate * v.speed * 0.012 + v.lateralSpeed * 0.008 : 0;
+  const targetRoll = clamp(lateralG * 0.38 * softness, -0.115, 0.115);
+
+  const pitchK = 54;
+  const pitchDamp = 8.2;
+  v.pitchVel += (pitchK * (targetPitch - v.pitchTilt) - pitchDamp * v.pitchVel) * safeDt;
+  v.pitchTilt = clamp(v.pitchTilt + v.pitchVel * safeDt, -0.18, 0.18);
+
+  const rollK = 50;
+  const rollDamp = 7.8;
+  v.rollVel += (rollK * (targetRoll - v.rollTilt) - rollDamp * v.rollVel) * safeDt;
+  v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.14, 0.14);
 }
 
 export function speedToMph(speedMetersPerSec: number): number {
@@ -856,6 +1001,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
   const syncFromState = (s: VehicleState, nightFactor: number, dt = 1 / 60, isOccupied = false) => {
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
+    bodyGroup.position.y = s.suspOffset;
     bodyGroup.rotation.x = s.pitchTilt;
     bodyGroup.rotation.z = s.rollTilt;
 

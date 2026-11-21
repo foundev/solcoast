@@ -86,6 +86,24 @@ const RAGDOLL_GROUP = (0x0004 << 16) | (0x0001 | 0x0002);
 const MAX_ACTIVE_RAGDOLLS = 6;
 const FIXED_STEP = 1 / 60;
 
+// Strict living-human anatomical joint limits (radians relative to character's rest pose)
+// Prevents broken necks, inverted elbows/knees, hyperextended spines & rubber-spaghetti limbs!
+const ANATOMICAL_LIMITS: Record<
+  string,
+  { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number; muscleTone: number }
+> = {
+  Spine2: { minX: -0.28, maxX: 0.56, minY: -0.38, maxY: 0.38, minZ: -0.32, maxZ: 0.32, muscleTone: 0.22 },
+  Head: { minX: -0.44, maxX: 0.48, minY: -0.52, maxY: 0.52, minZ: -0.34, maxZ: 0.34, muscleTone: 0.28 },
+  LeftArm: { minX: -0.82, maxX: 0.95, minY: -0.78, maxY: 0.78, minZ: -0.85, maxZ: 0.85, muscleTone: 0.24 },
+  LeftForeArm: { minX: -0.15, maxX: 1.35, minY: -0.38, maxY: 0.38, minZ: -0.32, maxZ: 0.82, muscleTone: 0.22 },
+  RightArm: { minX: -0.82, maxX: 0.95, minY: -0.78, maxY: 0.78, minZ: -0.85, maxZ: 0.85, muscleTone: 0.24 },
+  RightForeArm: { minX: -0.15, maxX: 1.35, minY: -0.38, maxY: 0.38, minZ: -0.82, maxZ: 0.32, muscleTone: 0.22 },
+  LeftUpLeg: { minX: -0.42, maxX: 1.28, minY: -0.36, maxY: 0.36, minZ: -0.38, maxZ: 0.42, muscleTone: 0.20 },
+  LeftLeg: { minX: -1.68, maxX: 0.05, minY: -0.16, maxY: 0.16, minZ: -0.16, maxZ: 0.16, muscleTone: 0.18 },
+  RightUpLeg: { minX: -0.42, maxX: 1.28, minY: -0.36, maxY: 0.36, minZ: -0.42, maxZ: 0.38, muscleTone: 0.20 },
+  RightLeg: { minX: -1.68, maxX: 0.05, minY: -0.16, maxY: 0.16, minZ: -0.16, maxZ: 0.16, muscleTone: 0.18 },
+};
+
 // Reusable scratch math objects (zero per-frame GC allocations!)
 const _vA = new THREE.Vector3();
 const _mid = new THREE.Vector3();
@@ -97,6 +115,7 @@ const _qBody = new THREE.Quaternion();
 const _qBoneWorld = new THREE.Quaternion();
 const _qParentWorld = new THREE.Quaternion();
 const _qTmp = new THREE.Quaternion();
+const _qRel = new THREE.Quaternion();
 const _eul = new THREE.Euler(0, 0, 0, 'XYZ');
 
 const TRACKED_BONES = [
@@ -456,20 +475,20 @@ export class RagdollPhysicsWorld {
       return body;
     };
 
-    // 11 articulated rigid bodies matching human mass distribution (~76 kg total)
-    const bHips = createLimb('Hips', hipsBone, pHips.clone().add(new THREE.Vector3(0, -0.06, 0)), pSpine, 0.13, 16, 0.55, 2.2);
-    const bChest = createLimb('Spine2', spine2Bone, pSpine, pNeck, 0.15, 22, 0.55, 2.5);
-    const bHead = createLimb('Head', headBone, pHead, pHeadTop, 0.105, 5.5, 0.55, 3.0);
+    // 11 articulated rigid bodies matching human mass distribution (~76 kg total) with living-muscle angular damping
+    const bHips = createLimb('Hips', hipsBone, pHips.clone().add(new THREE.Vector3(0, -0.06, 0)), pSpine, 0.13, 16, 0.65, 3.8);
+    const bChest = createLimb('Spine2', spine2Bone, pSpine, pNeck, 0.15, 22, 0.65, 4.4);
+    const bHead = createLimb('Head', headBone, pHead, pHeadTop, 0.105, 5.5, 0.65, 5.2);
 
-    const bLArm = createLimb('LeftArm', lArm, pLArm, pLFore, 0.055, 2.8, 0.5, 3.2);
-    const bLFore = createLimb('LeftForeArm', lForeArm, pLFore, pLHand, 0.045, 2.0, 0.5, 3.2);
-    const bRArm = createLimb('RightArm', rArm, pRArm, pRFore, 0.055, 2.8, 0.5, 3.2);
-    const bRFore = createLimb('RightForeArm', rForeArm, pRFore, pRHand, 0.045, 2.0, 0.5, 3.2);
+    const bLArm = createLimb('LeftArm', lArm, pLArm, pLFore, 0.055, 2.8, 0.6, 5.0);
+    const bLFore = createLimb('LeftForeArm', lForeArm, pLFore, pLHand, 0.045, 2.0, 0.6, 5.4);
+    const bRArm = createLimb('RightArm', rArm, pRArm, pRFore, 0.055, 2.8, 0.6, 5.0);
+    const bRFore = createLimb('RightForeArm', rForeArm, pRFore, pRHand, 0.045, 2.0, 0.6, 5.4);
 
-    const bLUpLeg = createLimb('LeftUpLeg', lUpLeg, pLUpLeg, pLLeg, 0.08, 8.5, 0.55, 2.6);
-    const bLLeg = createLimb('LeftLeg', lLeg, pLLeg, pLFoot, 0.06, 4.5, 0.55, 2.8);
-    const bRUpLeg = createLimb('RightUpLeg', rUpLeg, pRUpLeg, pRLeg, 0.08, 8.5, 0.55, 2.6);
-    const bRLeg = createLimb('RightLeg', rLeg, pRLeg, pRFoot, 0.06, 4.5, 0.55, 2.8);
+    const bLUpLeg = createLimb('LeftUpLeg', lUpLeg, pLUpLeg, pLLeg, 0.08, 8.5, 0.65, 4.4);
+    const bLLeg = createLimb('LeftLeg', lLeg, pLLeg, pLFoot, 0.06, 4.5, 0.65, 4.8);
+    const bRUpLeg = createLimb('RightUpLeg', rUpLeg, pRUpLeg, pRLeg, 0.08, 8.5, 0.65, 4.4);
+    const bRLeg = createLimb('RightLeg', rLeg, pRLeg, pRFoot, 0.06, 4.5, 0.65, 4.8);
 
     // Helper: convert a world anchor point into a rigid body's exact local space
     const toLocal = (body: RAPIER.RigidBody, worldPt: THREE.Vector3) => {
@@ -724,15 +743,31 @@ export class RagdollPhysicsWorld {
       }
     }
 
-    // Apply Rapier body world rotations in strict parent->child order
+    // Apply Rapier body world rotations in strict parent->child order WITH anatomical limits & active muscle tone!
+    // This keeps GTA-style realistic body cohesion so necks, spines, elbows, and knees NEVER look broken!
     for (const limb of r.limbs) {
       const rot = limb.body.rotation();
       _qBody.set(rot.x, rot.y, rot.z, rot.w);
       if (limb.bone.parent) {
-        // Ensure parent chain world matrix is fresh before inverting parentWorldQuat
         limb.bone.parent.updateMatrixWorld(true);
         limb.bone.parent.getWorldQuaternion(_qParentWorld);
         limb.bone.quaternion.copy(_qParentWorld).invert().multiply(_qBody).multiply(limb.qOffset);
+
+        const limits = ANATOMICAL_LIMITS[limb.key];
+        const restQ = restMap?.get(limb.key);
+        if (limits && restQ) {
+          // Measure local rotation relative to anatomical rest pose and strictly clamp to living-human range!
+          _qRel.copy(restQ).invert().multiply(limb.bone.quaternion);
+          _eul.setFromQuaternion(_qRel, 'XYZ');
+          _eul.x = clamp(_eul.x, limits.minX, limits.maxX);
+          _eul.y = clamp(_eul.y, limits.minY, limits.maxY);
+          _eul.z = clamp(_eul.z, limits.minZ, limits.maxZ);
+          _qTmp.setFromEuler(_eul);
+          limb.bone.quaternion.copy(restQ).multiply(_qTmp);
+          // Subtle living-muscle tone pulls extreme limb sprawl gently toward natural defensive posture
+          limb.bone.quaternion.slerp(restQ, limits.muscleTone);
+        }
+
         limb.bone.updateMatrixWorld(false);
       }
     }

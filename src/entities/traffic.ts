@@ -18,6 +18,7 @@ export interface TrafficCarState {
   vz: number;
   impactVx: number;
   impactVz: number;
+  impactYawRate: number;
   yaw: number;
   speed: number;
   cruiseSpeed: number;
@@ -58,6 +59,7 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
       vz: -Math.cos(pos.yaw) * initSpeed,
       impactVx: 0,
       impactVz: 0,
+      impactYawRate: 0,
       yaw: pos.yaw,
       speed: initSpeed,
       cruiseSpeed: 12 + rng() * 6,
@@ -133,9 +135,14 @@ export function stepTraffic(
           pv.vz += nz * impulse;
           pv.vx *= 0.84;
           pv.vz *= 0.84;
-          car.impactVx -= nx * clamp(impulse * 1.15, 0, 18);
-          car.impactVz -= nz * clamp(impulse * 1.15, 0, 18);
-          car.speed *= 0.4;
+          // Realistic rotational fender-bender spin on BOTH player car & hit traffic car!
+          const spinSign = fx * nz - fz * nx;
+          pv.yawRate += clamp(spinSign * impulse * 0.14, -2.8, 2.8);
+          pv.suspVel -= clamp(impulse * 0.06, 0, 1.1);
+          car.impactVx -= nx * clamp(impulse * 1.18, 0, 20);
+          car.impactVz -= nz * clamp(impulse * 1.18, 0, 20);
+          car.impactYawRate += clamp(-spinSign * impulse * 0.24, -4.2, 4.2);
+          car.speed *= 0.35;
           pv.lastCollisionImpact = Math.max(pv.lastCollisionImpact, Math.abs(relAlongNormal));
         }
       }
@@ -168,20 +175,22 @@ export function stepTraffic(
       car.progress -= 1;
     }
 
-    // Damp post-collision lateral shunt recoil smoothly before returning to lane
-    car.impactVx *= Math.exp(-4.2 * safeDt);
-    car.impactVz *= Math.exp(-4.2 * safeDt);
+    // Damp post-collision lateral shunt & spin recoil smoothly before returning to lane
+    car.impactVx *= Math.exp(-3.8 * safeDt);
+    car.impactVz *= Math.exp(-3.8 * safeDt);
+    car.impactYawRate *= Math.exp(-4.5 * safeDt);
     const prevX = car.x;
     const prevZ = car.z;
 
     const pos = lanePosition(nodes[car.fromNode], nodes[car.toNode], clamp(car.progress, 0, 1));
-    const lanePull = Math.hypot(car.impactVx, car.impactVz) > 1.2 ? 1.8 : 9.0;
+    const stunned = Math.hypot(car.impactVx, car.impactVz) > 1.2 || Math.abs(car.impactYawRate) > 0.35;
+    const lanePull = stunned ? 1.5 : 9.0;
     car.x = lerp(car.x, pos.x, clamp(safeDt * lanePull, 0, 1)) + car.impactVx * safeDt;
     car.z = lerp(car.z, pos.z, clamp(safeDt * lanePull, 0, 1)) + car.impactVz * safeDt;
     car.vx = (car.x - prevX) / safeDt;
     car.vz = (car.z - prevZ) / safeDt;
     car.y = getGroundHeight(car.x, car.z);
-    car.yaw = lerpAngle(car.yaw, pos.yaw, clamp(safeDt * 7, 0, 1));
+    car.yaw = lerpAngle(car.yaw + car.impactYawRate * safeDt, pos.yaw, clamp(safeDt * (stunned ? 2.2 : 7), 0, 1));
   }
 }
 
