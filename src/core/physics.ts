@@ -390,47 +390,48 @@ export function applyCarHitToHuman(
   body.z += hit.dz;
 
   const carSpeed = Math.hypot(car.vx, car.vz);
-  // Relative closing velocity along outward normal
-  const relVx = car.vx - body.vx;
-  const relVz = car.vz - body.vz;
-  const closingAlongNormal = Math.max(0, relVx * hit.nx + relVz * hit.nz);
-  const impactSpeed = Math.max(closingAlongNormal, carSpeed * 0.65);
+  // A parked or slowly creeping car (< 3.5 m/s) is just a solid obstacle — NEVER launches a walking human!
+  if (carSpeed < 3.5) {
+    return 0;
+  }
 
-  if (impactSpeed < 1.8) {
-    // Stationary / creeping solid contact
+  // Only count kinetic impact from the car actually moving INTO the person (not the person walking into a stopped car!)
+  const carTowardHuman = Math.max(0, car.vx * hit.nx + car.vz * hit.nz);
+  const impactSpeed = Math.max(carTowardHuman, carSpeed * 0.45);
+  if (carTowardHuman < 1.2 && carSpeed < 5.5) {
     return 0;
   }
 
   // Avoid re-launching a body that was just launched this fraction of a second
-  if (body.ragdollMode === 'airborne' && body.vy > 1.5 && closingAlongNormal < 3.5) {
+  if (body.ragdollMode === 'airborne' && body.vy > 1.5 && carTowardHuman < 3.5) {
     return 0;
   }
 
   body.lastImpactSpeed = Math.max(body.lastImpactSpeed, impactSpeed);
 
-  if (impactSpeed < 4.4) {
-    // Low-speed fender bump -> stumble recoil away from car
-    const pushSpeed = clamp(impactSpeed * 1.15, 2.2, 5.4);
-    body.vx = hit.nx * pushSpeed + car.vx * 0.35;
-    body.vz = hit.nz * pushSpeed + car.vz * 0.35;
+  if (impactSpeed < 6.0) {
+    // Low-speed moving fender bump -> mild stumble step back away from bumper
+    const pushSpeed = clamp(impactSpeed * 0.8, 1.8, 4.2);
+    body.vx = hit.nx * pushSpeed + car.vx * 0.25;
+    body.vz = hit.nz * pushSpeed + car.vz * 0.25;
     body.ragdollMode = 'stumble';
-    body.ragdollTimer = isPlayer ? 0.36 : 0.55;
-    body.fallPitch = clamp(-impactSpeed * 0.06, -0.28, 0.28);
-    body.fallRoll = clamp(hit.localX * 0.16, -0.24, 0.24);
+    body.ragdollTimer = isPlayer ? 0.32 : 0.5;
+    body.fallPitch = clamp(-impactSpeed * 0.05, -0.24, 0.24);
+    body.fallRoll = clamp(hit.localX * 0.14, -0.2, 0.2);
     body.lastImpactKind = 'bump';
     return impactSpeed;
   }
 
-  // Medium / high-speed impact -> realistic hood-launch & Rapier3D 11-limb articulated ragdoll!
-  const speedFactor = clamp((impactSpeed - 4.4) / 22, 0, 1);
-  const sideDeflect = (hit.localX >= 0 ? 1 : -1) * (1.2 + speedFactor * 2.0);
+  // Medium / high-speed moving car hit -> realistic hood-roll & Rapier3D articulated ragdoll!
+  const speedFactor = clamp((impactSpeed - 6.0) / 22, 0, 1);
+  const sideDeflect = (hit.localX >= 0 ? 1 : -1) * (0.9 + speedFactor * 1.4);
   const right = rightFromYaw(car.yaw);
 
-  // Momentum transfer: carry ~88% of car velocity + normal kick + lateral fender deflection
-  const launchScale = isPlayer ? 0.8 : 0.92;
-  body.vx = clamp(car.vx * launchScale + hit.nx * (2.6 + speedFactor * 3.2) + right.x * sideDeflect, -28, 28);
-  body.vz = clamp(car.vz * launchScale + hit.nz * (2.6 + speedFactor * 3.2) + right.z * sideDeflect, -28, 28);
-  body.vy = clamp(2.8 + impactSpeed * 0.19, 3.0, isPlayer ? 6.8 : 8.2);
+  // Realistic momentum transfer (bodies roll 4-8m off the hood instead of flying 25m!)
+  const launchScale = isPlayer ? 0.58 : 0.72;
+  body.vx = clamp(car.vx * launchScale + hit.nx * (1.6 + speedFactor * 2.0) + right.x * sideDeflect, -18, 18);
+  body.vz = clamp(car.vz * launchScale + hit.nz * (1.6 + speedFactor * 2.0) + right.z * sideDeflect, -18, 18);
+  body.vy = clamp(2.1 + impactSpeed * 0.14, 2.2, isPlayer ? 4.8 : 6.2);
 
   // Queue real Rapier3D 11-limb articulated ragdoll impulse (bumper sweeps legs onto sloped hood!)
   body.pendingRagdollImpact = {
@@ -443,11 +444,11 @@ export function applyCarHitToHuman(
 
   // Fallback kinematic tumble fields (used only in headless unit tests when Rapier3D is not mounted)
   body.ragdollMode = 'airborne';
-  body.ragdollTimer = isPlayer ? 0.95 : 1.7 + speedFactor * 1.1;
+  body.ragdollTimer = isPlayer ? 0.85 : 1.5 + speedFactor * 0.9;
   const frontHitSign = hit.localZ <= 0 ? -1 : 1;
-  body.angVelPitch = frontHitSign * (4.2 + speedFactor * 6.5);
-  body.angVelRoll = clamp(hit.localX * 3.8, -5.5, 5.5);
-  body.angVelYaw = clamp(-hit.localX * 4.5, -6.5, 6.5);
+  body.angVelPitch = frontHitSign * (3.6 + speedFactor * 5.2);
+  body.angVelRoll = clamp(hit.localX * 3.0, -4.5, 4.5);
+  body.angVelYaw = clamp(-hit.localX * 3.5, -5.0, 5.0);
   body.lastImpactKind = 'body';
 
   return impactSpeed;

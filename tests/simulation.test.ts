@@ -362,7 +362,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       if (ped.ragdollMode === 'downed') sawDowned = true;
       if (ped.ragdollMode === 'recovering') sawRecovering = true;
     }
-    expect(maxAirY).toBeGreaterThan(0.5);
+    expect(maxAirY).toBeGreaterThan(0.35);
     expect(sawDowned).toBe(true);
     expect(sawRecovering).toBe(true);
     expect(ped.ragdollMode).toBe('normal');
@@ -415,8 +415,38 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       [],
     );
     expect(walker.ragdollMode).toBe('airborne');
-    expect(walker.vy).toBeGreaterThan(3);
-    expect(walker.vz).toBeLessThan(-8);
+    expect(walker.vy).toBeGreaterThan(2.5);
+    expect(walker.vz).toBeLessThan(-6);
+
+    // 4. Walking or sprinting right up to a PARKED car stops cleanly at the door (NEVER launches you flying!)
+    const parked = createVehicleState(DEFAULT_VEHICLES[0]);
+    parked.x = 140;
+    parked.z = 20;
+    parked.yaw = 0;
+    parked.vx = 0;
+    parked.vz = 0;
+
+    const boarder = createInitialPlayerState(null);
+    boarder.x = 138.6; // right beside driver door
+    boarder.z = 20;
+    boarder.y = 0;
+    boarder.speed = 11;
+    boarder.sprinting = true;
+
+    for (let i = 0; i < 10; i++) {
+      stepPlayerOnFoot(
+        boarder,
+        { forward: 0, right: 1, sprint: true, jump: false, cameraYaw: 0 },
+        1 / 60,
+        blueprint.colliders,
+        [parked],
+        [],
+        [],
+      );
+    }
+    expect(boarder.ragdollMode).toBe('normal');
+    expect(boarder.pendingRagdollImpact).toBeNull();
+    expect(Math.hypot(boarder.x - parked.x, boarder.z - parked.z)).toBeLessThan(2.2);
   });
 
   it('runs real Rapier3D 11-limb articulated ragdolls with independent limb bending & 3-stage physical get-up', async () => {
