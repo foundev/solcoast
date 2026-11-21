@@ -12,9 +12,15 @@ export class CameraController {
   public mode: CameraMode = 'chase';
 
   private orbitCooldown = 0;
+  private shakeIntensity = 0;
+  private shakePhase = 0;
   private readonly currentPos = new THREE.Vector3(144, 6, 40);
   private readonly currentLook = new THREE.Vector3(144, 2, 24);
   private initialized = false;
+
+  public addImpactShake(strength: number): void {
+    this.shakeIntensity = Math.min(0.65, Math.max(this.shakeIntensity, strength));
+  }
 
   public cycleMode(): CameraMode {
     if (this.mode === 'chase') this.mode = 'far';
@@ -122,6 +128,15 @@ export class CameraController {
     }
 
     camera.position.copy(this.currentPos);
+    if (this.shakeIntensity > 0.005) {
+      this.shakePhase += safeDt * 48;
+      camera.position.x += Math.sin(this.shakePhase * 1.3) * this.shakeIntensity;
+      camera.position.y += Math.cos(this.shakePhase * 1.9) * this.shakeIntensity * 0.7;
+      camera.position.z += Math.sin(this.shakePhase * 1.7 + 1.1) * this.shakeIntensity;
+      this.shakeIntensity *= Math.exp(-9.5 * safeDt);
+    } else {
+      this.shakeIntensity = 0;
+    }
     camera.lookAt(this.currentLook);
     if (Math.abs(camera.fov - targetFov) > 0.05) {
       camera.fov = lerp(camera.fov, targetFov, clamp(safeDt * 6, 0, 1));

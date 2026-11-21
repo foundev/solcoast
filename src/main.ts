@@ -23,11 +23,13 @@ import {
   PAINT_FINISHES,
   createVehicleMesh,
   createVehicleState,
+  resolveVehiclePairCollisions,
   stepVehiclePhysics,
   type VehicleMeshHandles,
   type VehicleState,
 } from './entities/vehicle';
 import { CameraController } from './systems/camera';
+import { CrashEffectsSystem } from './systems/crashEffects';
 import { MissionManager, createMissionBeacons } from './systems/missions';
 import {
   clearWorldSave,
@@ -186,6 +188,7 @@ function bootstrap(): void {
   const hud = new HudController();
   const minimap = new MinimapRenderer(minimapCanvas);
   const sound = new SoundEngine();
+  const crashEffects = new CrashEffectsSystem(scene);
 
   let paused = false;
   let elapsed = 0;
@@ -423,6 +426,7 @@ function bootstrap(): void {
       }
     }
 
+    // 1. Step all player vehicles (active driven car + any rammed/coasting/spinning parked cars!)
     for (const v of vehicles) {
       if (activeVehicle && v.id === activeVehicle.id) {
         stepVehiclePhysics(
@@ -435,11 +439,26 @@ function bootstrap(): void {
           dt,
           blueprint.colliders,
         );
-      } else if (Math.abs(v.vx) > 0.05 || Math.abs(v.vz) > 0.05) {
-        stepVehiclePhysics(v, { throttle: 0, steer: 0, handbrake: true }, dt, blueprint.colliders);
+      } else if (
+        Math.abs(v.vx) > 0.05 ||
+        Math.abs(v.vz) > 0.05 ||
+        Math.abs(v.yawRate) > 0.04 ||
+        !v.grounded ||
+        Math.abs(v.suspOffset) > 0.004 ||
+        Math.abs(v.pitchTilt) > 0.004
+      ) {
+        // Unoccupied rammed car skids & coasts naturally to a stop instead of freezing rigidly
+        stepVehiclePhysics(v, { throttle: 0, steer: 0, handbrake: false }, dt, blueprint.colliders);
+      } else {
+        v.lastCollisionImpact = 0;
       }
     }
 
+    // 2. Resolve exact SAT rigid-body collisions between ALL fleet vehicles & ALL AI traffic cars FIRST!
+    resolveVehiclePairCollisions(vehicles);
+    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders);
+
+    // 3. Now step player (using up-to-date car positions so traffic can NEVER move onto/through the player!)
     if (activeVehicle) {
       player.x = activeVehicle.x;
       player.y = activeVehicle.y;
@@ -464,7 +483,6 @@ function bootstrap(): void {
       );
     }
 
-    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
     stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
 
     // Step real Rapier3D WASM 11-limb articulated ragdolls & 3-stage physical get-ups!
@@ -513,11 +531,42 @@ function bootstrap(): void {
       }
     }
 
-    // Trigger realistic impact sound effects for car crashes, car-vs-person knockdowns, and body bumps
+    // Trigger realistic crash audio, metallic impact sparks, and camera shake!
+    for (const v of vehicles) {
+      if (v.lastCollisionImpact > 3.8) {
+        crashEffects.spawnSparks(
+          v.lastImpactX,
+          v.y,
+          v.lastImpactZ,
+          v.lastImpactNx,
+          v.lastImpactNz,
+          v.lastCollisionImpact,
+        );
+      }
+    }
+    for (const tc of trafficCars) {
+      if (tc.lastImpactSpeed > 4.2) {
+        crashEffects.spawnSparks(
+          tc.lastImpactX,
+          tc.y,
+          tc.lastImpactZ,
+          tc.lastImpactNx,
+          tc.lastImpactNz,
+          tc.lastImpactSpeed,
+        );
+      }
+    }
+    crashEffects.update(dt);
+
     if (activeVehicle && activeVehicle.lastCollisionImpact > 2.2) {
-      sound.playImpact('car', clamp(activeVehicle.lastCollisionImpact / 18, 0.25, 1.0));
+      const norm = clamp(activeVehicle.lastCollisionImpact / 18, 0.22, 1.0);
+      sound.playImpact('car', norm);
+      cameraCtrl.addImpactShake(clamp(activeVehicle.lastCollisionImpact * 0.022, 0.06, 0.48));
     } else if (player.lastImpactKind !== 'none' && player.lastImpactSpeed > 1.5) {
       sound.playImpact(player.lastImpactKind, clamp(player.lastImpactSpeed / 14, 0.2, 1.0));
+      if (player.lastImpactKind === 'body') {
+        cameraCtrl.addImpactShake(0.28);
+      }
     } else {
       for (const ped of pedestrians) {
         if (ped.lastImpactKind !== 'none' && ped.lastImpactSpeed > 2.0) {

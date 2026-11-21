@@ -192,33 +192,42 @@ export function stepPlayerOnFoot(
     }
   }
 
-  // Solid oriented hull collisions + moving-car knockback against ALL parked/coasting player vehicles
+  // 2-pass solid oriented hull collisions against ALL player vehicles & ALL AI traffic cars
+  // (guarantees you can NEVER walk through parked fleet cars, traffic cars, or wedged pairs!)
   p.x = nextX;
   p.z = nextZ;
-  for (const v of vehicles) {
-    const hit = resolveCircleOrientedCar(p.x, p.z, radius, v);
-    if (hit.hit) {
-      applyCarHitToHuman(p, v, hit, true);
+  for (let pass = 0; pass < 2; pass++) {
+    for (const v of vehicles) {
+      const hit = resolveCircleOrientedCar(p.x, p.z, radius, v);
+      if (hit.hit) {
+        applyCarHitToHuman(p, v, hit, true);
+      }
     }
-  }
 
-  // Solid oriented hull collisions + moving-car knockdowns against ALL AI street traffic cars!
-  for (const tc of trafficCars) {
-    const tcHull = {
-      x: tc.x,
-      z: tc.z,
-      yaw: tc.yaw,
-      vx: tc.vx,
-      vz: tc.vz,
-      halfWidth: 1.04,
-      halfLength: 2.24,
-    };
-    const hit = resolveCircleOrientedCar(p.x, p.z, radius, tcHull);
-    if (hit.hit) {
-      const impact = applyCarHitToHuman(p, tcHull, hit, true);
-      if (impact > 2.2) {
-        // Traffic driver slams brakes on impact
-        tc.speed *= 0.35;
+    for (const tc of trafficCars) {
+      const tcHull = {
+        x: tc.x,
+        z: tc.z,
+        yaw: tc.yaw,
+        vx: tc.vx,
+        vz: tc.vz,
+        halfWidth: 1.06,
+        halfLength: 2.28,
+      };
+      const hit = resolveCircleOrientedCar(p.x, p.z, radius, tcHull);
+      if (hit.hit) {
+        const impact = applyCarHitToHuman(p, tcHull, hit, true);
+        if (impact > 2.2) {
+          tc.speed *= 0.35;
+        }
+      }
+    }
+
+    for (const box of colliders) {
+      const res = resolveCircleAABB(p.x, p.z, radius, box);
+      if (res.hit) {
+        p.x += res.dx;
+        p.z += res.dz;
       }
     }
   }

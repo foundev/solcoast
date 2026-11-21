@@ -19,6 +19,7 @@ import {
   DEFAULT_VEHICLES,
   computeGear,
   createVehicleState,
+  resolveVehiclePairCollisions,
   speedToMph,
   stepVehiclePhysics,
 } from '../src/entities/vehicle';
@@ -509,5 +510,58 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(Math.abs(car.yawRate)).toBeGreaterThan(0.6);
     expect(car.drifting).toBe(true);
     expect(Math.abs(car.rollTilt)).toBeGreaterThan(0.015);
+  });
+
+  it('prevents ghosting through parked fleet cars & traffic cars with real SAT rigid-body PIT/T-bone physics', () => {
+    // 1. Player Ferrari ramming a parked Taxi transfers momentum + spins the taxi (NEVER drives through!)
+    const ferrari = createVehicleState(DEFAULT_VEHICLES[0]);
+    const taxi = createVehicleState(DEFAULT_VEHICLES[4]);
+    ferrari.x = 140;
+    ferrari.z = 20;
+    ferrari.yaw = 0; // heading North (-Z)
+    ferrari.vx = 0;
+    ferrari.vz = -22;
+    ferrari.speed = 22;
+
+    // Offset slightly right so corner impact produces real PIT-style rotational torque!
+    taxi.x = 140.9;
+    taxi.z = 15.8;
+    taxi.yaw = 0;
+    taxi.vx = 0;
+    taxi.vz = 0;
+
+    resolveVehiclePairCollisions([ferrari, taxi]);
+    expect(taxi.vz).toBeLessThan(-6);
+    expect(Math.abs(taxi.yawRate)).toBeGreaterThan(0.5);
+    expect(ferrari.vz).toBeGreaterThan(-20); // Ferrari loses momentum on impact
+    expect(ferrari.lastCollisionImpact).toBeGreaterThan(10);
+
+    // 2. T-boning an AI traffic car puts it into free-skid crash physics (`stunnedTimer > 0`) with spin!
+    const traffic = createTrafficCars(blueprint.trafficNodes, 1);
+    const tc = traffic[0];
+    const tcRightX = Math.cos(tc.yaw);
+    const tcRightZ = Math.sin(tc.yaw);
+    const tcFwdX = Math.sin(tc.yaw);
+    const tcFwdZ = -Math.cos(tc.yaw);
+
+    const striker = createVehicleState(DEFAULT_VEHICLES[0]);
+    // Slam broadside into traffic car's rear-right door panel!
+    striker.x = tc.x + tcRightX * 2.9 - tcFwdX * 0.9;
+    striker.z = tc.z + tcRightZ * 2.9 - tcFwdZ * 0.9;
+    striker.yaw = tc.yaw - Math.PI * 0.5;
+    striker.vx = -tcRightX * 22;
+    striker.vz = -tcRightZ * 22;
+
+    stepTraffic(traffic, blueprint.trafficNodes, [striker], 1 / 60, blueprint.colliders);
+    expect(tc.stunnedTimer).toBeGreaterThan(1.0);
+    expect(Math.abs(tc.yawRate)).toBeGreaterThan(0.8);
+    expect(Math.hypot(tc.vx, tc.vz)).toBeGreaterThan(3.5);
+
+    // Stepping forward lets the struck traffic car actually skid & spin out freely instead of snapping to its lane
+    const yawAtHit = tc.yaw;
+    for (let i = 0; i < 15; i++) {
+      stepTraffic(traffic, blueprint.trafficNodes, [], 1 / 60, blueprint.colliders);
+    }
+    expect(Math.abs(tc.yaw - yawAtHit)).toBeGreaterThan(0.2);
   });
 });

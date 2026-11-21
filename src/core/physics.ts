@@ -44,6 +44,252 @@ export interface OrientedCarHull {
   halfLength?: number;
 }
 
+export interface RigidCarBody {
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  yaw: number;
+  yawRate: number;
+  mass: number;
+  halfWidth?: number;
+  halfLength?: number;
+}
+
+export interface CarCollisionContact {
+  hit: boolean;
+  /** Outward unit normal pointing from B (or wall) toward A */
+  nx: number;
+  nz: number;
+  penetration: number;
+  contactX: number;
+  contactZ: number;
+  /** Relative closing speed along impact normal (m/s, >= 0) */
+  closingSpeed: number;
+}
+
+function getObbCorners(cx: number, cz: number, rightX: number, rightZ: number, fwdX: number, fwdZ: number, hw: number, hl: number): [number, number][] {
+  return [
+    [cx + rightX * hw + fwdX * hl, cz + rightZ * hw + fwdZ * hl],
+    [cx - rightX * hw + fwdX * hl, cz - rightZ * hw + fwdZ * hl],
+    [cx - rightX * hw - fwdX * hl, cz - rightZ * hw - fwdZ * hl],
+    [cx + rightX * hw - fwdX * hl, cz + rightZ * hw - fwdZ * hl],
+  ];
+}
+
+/**
+ * Exact 2D Separating Axis Theorem (SAT) Oriented-Box vs. Oriented-Box collision solver
+ * with true rigid-body mass, moment of inertia, lever-arm yaw torque (PIT maneuvers & T-bones!),
+ * inelastic automotive restitution, and tangential metal-scraping friction.
+ */
+export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisionContact {
+  const hwA = a.halfWidth ?? 1.06;
+  const hlA = a.halfLength ?? 2.28;
+  const hwB = b.halfWidth ?? 1.06;
+  const hlB = b.halfLength ?? 2.28;
+
+  // Quick broadphase circle reject
+  const maxR = Math.hypot(hwA, hlA) + Math.hypot(hwB, hlB);
+  const dxCenter = a.x - b.x;
+  const dzCenter = a.z - b.z;
+  if (dxCenter * dxCenter + dzCenter * dzCenter > maxR * maxR) {
+    return { hit: false, nx: 0, nz: 0, penetration: 0, contactX: 0, contactZ: 0, closingSpeed: 0 };
+  }
+
+  const fwdA = forwardFromYaw(a.yaw);
+  const rightA = rightFromYaw(a.yaw);
+  const fwdB = forwardFromYaw(b.yaw);
+  const rightB = rightFromYaw(b.yaw);
+
+  const axes: [number, number][] = [
+    [rightA.x, rightA.z],
+    [fwdA.x, fwdA.z],
+    [rightB.x, rightB.z],
+    [fwdB.x, fwdB.z],
+  ];
+
+  let minOverlap = Infinity;
+  let bestAxisX = 0;
+  let bestAxisZ = 0;
+  let bestAxisIdx = 0;
+
+  for (let i = 0; i < 4; i++) {
+    const [ax, az] = axes[i];
+    const projA =
+      hwA * Math.abs(rightA.x * ax + rightA.z * az) +
+      hlA * Math.abs(fwdA.x * ax + fwdA.z * az);
+    const projB =
+      hwB * Math.abs(rightB.x * ax + rightB.z * az) +
+      hlB * Math.abs(fwdB.x * ax + fwdB.z * az);
+    const dist = Math.abs(dxCenter * ax + dzCenter * az);
+    const overlap = projA + projB - dist;
+    if (overlap <= 0) {
+      return { hit: false, nx: 0, nz: 0, penetration: 0, contactX: 0, contactZ: 0, closingSpeed: 0 };
+    }
+    if (overlap < minOverlap) {
+      minOverlap = overlap;
+      bestAxisX = ax;
+      bestAxisZ = az;
+      bestAxisIdx = i;
+    }
+  }
+
+  // Ensure normal points from B -> A
+  if (dxCenter * bestAxisX + dzCenter * bestAxisZ < 0) {
+    bestAxisX = -bestAxisX;
+    bestAxisZ = -bestAxisZ;
+  }
+
+  // Estimate contact point: deepest vertex of the incident box along the collision normal
+  const cornersA = getObbCorners(a.x, a.z, rightA.x, rightA.z, fwdA.x, fwdA.z, hwA, hlA);
+  const cornersB = getObbCorners(b.x, b.z, rightB.x, rightB.z, fwdB.x, fwdB.z, hwB, hlB);
+
+  let contactX = (a.x + b.x) * 0.5;
+  let contactZ = (a.z + b.z) * 0.5;
+  if (bestAxisIdx < 2) {
+    // Axis came from A: B's vertex furthest along +normal (into A) is the contact!
+    let bestProj = -Infinity;
+    for (const [cx, cz] of cornersB) {
+      const p = cx * bestAxisX + cz * bestAxisZ;
+      if (p > bestProj) {
+        bestProj = p;
+        contactX = cx;
+        contactZ = cz;
+      }
+    }
+  } else {
+    // Axis came from B: A's vertex furthest along -normal (into B) is the contact!
+    let bestProj = Infinity;
+    for (const [cx, cz] of cornersA) {
+      const p = cx * bestAxisX + cz * bestAxisZ;
+      if (p < bestProj) {
+        bestProj = p;
+        contactX = cx;
+        contactZ = cz;
+      }
+    }
+  }
+
+  // Mass-weighted positional separation (prevents ANY overlap or ghosting!)
+  const invMassA = a.mass > 0 ? 1 / a.mass : 0;
+  const invMassB = b.mass > 0 ? 1 / b.mass : 0;
+  const totalInvMass = invMassA + invMassB;
+  if (totalInvMass > 0) {
+    const sep = minOverlap + 0.005;
+    a.x += bestAxisX * sep * (invMassA / totalInvMass);
+    a.z += bestAxisZ * sep * (invMassA / totalInvMass);
+    b.x -= bestAxisX * sep * (invMassB / totalInvMass);
+    b.z -= bestAxisZ * sep * (invMassB / totalInvMass);
+  }
+
+  // 2D rigid-body rotational inertia (with yawRate increasing clockwise from -Z toward +X:
+  // v_rot = (-yawRate * rz, +yawRate * rx) — wait: let's verify!
+  // forwardFromYaw(yaw) = (sin(yaw), -cos(yaw)); d/dyaw (sin, -cos) = (cos, sin) = rightFromYaw!
+  // For any offset (rx, rz), rotating clockwise by +dyaw maps (rx, rz) -> (rx - rz*dyaw, rz + rx*dyaw)!
+  // So rotational velocity at (rx, rz) is: vx_rot = -yawRate * rz, vz_rot = +yawRate * rx!
+  // And torque from force (fx, fz) at (rx, rz) is: tau = rx * fz - rz * fx!
+  // Effective automotive yaw inertia (heavy front engine + chassis frame resists over-spinning
+  // while transferring punchy GTA-style linear shove AND crisp PIT-maneuver spin!)
+  const wA = hwA * 2;
+  const lA = hlA * 2;
+  const wB = hwB * 2;
+  const lB = hlB * 2;
+  const invInertiaA = a.mass > 0 ? 7.5 / (a.mass * (wA * wA + lA * lA)) : 0;
+  const invInertiaB = b.mass > 0 ? 7.5 / (b.mass * (wB * wB + lB * lB)) : 0;
+
+  const rAx = contactX - a.x;
+  const rAz = contactZ - a.z;
+  const rBx = contactX - b.x;
+  const rBz = contactZ - b.z;
+
+  const vAx = a.vx - a.yawRate * rAz;
+  const vAz = a.vz + a.yawRate * rAx;
+  const vBx = b.vx - b.yawRate * rBz;
+  const vBz = b.vz + b.yawRate * rBx;
+
+  const relVx = vAx - vBx;
+  const relVz = vAz - vBz;
+  const velAlongNormal = relVx * bestAxisX + relVz * bestAxisZ;
+
+  if (velAlongNormal >= 0) {
+    return {
+      hit: true,
+      nx: bestAxisX,
+      nz: bestAxisZ,
+      penetration: minOverlap,
+      contactX,
+      contactZ,
+      closingSpeed: 0,
+    };
+  }
+
+  const closingSpeed = -velAlongNormal;
+  const rACrossN = rAx * bestAxisZ - rAz * bestAxisX;
+  const rBCrossN = rBx * bestAxisZ - rBz * bestAxisX;
+
+  const denomN =
+    totalInvMass +
+    rACrossN * rACrossN * invInertiaA +
+    rBCrossN * rBCrossN * invInertiaB;
+
+  // Automotive inelastic crunch restitution (metallic energy absorption, not rubber superball!)
+  const restitution = closingSpeed < 2.0 ? 0.08 : 0.24;
+  const jN = (-(1 + restitution) * velAlongNormal) / Math.max(1e-6, denomN);
+
+  // Tangential scraping friction impulse
+  const tx = -bestAxisZ;
+  const tz = bestAxisX;
+  const velAlongT = relVx * tx + relVz * tz;
+  const rACrossT = rAx * tz - rAz * tx;
+  const rBCrossT = rBx * tz - rBz * tx;
+  const denomT =
+    totalInvMass +
+    rACrossT * rACrossT * invInertiaA +
+    rBCrossT * rBCrossT * invInertiaB;
+  const mu = 0.34;
+  const jT = clamp(-velAlongT / Math.max(1e-6, denomT), -jN * mu, jN * mu);
+
+  const impX = bestAxisX * jN + tx * jT;
+  const impZ = bestAxisZ * jN + tz * jT;
+
+  a.vx += impX * invMassA;
+  a.vz += impZ * invMassA;
+  a.yawRate = clamp(a.yawRate + (rAx * impZ - rAz * impX) * invInertiaA, -5.5, 5.5);
+
+  b.vx -= impX * invMassB;
+  b.vz -= impZ * invMassB;
+  b.yawRate = clamp(b.yawRate - (rBx * impZ - rBz * impX) * invInertiaB, -5.5, 5.5);
+
+  return {
+    hit: true,
+    nx: bestAxisX,
+    nz: bestAxisZ,
+    penetration: minOverlap,
+    contactX,
+    contactZ,
+    closingSpeed,
+  };
+}
+
+/**
+ * Exact 2D SAT Oriented-Car vs. Axis-Aligned Building/Wall collision solver.
+ * Connects crisply at bumper/fender corners and applies authentic glancing corner-spin torque!
+ */
+export function resolveCarVsBuildingSAT(car: RigidCarBody, box: AABB): CarCollisionContact {
+  const staticWall: RigidCarBody = {
+    x: (box.minX + box.maxX) * 0.5,
+    z: (box.minZ + box.maxZ) * 0.5,
+    vx: 0,
+    vz: 0,
+    yaw: 0,
+    yawRate: 0,
+    mass: 0, // Infinite mass static wall
+    halfWidth: (box.maxX - box.minX) * 0.5,
+    halfLength: (box.maxZ - box.minZ) * 0.5,
+  };
+  return resolveCarVsCarSAT(car, staticWall);
+}
+
 export interface ObbHitResult {
   hit: boolean;
   /** Outward separation vector in world XZ */

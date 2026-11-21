@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { clamp, createRng, distXZ, lerp, lerpAngle, yawFromDir } from '../core/math';
+import { clamp, createRng, distXZ, lerp, lerpAngle, wrapAngle, yawFromDir, type AABB } from '../core/math';
+import { resolveCarVsBuildingSAT, resolveCarVsCarSAT } from '../core/physics';
 import type { CarModelKind } from '../world/assets';
-import { getGroundHeight } from '../world/cityData';
+import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
 import { createContactShadowTexture } from '../world/textures';
 import type { TrafficNode } from '../world/types';
@@ -16,16 +17,25 @@ export interface TrafficCarState {
   z: number;
   vx: number;
   vz: number;
-  impactVx: number;
-  impactVz: number;
-  impactYawRate: number;
   yaw: number;
+  yawRate: number;
+  mass: number;
+  /** Seconds remaining in free-skid crash physics after a heavy collision */
+  stunnedTimer: number;
+  pitchTilt: number;
+  rollTilt: number;
+  suspOffset: number;
   speed: number;
   cruiseSpeed: number;
   color: number;
   fromNode: number;
   toNode: number;
   progress: number;
+  lastImpactSpeed: number;
+  lastImpactX: number;
+  lastImpactZ: number;
+  lastImpactNx: number;
+  lastImpactNz: number;
 }
 
 const TRAFFIC_MODELS: CarModelKind[] = ['taxi', 'suv', 'ev', 'coupe', 'gt', 'jdm', 'spyder'];
@@ -49,6 +59,12 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
     const pos = lanePosition(from, to, progress);
     const modelKind = TRAFFIC_MODELS[i % TRAFFIC_MODELS.length];
     const initSpeed = 11 + rng() * 6;
+    const mass =
+      modelKind === 'suv'
+        ? 2150
+        : modelKind === 'taxi' || modelKind === 'ev'
+          ? 1720
+          : 1520;
     cars.push({
       id: i,
       modelKind,
@@ -57,16 +73,24 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
       z: pos.z,
       vx: Math.sin(pos.yaw) * initSpeed,
       vz: -Math.cos(pos.yaw) * initSpeed,
-      impactVx: 0,
-      impactVz: 0,
-      impactYawRate: 0,
       yaw: pos.yaw,
+      yawRate: 0,
+      mass,
+      stunnedTimer: 0,
+      pitchTilt: 0,
+      rollTilt: 0,
+      suspOffset: 0,
       speed: initSpeed,
       cruiseSpeed: 12 + rng() * 6,
       color: modelKind === 'taxi' ? 0xf5b81d : TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
       fromNode: fromIdx,
       toNode: toIdx,
       progress,
+      lastImpactSpeed: 0,
+      lastImpactX: pos.x,
+      lastImpactZ: pos.z,
+      lastImpactNx: 0,
+      lastImpactNz: 1,
     });
   }
   return cars;
@@ -95,11 +119,74 @@ export function stepTraffic(
   nodes: TrafficNode[],
   playerVehicles: VehicleState[],
   dt: number,
+  colliders: AABB[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
 
+  // 1. Advance either lane-following AI or free-skidding post-crash rigid-body physics!
   for (let i = 0; i < cars.length; i++) {
     const car = cars[i];
+    car.lastImpactSpeed = 0;
+
+    if (car.stunnedTimer > 0) {
+      // Free-skidding GTA crash physics: car spins & slides freely on its tires after a collision!
+      car.stunnedTimer = Math.max(0, car.stunnedTimer - safeDt);
+      const prevX = car.x;
+      const prevZ = car.z;
+
+      car.vx *= Math.exp(-2.65 * safeDt);
+      car.vz *= Math.exp(-2.65 * safeDt);
+      car.yawRate *= Math.exp(-2.85 * safeDt);
+      car.x += car.vx * safeDt;
+      car.z += car.vz * safeDt;
+      car.yaw = wrapAngle(car.yaw + car.yawRate * safeDt);
+
+      // Bounce solidly off building walls & stay out of deep water
+      for (const box of colliders) {
+        const hit = resolveCarVsBuildingSAT(car, box);
+        if (hit.hit && hit.closingSpeed > 1.2) {
+          car.lastImpactSpeed = Math.max(car.lastImpactSpeed, hit.closingSpeed);
+          car.lastImpactX = hit.contactX;
+          car.lastImpactZ = hit.contactZ;
+          car.lastImpactNx = hit.nx;
+          car.lastImpactNz = hit.nz;
+          car.suspOffset = -0.09;
+        }
+      }
+      if (isDeepWater(car.x, car.z)) {
+        car.x = prevX;
+        car.z = prevZ;
+        car.vx *= -0.3;
+        car.vz *= -0.3;
+      }
+
+      car.y = getGroundHeight(car.x, car.z);
+      car.speed = Math.hypot(car.vx, car.vz);
+      car.pitchTilt = lerp(car.pitchTilt, 0, clamp(safeDt * 7, 0, 1));
+      car.rollTilt = lerp(car.rollTilt, clamp(car.yawRate * 0.04, -0.1, 0.1), clamp(safeDt * 8, 0, 1));
+      car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 9, 0, 1));
+
+      // Once stopped & stunned timer completes, re-sync to nearest road node so traffic flows naturally again
+      if (car.stunnedTimer <= 0 && car.speed < 1.2 && nodes.length > 0) {
+        let bestNode = 0;
+        let bestDistSq = Infinity;
+        for (let n = 0; n < nodes.length; n++) {
+          const dSq = (nodes[n].x - car.x) ** 2 + (nodes[n].z - car.z) ** 2;
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestNode = n;
+          }
+        }
+        const from = nodes[bestNode];
+        if (from.neighbors.length > 0) {
+          car.fromNode = bestNode;
+          car.toNode = from.neighbors[car.id % from.neighbors.length];
+          car.progress = 0.05;
+        }
+      }
+      continue;
+    }
+
     const from = nodes[car.fromNode];
     const to = nodes[car.toNode];
     const segLen = Math.hypot(to.x - from.x, to.z - from.z) || 1;
@@ -114,37 +201,7 @@ export function stepTraffic(
       const dist = Math.hypot(dx, dz);
       if (dist < 13 && dx * fx + dz * fz > 0.35 * dist) {
         targetSpeed = 0;
-      }
-      // Realistic momentum-based car-to-car collision impulse!
-      const minCarDist = 3.55;
-      if (dist < minCarDist && dist > 0.01) {
-        const nx = dx / dist;
-        const nz = dz / dist;
-        const overlap = minCarDist - dist;
-        pv.x += nx * overlap * 0.55;
-        pv.z += nz * overlap * 0.55;
-        car.x -= nx * overlap * 0.45;
-        car.z -= nz * overlap * 0.45;
-
-        const relVx = pv.vx - car.vx;
-        const relVz = pv.vz - car.vz;
-        const relAlongNormal = relVx * nx + relVz * nz;
-        if (relAlongNormal < 0) {
-          const impulse = -relAlongNormal * 0.72;
-          pv.vx += nx * impulse;
-          pv.vz += nz * impulse;
-          pv.vx *= 0.84;
-          pv.vz *= 0.84;
-          // Realistic rotational fender-bender spin on BOTH player car & hit traffic car!
-          const spinSign = fx * nz - fz * nx;
-          pv.yawRate += clamp(spinSign * impulse * 0.14, -2.8, 2.8);
-          pv.suspVel -= clamp(impulse * 0.06, 0, 1.1);
-          car.impactVx -= nx * clamp(impulse * 1.18, 0, 20);
-          car.impactVz -= nz * clamp(impulse * 1.18, 0, 20);
-          car.impactYawRate += clamp(-spinSign * impulse * 0.24, -4.2, 4.2);
-          car.speed *= 0.35;
-          pv.lastCollisionImpact = Math.max(pv.lastCollisionImpact, Math.abs(relAlongNormal));
-        }
+        break;
       }
     }
 
@@ -155,8 +212,8 @@ export function stepTraffic(
         const dx = other.x - car.x;
         const dz = other.z - car.z;
         const dist = distXZ(car.x, car.z, other.x, other.z);
-        if (dist < 11 && dx * fx + dz * fz > 0.5 * dist) {
-          targetSpeed = Math.min(targetSpeed, other.speed * 0.6);
+        if (dist < 11.5 && dx * fx + dz * fz > 0.5 * dist) {
+          targetSpeed = Math.min(targetSpeed, other.stunnedTimer > 0 ? 0 : other.speed * 0.6);
         }
       }
     }
@@ -175,22 +232,75 @@ export function stepTraffic(
       car.progress -= 1;
     }
 
-    // Damp post-collision lateral shunt & spin recoil smoothly before returning to lane
-    car.impactVx *= Math.exp(-3.8 * safeDt);
-    car.impactVz *= Math.exp(-3.8 * safeDt);
-    car.impactYawRate *= Math.exp(-4.5 * safeDt);
     const prevX = car.x;
     const prevZ = car.z;
-
     const pos = lanePosition(nodes[car.fromNode], nodes[car.toNode], clamp(car.progress, 0, 1));
-    const stunned = Math.hypot(car.impactVx, car.impactVz) > 1.2 || Math.abs(car.impactYawRate) > 0.35;
-    const lanePull = stunned ? 1.5 : 9.0;
-    car.x = lerp(car.x, pos.x, clamp(safeDt * lanePull, 0, 1)) + car.impactVx * safeDt;
-    car.z = lerp(car.z, pos.z, clamp(safeDt * lanePull, 0, 1)) + car.impactVz * safeDt;
+    car.x = lerp(car.x, pos.x, clamp(safeDt * 8.5, 0, 1));
+    car.z = lerp(car.z, pos.z, clamp(safeDt * 8.5, 0, 1));
     car.vx = (car.x - prevX) / safeDt;
     car.vz = (car.z - prevZ) / safeDt;
     car.y = getGroundHeight(car.x, car.z);
-    car.yaw = lerpAngle(car.yaw + car.impactYawRate * safeDt, pos.yaw, clamp(safeDt * (stunned ? 2.2 : 7), 0, 1));
+    car.yaw = lerpAngle(car.yaw, pos.yaw, clamp(safeDt * 7, 0, 1));
+    car.yawRate = 0;
+    car.pitchTilt = lerp(car.pitchTilt, 0, clamp(safeDt * 8, 0, 1));
+    car.rollTilt = lerp(car.rollTilt, 0, clamp(safeDt * 8, 0, 1));
+    car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 10, 0, 1));
+  }
+
+  // 2. Exact 2D SAT rigid-body collisions: ALL player vehicles (active & parked!) <-> ALL AI traffic cars!
+  for (const pv of playerVehicles) {
+    for (const car of cars) {
+      const contact = resolveCarVsCarSAT(pv, car);
+      if (!contact.hit) continue;
+
+      if (contact.closingSpeed > 0.35) {
+        const impact = contact.closingSpeed;
+        if (impact > pv.lastCollisionImpact) {
+          pv.lastCollisionImpact = impact;
+          pv.lastImpactX = contact.contactX;
+          pv.lastImpactZ = contact.contactZ;
+          pv.lastImpactNx = contact.nx;
+          pv.lastImpactNz = contact.nz;
+        }
+        pv.suspVel -= clamp(impact * 0.085, 0, 1.5);
+        pv.pitchVel -= clamp(impact * 0.048, 0, 0.9);
+        const pf = Math.sin(pv.yaw);
+        const pzf = -Math.cos(pv.yaw);
+        pv.speed = pv.vx * pf + pv.vz * pzf;
+
+        if (impact > 1.6) {
+          car.stunnedTimer = Math.max(car.stunnedTimer, clamp(1.25 + impact * 0.095, 1.4, 2.8));
+          car.suspOffset = -clamp(impact * 0.012, 0.03, 0.14);
+          car.pitchTilt = clamp(impact * 0.012, 0.02, 0.11);
+          car.rollTilt = clamp(car.yawRate * 0.035, -0.11, 0.11);
+          car.lastImpactSpeed = Math.max(car.lastImpactSpeed, impact);
+          car.lastImpactX = contact.contactX;
+          car.lastImpactZ = contact.contactZ;
+          car.lastImpactNx = -contact.nx;
+          car.lastImpactNz = -contact.nz;
+        }
+      }
+    }
+  }
+
+  // 3. Chain-reaction pileup SAT collisions between AI traffic cars!
+  for (let i = 0; i < cars.length; i++) {
+    for (let j = i + 1; j < cars.length; j++) {
+      const a = cars[i];
+      const b = cars[j];
+      const contact = resolveCarVsCarSAT(a, b);
+      if (!contact.hit || contact.closingSpeed < 1.2) continue;
+      const impact = contact.closingSpeed;
+      for (const c of [a, b]) {
+        c.stunnedTimer = Math.max(c.stunnedTimer, clamp(1.1 + impact * 0.08, 1.2, 2.4));
+        c.suspOffset = -clamp(impact * 0.01, 0.03, 0.12);
+        c.lastImpactSpeed = Math.max(c.lastImpactSpeed, impact);
+        c.lastImpactX = contact.contactX;
+        c.lastImpactZ = contact.contactZ;
+        c.lastImpactNx = contact.nx;
+        c.lastImpactNz = contact.nz;
+      }
+    }
   }
 }
 
@@ -353,8 +463,8 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
           groups[i].visible = dSq <= 185 * 185;
           if (!groups[i].visible) continue;
         }
-        groups[i].position.set(c.x, c.y, c.z);
-        groups[i].rotation.y = -c.yaw;
+        groups[i].position.set(c.x, c.y + c.suspOffset, c.z);
+        groups[i].rotation.set(c.pitchTilt, -c.yaw, c.rollTilt);
       }
     },
   };

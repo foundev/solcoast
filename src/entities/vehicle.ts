@@ -3,11 +3,11 @@ import {
   clamp,
   forwardFromYaw,
   lerp,
-  resolveCircleAABB,
   rightFromYaw,
   wrapAngle,
   type AABB,
 } from '../core/math';
+import { resolveCarVsBuildingSAT, resolveCarVsCarSAT } from '../core/physics';
 import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
@@ -199,11 +199,24 @@ export interface VehicleState {
   headlightsOn: boolean;
   paintIndex: number;
   odometerMeters: number;
+  mass: number;
   lastCollisionImpact: number;
+  lastImpactX: number;
+  lastImpactZ: number;
+  lastImpactNx: number;
+  lastImpactNz: number;
   config: VehicleConfig;
 }
 
 export function createVehicleState(cfg: VehicleConfig): VehicleState {
+  const mass =
+    cfg.modelKind === 'suv'
+      ? 2150
+      : cfg.modelKind === 'taxi' || cfg.modelKind === 'ev'
+        ? 1720
+        : cfg.modelKind === 'ferrari'
+          ? 1450
+          : 1540;
   return {
     id: cfg.id,
     name: cfg.name,
@@ -232,7 +245,12 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
     headlightsOn: true,
     paintIndex: cfg.defaultPaintIndex,
     odometerMeters: 0,
+    mass,
     lastCollisionImpact: 0,
+    lastImpactX: cfg.spawnX,
+    lastImpactZ: cfg.spawnZ,
+    lastImpactNx: 0,
+    lastImpactNz: 1,
     config: cfg,
   };
 }
@@ -373,43 +391,31 @@ export function stepVehiclePhysics(
     v.drifting = false;
   }
 
-  // 4. Integrate XZ position & resolve solid building / wall collisions WITH rotational spin impulse!
+  // 4. Integrate XZ position & resolve exact SAT OBB building/wall collisions WITH corner-spin torque!
   const prevX = v.x;
   const prevZ = v.z;
-  let nextX = v.x + v.vx * safeDt;
-  let nextZ = v.z + v.vz * safeDt;
+  v.x += v.vx * safeDt;
+  v.z += v.vz * safeDt;
 
-  const carRadius = 1.85;
   for (const box of colliders) {
-    const res = resolveCircleAABB(nextX, nextZ, carRadius, box);
-    if (res.hit) {
-      nextX += res.dx;
-      nextZ += res.dz;
-      const nLen = Math.hypot(res.dx, res.dz);
-      if (nLen > 1e-5) {
-        const nx = res.dx / nLen;
-        const nz = res.dz / nLen;
-        const vn = v.vx * nx + v.vz * nz;
-        if (vn < 0) {
-          const impact = -vn;
-          v.lastCollisionImpact = Math.max(v.lastCollisionImpact, impact);
-          // Glancing off a wall spins the car's nose realistically!
-          const curFwd = forwardFromYaw(v.yaw);
-          const glanceCross = curFwd.x * nz - curFwd.z * nx;
-          v.yawRate += clamp(glanceCross * impact * 0.14, -3.2, 3.2);
-          // Chassis bounce jolt on impact
-          v.pitchVel -= clamp(impact * 0.04, 0, 0.85);
-          v.suspVel -= clamp(impact * 0.06, 0, 1.2);
-
-          v.vx -= nx * vn * 1.28;
-          v.vz -= nz * vn * 1.28;
-          v.vx *= 0.78;
-          v.vz *= 0.78;
-        }
+    const contact = resolveCarVsBuildingSAT(v, box);
+    if (contact.hit && contact.closingSpeed > 0.1) {
+      const impact = contact.closingSpeed;
+      if (impact > v.lastCollisionImpact) {
+        v.lastCollisionImpact = impact;
+        v.lastImpactX = contact.contactX;
+        v.lastImpactZ = contact.contactZ;
+        v.lastImpactNx = contact.nx;
+        v.lastImpactNz = contact.nz;
       }
+      // Realistic chassis compression & nose jolt on wall crunch
+      v.pitchVel -= clamp(impact * 0.042, 0, 0.9);
+      v.suspVel -= clamp(impact * 0.065, 0, 1.3);
     }
   }
 
+  let nextX = v.x;
+  let nextZ = v.z;
   if (isDeepWater(nextX, nextZ)) {
     if (!isDeepWater(nextX, prevZ)) {
       nextZ = prevZ;
@@ -510,6 +516,40 @@ export function stepVehiclePhysics(
   const rollDamp = 7.8;
   v.rollVel += (rollK * (targetRoll - v.rollTilt) - rollDamp * v.rollVel) * safeDt;
   v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.14, 0.14);
+}
+
+/**
+ * Resolves exact 2D SAT rigid-body collisions between ALL drivable player vehicles
+ * (so you can NEVER drive through parked fleet cars — ramming a parked taxi or SUV
+ * physically shunts, spins, and jolts both vehicles with true mass & lever-arm physics!).
+ */
+export function resolveVehiclePairCollisions(vehicles: VehicleState[]): void {
+  for (let i = 0; i < vehicles.length; i++) {
+    for (let j = i + 1; j < vehicles.length; j++) {
+      const a = vehicles[i];
+      const b = vehicles[j];
+      const contact = resolveCarVsCarSAT(a, b);
+      if (!contact.hit) continue;
+
+      if (contact.closingSpeed > 0.25) {
+        const impact = contact.closingSpeed;
+        for (const car of [a, b]) {
+          if (impact > car.lastCollisionImpact) {
+            car.lastCollisionImpact = impact;
+            car.lastImpactX = contact.contactX;
+            car.lastImpactZ = contact.contactZ;
+            car.lastImpactNx = contact.nx;
+            car.lastImpactNz = contact.nz;
+          }
+          car.suspVel -= clamp(impact * 0.08, 0, 1.5);
+          car.pitchVel -= clamp(impact * 0.045, 0, 0.9);
+          car.rollVel += clamp((car === a ? 1 : -1) * impact * 0.05, -0.9, 0.9);
+          const cf = forwardFromYaw(car.yaw);
+          car.speed = car.vx * cf.x + car.vz * cf.z;
+        }
+      }
+    }
+  }
 }
 
 export function speedToMph(speedMetersPerSec: number): number {
