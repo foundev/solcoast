@@ -22,6 +22,7 @@ import {
   speedToMph,
   stepVehiclePhysics,
 } from '../src/entities/vehicle';
+import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
 import { createCityBlueprint } from '../src/world/cityData';
 
 describe('Driving, On-Foot & Traffic Simulation', () => {
@@ -415,5 +416,78 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(walker.ragdollMode).toBe('airborne');
     expect(walker.vy).toBeGreaterThan(3);
     expect(walker.vz).toBeLessThan(-8);
+  });
+
+  it('runs real Rapier3D 11-limb articulated ragdolls with independent limb bending & 3-stage physical get-up', async () => {
+    (globalThis as unknown as { self: unknown; createImageBitmap: unknown }).self = globalThis;
+    (globalThis as unknown as { createImageBitmap: unknown }).createImageBitmap = async () => ({
+      width: 1,
+      height: 1,
+      close() {},
+    });
+
+    const loader = new GLTFLoader();
+    const buf = fs.readFileSync(path.resolve(__dirname, '../public/assets/models/avatar_5.glb'));
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => loader.parse(ab, '', resolve, reject));
+
+    const entityRoot = new THREE.Group();
+    entityRoot.position.set(140, 0, 20);
+    const tumblePivot = new THREE.Group();
+    tumblePivot.position.y = 0.92;
+    entityRoot.add(tumblePivot);
+    const avatarRoot = gltf.scene;
+    avatarRoot.rotation.y = Math.PI;
+    avatarRoot.position.y = -0.92;
+    tumblePivot.add(avatarRoot);
+    entityRoot.updateMatrixWorld(true);
+
+    const ragdollWorld = await RagdollPhysicsWorld.create(blueprint);
+    const leftArmBefore = avatarRoot.getObjectByName('LeftArm')!.quaternion.clone();
+    const leftLegBefore = avatarRoot.getObjectByName('LeftLeg')!.quaternion.clone();
+
+    const ok = ragdollWorld.spawnRagdoll(
+      'ped:test',
+      entityRoot,
+      avatarRoot,
+      { vx: 1.5, vy: 4.5, vz: -12, hitZone: 'bumper', sideOffset: 0.4 },
+      false,
+    );
+    expect(ok).toBe(true);
+    expect(ragdollWorld.getActiveCount()).toBe(1);
+
+    let sawRagdoll = false;
+    let sawGetUp = false;
+    let maxArmDelta = 0;
+    let maxLegDelta = 0;
+    let minGetUpHipsY = Infinity;
+    let maxGetUpHipsY = -Infinity;
+
+    for (let i = 0; i < 420; i++) {
+      ragdollWorld.step(1 / 60);
+      const st = ragdollWorld.getStatus('ped:test');
+      if (!st) break;
+      if (st.phase === 'ragdoll') {
+        sawRagdoll = true;
+        maxArmDelta = Math.max(maxArmDelta, leftArmBefore.angleTo(avatarRoot.getObjectByName('LeftArm')!.quaternion));
+        maxLegDelta = Math.max(maxLegDelta, leftLegBefore.angleTo(avatarRoot.getObjectByName('LeftLeg')!.quaternion));
+      } else if (st.phase === 'getup') {
+        sawGetUp = true;
+        const hy = avatarRoot.getObjectByName('Hips')!.position.y;
+        minGetUpHipsY = Math.min(minGetUpHipsY, hy);
+        maxGetUpHipsY = Math.max(maxGetUpHipsY, hy);
+      }
+    }
+
+    expect(sawRagdoll).toBe(true);
+    expect(sawGetUp).toBe(true);
+    // Verify limbs actually articulated freely under Rapier3D physics (NOT a stiff plank!)
+    expect(maxArmDelta).toBeGreaterThan(0.25);
+    expect(maxLegDelta).toBeGreaterThan(0.15);
+    // Verify 3-stage get-up physically lifted hips off the ground to standing height
+    expect(maxGetUpHipsY - minGetUpHipsY).toBeGreaterThan(0.35);
+    // Ragdoll cleanly tore down its Rapier bodies once standing back up
+    expect(ragdollWorld.getStatus('ped:test')).toBeNull();
+    expect(ragdollWorld.getActiveCount()).toBe(0);
   });
 });

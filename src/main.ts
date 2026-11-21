@@ -35,6 +35,7 @@ import {
   saveWorld,
   serializeWorldState,
 } from './systems/persistence';
+import { RagdollPhysicsWorld } from './systems/ragdollWorld';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
 import { loadGameAssets } from './world/assets';
@@ -129,6 +130,18 @@ function bootstrap(): void {
   const coastalBoats = createCoastalBoatFleet();
   const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
 
+  // Initialize real WASM 3D rigid-body physics engine (Rapier3D) for 11-limb articulated ragdolls & sloped car hoods!
+  let ragdollWorld: RagdollPhysicsWorld | null = null;
+  void RagdollPhysicsWorld.create(blueprint)
+    .then((rw) => {
+      ragdollWorld = rw;
+      const pAvatar = playerMesh.getAvatarRoot();
+      if (pAvatar) rw.registerAvatarRestPose('player', pAvatar);
+    })
+    .catch((err) => {
+      console.warn('[SolCoast] Rapier3D physics init failed, keeping kinematic fallback.', err);
+    });
+
   // Stream all local 3D GLB cars, boats, street-tough protagonist, 52 styled citizens,
   // studio optical mocap clips, Poly Haven Pure Sky HDRIs & photographic PBR textures asynchronously!
   void loadGameAssets(renderer).then((assets) => {
@@ -148,6 +161,9 @@ function bootstrap(): void {
     const playerPerson = assets.cloneProtagonist();
     if (playerPerson) {
       playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
+      if (ragdollWorld) {
+        ragdollWorld.registerAvatarRestPose('player', playerPerson.scene);
+      }
     }
 
     if (assets.pedestrianGltfs.length > 0) {
@@ -395,7 +411,7 @@ function bootstrap(): void {
         } else {
           hud.showToast('Slow down to exit the vehicle!', 'warn');
         }
-      } else if (nearbyCar) {
+      } else if (nearbyCar && !player.rapierControlled) {
         player.vehicleId = nearbyCar.vehicle.id;
         player.x = nearbyCar.vehicle.x;
         player.y = nearbyCar.vehicle.y;
@@ -450,6 +466,52 @@ function bootstrap(): void {
 
     stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
     stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
+
+    // Step real Rapier3D WASM 11-limb articulated ragdolls & 3-stage physical get-ups!
+    if (ragdollWorld) {
+      ragdollWorld.syncVehicles(vehicles, trafficCars, player.x, player.z);
+
+      // Spawn player Rapier3D ragdoll if knocked by oncoming traffic while on foot
+      if (player.vehicleId === null && player.pendingRagdollImpact) {
+        const pImpact = player.pendingRagdollImpact;
+        player.pendingRagdollImpact = null;
+        const pAvatar = playerMesh.getAvatarRoot();
+        if (pAvatar) {
+          playerMesh.root.visible = true;
+          playerMesh.root.position.set(player.x, player.y, player.z);
+          playerMesh.root.rotation.set(0, -player.yaw, 0);
+          playerMesh.root.updateMatrixWorld(true);
+          if (ragdollWorld.spawnRagdoll('player', playerMesh.root, pAvatar, pImpact, true)) {
+            player.rapierControlled = true;
+            player.fallPitch = 0;
+            player.fallRoll = 0;
+          }
+        }
+      }
+
+      pedestrianMeshes.spawnPendingRagdolls(pedestrians, ragdollWorld, player.x, player.z);
+      ragdollWorld.step(dt);
+
+      if (player.rapierControlled) {
+        const pStatus = ragdollWorld.getStatus('player');
+        if (pStatus) {
+          player.x = pStatus.x;
+          player.y = pStatus.y;
+          player.z = pStatus.z;
+          player.yaw = pStatus.yaw;
+          player.ragdollMode = pStatus.phase === 'ragdoll' ? 'airborne' : 'recovering';
+          player.grounded = pStatus.phase !== 'ragdoll';
+        } else {
+          player.rapierControlled = false;
+          player.ragdollMode = 'normal';
+          player.fallPitch = 0;
+          player.fallRoll = 0;
+          player.vx = 0;
+          player.vz = 0;
+          player.grounded = true;
+        }
+      }
+    }
 
     // Trigger realistic impact sound effects for car crashes, car-vs-person knockdowns, and body bumps
     if (activeVehicle && activeVehicle.lastCollisionImpact > 2.2) {
@@ -515,7 +577,7 @@ function bootstrap(): void {
     }
     playerMesh.syncFromState(player, elapsed, dt);
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, player.x, player.z);
-    pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z);
+    pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z, ragdollWorld);
     boatMeshes.update(elapsed, dt, skyRes.nightFactor);
     beaconRenderer.update(elapsed, missions);
 

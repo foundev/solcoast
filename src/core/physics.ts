@@ -3,6 +3,14 @@ import { getGroundHeight, isDeepWater } from '../world/cityData';
 
 export type HumanRagdollMode = 'normal' | 'stumble' | 'airborne' | 'downed' | 'recovering';
 
+export interface PendingRagdollImpact {
+  vx: number;
+  vy: number;
+  vz: number;
+  hitZone: 'bumper' | 'body';
+  sideOffset: number;
+}
+
 export interface HumanBodyPhysics {
   x: number;
   y: number;
@@ -20,6 +28,10 @@ export interface HumanBodyPhysics {
   angVelYaw: number;
   lastImpactSpeed: number;
   lastImpactKind: 'none' | 'bump' | 'body';
+  /** Set on heavy car/sprint hits so Rapier3D spawns a live 11-limb articulated ragdoll */
+  pendingRagdollImpact: PendingRagdollImpact | null;
+  /** True while Rapier3D physics or 3-stage physical get-up owns this character's skeleton */
+  rapierControlled: boolean;
 }
 
 export interface OrientedCarHull {
@@ -150,31 +162,40 @@ export function applyCarHitToHuman(
 
   body.lastImpactSpeed = Math.max(body.lastImpactSpeed, impactSpeed);
 
-  if (impactSpeed < 5.8) {
+  if (impactSpeed < 4.4) {
     // Low-speed fender bump -> stumble recoil away from car
-    const pushSpeed = clamp(impactSpeed * 1.15, 2.2, 6.2);
+    const pushSpeed = clamp(impactSpeed * 1.15, 2.2, 5.4);
     body.vx = hit.nx * pushSpeed + car.vx * 0.35;
     body.vz = hit.nz * pushSpeed + car.vz * 0.35;
     body.ragdollMode = 'stumble';
     body.ragdollTimer = isPlayer ? 0.36 : 0.55;
-    body.fallPitch = clamp(-impactSpeed * 0.08, -0.42, 0.42);
-    body.fallRoll = clamp(hit.localX * 0.22, -0.35, 0.35);
+    body.fallPitch = clamp(-impactSpeed * 0.06, -0.28, 0.28);
+    body.fallRoll = clamp(hit.localX * 0.16, -0.24, 0.24);
     body.lastImpactKind = 'bump';
     return impactSpeed;
   }
 
-  // Medium / high-speed impact -> realistic hood-launch, parabolic arc & multi-axis tumble!
-  const speedFactor = clamp((impactSpeed - 5.5) / 22, 0, 1);
-  const sideDeflect = (hit.localX >= 0 ? 1 : -1) * (1.4 + speedFactor * 2.2);
+  // Medium / high-speed impact -> realistic hood-launch & Rapier3D 11-limb articulated ragdoll!
+  const speedFactor = clamp((impactSpeed - 4.4) / 22, 0, 1);
+  const sideDeflect = (hit.localX >= 0 ? 1 : -1) * (1.2 + speedFactor * 2.0);
   const right = rightFromYaw(car.yaw);
 
   // Momentum transfer: carry ~88% of car velocity + normal kick + lateral fender deflection
-  const launchScale = isPlayer ? 0.82 : 0.96;
-  body.vx = clamp(car.vx * launchScale + hit.nx * (3.2 + speedFactor * 3.8) + right.x * sideDeflect, -32, 32);
-  body.vz = clamp(car.vz * launchScale + hit.nz * (3.2 + speedFactor * 3.8) + right.z * sideDeflect, -32, 32);
-  body.vy = clamp(3.0 + impactSpeed * 0.22, 3.2, isPlayer ? 7.6 : 9.4);
+  const launchScale = isPlayer ? 0.8 : 0.92;
+  body.vx = clamp(car.vx * launchScale + hit.nx * (2.6 + speedFactor * 3.2) + right.x * sideDeflect, -28, 28);
+  body.vz = clamp(car.vz * launchScale + hit.nz * (2.6 + speedFactor * 3.2) + right.z * sideDeflect, -28, 28);
+  body.vy = clamp(2.8 + impactSpeed * 0.19, 3.0, isPlayer ? 6.8 : 8.2);
 
-  // Align fall direction along impact velocity & spin naturally based on off-center hit lever arm
+  // Queue real Rapier3D 11-limb articulated ragdoll impulse (bumper sweeps legs onto sloped hood!)
+  body.pendingRagdollImpact = {
+    vx: body.vx,
+    vy: body.vy,
+    vz: body.vz,
+    hitZone: 'bumper',
+    sideOffset: clamp(hit.localX, -1, 1),
+  };
+
+  // Fallback kinematic tumble fields (used only in headless unit tests when Rapier3D is not mounted)
   body.ragdollMode = 'airborne';
   body.ragdollTimer = isPlayer ? 0.95 : 1.7 + speedFactor * 1.1;
   const frontHitSign = hit.localZ <= 0 ? -1 : 1;

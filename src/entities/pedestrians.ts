@@ -11,6 +11,7 @@ import {
 import type { ClonedPerson } from '../world/assets';
 import { getGroundHeight } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
+import type { RagdollPhysicsWorld } from '../systems/ragdollWorld';
 import { createHumanRigController, type HumanRigController } from './humanRig';
 import type { TrafficCarState } from './traffic';
 import type { VehicleState } from './vehicle';
@@ -241,6 +242,8 @@ export function createPedestrians(count = 72): PedestrianState[] {
       angVelYaw: 0,
       lastImpactSpeed: 0,
       lastImpactKind: 'none',
+      pendingRagdollImpact: null,
+      rapierControlled: false,
     });
   }
 
@@ -269,7 +272,6 @@ export function stepPedestrians(
       if (hit.hit) {
         const impact = applyCarHitToHuman(p, v, hit, false);
         if (impact > 2.0) {
-          // Subtle realistic momentum absorption & suspension dip on the hitting car
           const damp = clamp(1 - impact * 0.0035, 0.9, 0.99);
           v.vx *= damp;
           v.vz *= damp;
@@ -299,7 +301,12 @@ export function stepPedestrians(
       }
     }
 
-    // 2. If stumbling, airborne, downed, or recovering, run 3D physics tumble/slide/recovery!
+    // 2. When Rapier3D articulated ragdoll or 3-stage physical get-up owns this pedestrian, skip fallback/strolling!
+    if (p.rapierControlled) {
+      continue;
+    }
+
+    // 3. Fallback tumble/stumble/slide/recovery when Rapier3D isn't active (light stumbles or headless tests)
     if (stepHumanRagdollPhysics(p, safeDt, colliders, false)) {
       continue;
     }
@@ -370,20 +377,28 @@ export function stepPedestrians(
 
 export interface PedestrianRenderer {
   attachGltfPeople: (clonePerson: (variantIndex: number) => ClonedPerson | null) => void;
-  syncFromState: (peds: PedestrianState[], dt: number, focusX: number, focusZ: number) => void;
+  spawnPendingRagdolls: (peds: PedestrianState[], ragdollWorld: RagdollPhysicsWorld, focusX: number, focusZ: number) => void;
+  syncFromState: (
+    peds: PedestrianState[],
+    dt: number,
+    focusX: number,
+    focusZ: number,
+    ragdollWorld?: RagdollPhysicsWorld | null,
+  ) => void;
 }
 
 interface PedInstance {
   root: THREE.Group;
   tumblePivot: THREE.Group;
+  avatarRoot: THREE.Object3D | null;
   variantIndex: number;
   rig: HumanRigController | null;
 }
 
 /**
  * Renders 70+ varied locals across all 11 districts using styled Ready Player Me
- * civilian avatars driven by 4 distinct studio optical mocap walk clips, with
- * center-of-mass tumble pivots for realistic knockdowns and ground slides.
+ * civilian avatars driven by 4 distinct studio optical mocap walk clips, seamlessly
+ * handing off to live 11-limb Rapier3D articulated ragdolls & 3-stage physical get-ups on impact!
  */
 export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Scene): PedestrianRenderer {
   const container = new THREE.Group();
@@ -409,7 +424,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
     pedRoot.add(tumblePivot);
 
     container.add(pedRoot);
-    instances.push({ root: pedRoot, tumblePivot, variantIndex: p.variantIndex, rig: null });
+    instances.push({ root: pedRoot, tumblePivot, avatarRoot: null, variantIndex: p.variantIndex, rig: null });
   }
   scene.add(container);
 
@@ -434,6 +449,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         shadow.position.y = 0.03;
         inst.root.add(shadow);
         inst.tumblePivot.add(cloned.scene);
+        inst.avatarRoot = cloned.scene;
 
         const rig = createHumanRigController(
           cloned.scene,
@@ -446,12 +462,71 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
       }
     },
 
-    syncFromState(statePeds: PedestrianState[], dt: number, focusX: number, focusZ: number) {
+    spawnPendingRagdolls(statePeds, ragdollWorld, focusX, focusZ) {
+      for (let i = 0; i < statePeds.length && i < instances.length; i++) {
+        const p = statePeds[i];
+        const impact = p.pendingRagdollImpact;
+        if (!impact) continue;
+        p.pendingRagdollImpact = null;
+
+        const inst = instances[i];
+        if (!inst.avatarRoot) continue;
+        const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);
+        if (dSq > 85 * 85) continue;
+
+        // Ensure neutral tumblePivot & fresh world matrices before spawning 11-limb Rapier ragdoll
+        inst.root.visible = true;
+        inst.root.position.set(p.x, p.y, p.z);
+        inst.root.rotation.set(0, -p.yaw, 0);
+        inst.tumblePivot.position.y = 0.92;
+        inst.tumblePivot.rotation.set(0, 0, 0);
+        inst.root.updateMatrixWorld(true);
+
+        const spawned = ragdollWorld.spawnRagdoll(`ped:${p.id}`, inst.root, inst.avatarRoot, impact, false);
+        if (spawned) {
+          p.rapierControlled = true;
+          p.fallPitch = 0;
+          p.fallRoll = 0;
+        }
+      }
+    },
+
+    syncFromState(
+      statePeds: PedestrianState[],
+      dt: number,
+      focusX: number,
+      focusZ: number,
+      ragdollWorld?: RagdollPhysicsWorld | null,
+    ) {
       elapsedAccum += dt;
       for (let i = 0; i < statePeds.length && i < instances.length; i++) {
         const p = statePeds[i];
         const inst = instances[i];
         if (!inst.rig) continue;
+
+        // Sync active Rapier3D ragdoll / 3-stage physical get-up back into PedestrianState
+        if (p.rapierControlled && ragdollWorld) {
+          const status = ragdollWorld.getStatus(`ped:${p.id}`);
+          if (status) {
+            p.x = status.x;
+            p.y = status.y;
+            p.z = status.z;
+            p.yaw = status.yaw;
+            p.ragdollMode = status.phase === 'ragdoll' ? 'airborne' : 'recovering';
+            inst.root.visible = true;
+            inst.tumblePivot.position.y = 0.92;
+            inst.tumblePivot.rotation.set(0, 0, 0);
+            continue;
+          } else {
+            // 3-stage physical get-up finished cleanly -> resume studio mocap stroll!
+            p.rapierControlled = false;
+            p.ragdollMode = 'normal';
+            p.fallPitch = 0;
+            p.fallRoll = 0;
+            p.vx = 0;
+            p.vz = 0;
+          }
+        }
 
         // Distance-cull far skinned pedestrians (>85m) so 70+ locals across the city stay butter-smooth!
         const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);

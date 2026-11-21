@@ -89,6 +89,8 @@ export function createInitialPlayerState(startingVehicle: VehicleState | null): 
     angVelYaw: 0,
     lastImpactSpeed: 0,
     lastImpactKind: 'none' as const,
+    pendingRagdollImpact: null,
+    rapierControlled: false,
   };
   if (startingVehicle) {
     return {
@@ -133,7 +135,13 @@ export function stepPlayerOnFoot(
   p.lastImpactSpeed = 0;
   p.lastImpactKind = 'none';
 
-  // If player was knocked airborne, downed, or getting back up, realistic ragdoll physics drives motion
+  // When Rapier3D articulated ragdoll or 3-stage physical get-up owns the player, skip foot locomotion!
+  if (p.rapierControlled) {
+    p.sprinting = false;
+    return;
+  }
+
+  // Fallback kinematic ragdoll when Rapier3D isn't mounted (e.g. headless unit tests)
   const ragdollLocked = stepHumanRagdollPhysics(p, safeDt, colliders, true);
   if (ragdollLocked) {
     p.grounded = p.ragdollMode !== 'airborne';
@@ -239,10 +247,17 @@ export function stepPlayerOnFoot(
       if (closing > 1.4 && ped.ragdollMode !== 'airborne' && ped.ragdollMode !== 'downed') {
         p.lastImpactSpeed = Math.max(p.lastImpactSpeed, closing);
         if (closing >= 8.2 && p.sprinting) {
-          // Full-speed sprint shoulder-tackle knocks the pedestrian off their feet!
+          // Full-speed sprint shoulder-tackle triggers real Rapier3D 11-limb knockdown!
           ped.vx = -nx * clamp(closing * 0.85, 5.5, 11.5);
           ped.vz = -nz * clamp(closing * 0.85, 5.5, 11.5);
           ped.vy = 2.6;
+          ped.pendingRagdollImpact = {
+            vx: ped.vx,
+            vy: ped.vy,
+            vz: ped.vz,
+            hitZone: 'body',
+            sideOffset: Math.sin(ped.id * 3.1) >= 0 ? 0.45 : -0.45,
+          };
           ped.ragdollMode = 'airborne';
           ped.ragdollTimer = 1.45;
           ped.angVelPitch = 4.6;
@@ -475,6 +490,7 @@ export function computeCharacterPose(s: PlayerState, elapsed = 0): CharacterPose
 
 export interface PlayerMeshHandles {
   root: THREE.Group;
+  getAvatarRoot: () => THREE.Object3D | null;
   syncFromState: (state: PlayerState, elapsed?: number, dt?: number) => void;
   attachGltfCharacter: (model: THREE.Object3D, animations: THREE.AnimationClip[]) => void;
 }
@@ -746,6 +762,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const rightLeg = makeLeg(1);
 
   let humanRig: HumanRigController | null = null;
+  let gltfAvatarRoot: THREE.Object3D | null = null;
 
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
     body.visible = false;
@@ -757,6 +774,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
       }
     });
     tumblePivot.add(model);
+    gltfAvatarRoot = model;
     humanRig = createHumanRigController(model, animations);
   };
 
@@ -765,6 +783,15 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const syncFromState = (s: PlayerState, elapsed = 0, dt = 1 / 60) => {
     root.visible = s.vehicleId === null;
     if (!root.visible) return;
+
+    // When Rapier3D articulated ragdoll or 3-stage physical get-up owns the player skeleton,
+    // keep tumblePivot neutral so Rapier drives every real bone directly without fighting AnimationMixer!
+    if (s.rapierControlled) {
+      tumblePivot.position.y = 0.92;
+      tumblePivot.rotation.set(0, 0, 0);
+      return;
+    }
+
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
     tumblePivot.position.y = computeTumblePivotY(s.fallPitch, s.fallRoll, s.ragdollMode);
@@ -797,5 +824,10 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     rightArm.elbow.rotation.x = pose.rightElbowX;
   };
 
-  return { root, syncFromState, attachGltfCharacter };
+  return {
+    root,
+    getAvatarRoot: () => gltfAvatarRoot,
+    syncFromState,
+    attachGltfCharacter,
+  };
 }
