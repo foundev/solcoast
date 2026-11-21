@@ -20,11 +20,18 @@ import {
 describe('Sol Coast World Blueprint', () => {
   const blueprint = createCityBlueprint();
 
-  it('builds a dense deterministic coastal city with roads, buildings, palms, and traffic graph', () => {
-    expect(blueprint.roads.length).toBeGreaterThanOrEqual(14);
-    expect(blueprint.buildings.length).toBeGreaterThanOrEqual(40);
-    expect(blueprint.palms.length).toBeGreaterThanOrEqual(40);
-    expect(blueprint.trafficNodes.length).toBe(30); // 5x5 grid + 5 Key Sol island loop nodes
+  it('builds a dense expanded coastal metropolis with 11 districts, varied building styles, palms, and 54-node traffic graph', () => {
+    expect(blueprint.roads.length).toBeGreaterThanOrEqual(18);
+    expect(blueprint.buildings.length).toBeGreaterThanOrEqual(100);
+    expect(blueprint.palms.length).toBeGreaterThanOrEqual(80);
+    expect(blueprint.trafficNodes.length).toBe(54); // 7x7 grid + 5 Key Sol island loop nodes
+    const styles = new Set(blueprint.buildings.map((b) => b.style));
+    expect(styles.has('art-deco')).toBe(true);
+    expect(styles.has('skyscraper')).toBe(true);
+    expect(styles.has('warehouse-mural')).toBe(true);
+    expect(styles.has('mediterranean')).toBe(true);
+    expect(styles.has('resort-tower')).toBe(true);
+    expect(styles.has('stadium')).toBe(true);
   });
 
   it('keeps buildings completely clear of the main road network', () => {
@@ -66,7 +73,7 @@ describe('Sol Coast World Blueprint', () => {
     expect(isDeepWater(200, -230)).toBe(true); // North Bay water beside causeway
   });
 
-  it('maps all 8 coastal districts accurately', () => {
+  it('maps all 11 coastal districts accurately', () => {
     expect(getDistrictAt(140, 20).id).toBe('ocean-drive');
     expect(getDistrictAt(185, 20).id).toBe('sol-beach');
     expect(getDistrictAt(260, SOUTH_PIER.centerZ).id).toBe('south-pier');
@@ -75,6 +82,9 @@ describe('Sol Coast World Blueprint', () => {
     expect(getDistrictAt(-190, -50).id).toBe('downtown-biscayne');
     expect(getDistrictAt(300, -200).id).toBe('key-sol');
     expect(getDistrictAt(0, 180).id).toBe('marina-cove');
+    expect(getDistrictAt(-160, -290).id).toBe('wynwood-arts');
+    expect(getDistrictAt(-335, 25).id).toBe('coral-heights');
+    expect(getDistrictAt(90, -290).id).toBe('north-beach');
   });
 
   it('places every mission start beacon and step waypoint on dry, obstacle-free ground', () => {

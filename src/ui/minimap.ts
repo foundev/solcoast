@@ -5,11 +5,11 @@ import { CAUSEWAY, KEY_SOL_BOUNDS, SOUTH_PIER } from '../world/cityData';
 import type { CityBlueprint } from '../world/types';
 import { MISSIONS, type MissionManager } from '../systems/missions';
 
-const WORLD_MIN_X = -320;
-const WORLD_MAX_X = 420;
-const WORLD_MIN_Z = -340;
+const WORLD_MIN_X = -460;
+const WORLD_MAX_X = 430;
+const WORLD_MIN_Z = -450;
 const WORLD_MAX_Z = 320;
-const CACHE_SCALE = 0.75; // pixels per meter on pre-rendered static map
+const CACHE_SCALE = 0.65; // pixels per meter on pre-rendered static map
 
 export class MinimapRenderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -38,10 +38,10 @@ export class MinimapRenderer {
     ctx.fillRect(0, 0, w, h);
 
     ctx.fillStyle = '#1b263b';
-    ctx.fillRect(px(-248), pz(-228), 408 * CACHE_SCALE, 420 * CACHE_SCALE);
+    ctx.fillRect(px(-428), pz(-410), 584 * CACHE_SCALE, 602 * CACHE_SCALE);
 
     ctx.fillStyle = '#a98e62';
-    ctx.fillRect(px(165), pz(-184), 50 * CACHE_SCALE, 376 * CACHE_SCALE);
+    ctx.fillRect(px(165), pz(-184), 46 * CACHE_SCALE, 376 * CACHE_SCALE);
 
     ctx.fillStyle = '#244b3c';
     ctx.fillRect(
@@ -51,8 +51,10 @@ export class MinimapRenderer {
       (KEY_SOL_BOUNDS.maxZ - KEY_SOL_BOUNDS.minZ) * CACHE_SCALE,
     );
 
+    // Palm Plaza & Coral Park green squares
     ctx.fillStyle = '#235e45';
     ctx.fillRect(px(-8), pz(-8), 66 * CACHE_SCALE, 66 * CACHE_SCALE);
+    ctx.fillRect(px(-368), pz(-8), 66 * CACHE_SCALE, 66 * CACHE_SCALE);
 
     ctx.fillStyle = '#8b6546';
     ctx.fillRect(

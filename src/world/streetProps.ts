@@ -133,25 +133,28 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   const hedgeMat = new THREE.MeshStandardMaterial({ color: 0x276e3c, roughness: 0.88 });
   const blossomMat = new THREE.MeshStandardMaterial({ color: 0xf2388f, roughness: 0.65 });
 
-  // 1. Raised 3D Concrete Curbs around every city block (huge street-level depth cue!)
+  // 1. Raised 3D Concrete Curbs around ALL city blocks batched in 1 InstancedMesh draw call!
   const halfRoad = ROAD_WIDTH * 0.5;
+  const blockCount = (AVENUE_XS.length - 1) * (STREET_ZS.length - 1);
+  const blockSlabGeo = new THREE.BoxGeometry(1, SIDEWALK_HEIGHT, 1);
+  const blockSlabs = new THREE.InstancedMesh(blockSlabGeo, curbMat, blockCount);
+  blockSlabs.receiveShadow = true;
+  const slabDummy = new THREE.Object3D();
+  let slabIdx = 0;
   for (let bx = 0; bx < AVENUE_XS.length - 1; bx++) {
     for (let bz = 0; bz < STREET_ZS.length - 1; bz++) {
       const minX = AVENUE_XS[bx] + halfRoad + 0.4;
       const maxX = AVENUE_XS[bx + 1] - halfRoad - 0.4;
       const minZ = STREET_ZS[bz] + halfRoad + 0.4;
       const maxZ = STREET_ZS[bz + 1] - halfRoad - 0.4;
-      const w = maxX - minX;
-      const d = maxZ - minZ;
-      const cx = (minX + maxX) * 0.5;
-      const cz = (minZ + maxZ) * 0.5;
-
-      const blockSlab = new THREE.Mesh(new THREE.BoxGeometry(w, SIDEWALK_HEIGHT, d), curbMat);
-      blockSlab.position.set(cx, SIDEWALK_HEIGHT * 0.5, cz);
-      blockSlab.receiveShadow = true;
-      root.add(blockSlab);
+      slabDummy.position.set((minX + maxX) * 0.5, SIDEWALK_HEIGHT * 0.5, (minZ + maxZ) * 0.5);
+      slabDummy.scale.set(maxX - minX, 1, maxZ - minZ);
+      slabDummy.updateMatrix();
+      blockSlabs.setMatrixAt(slabIdx++, slabDummy.matrix);
     }
   }
+  blockSlabs.instanceMatrix.needsUpdate = true;
+  root.add(blockSlabs);
 
   // 2. Live Cycling Intersection Traffic Signal Gantries
   const signalBoxMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.5, metalness: 0.4 });
@@ -209,7 +212,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     }
   }
 
-  // 3. Readable Neon Hotel Marquees along Ocean Drive & Neon Strip
+  // 3. Readable Neon Hotel & District Marquees across Ocean Drive, Neon Strip, Wynwood, Coral Heights & North Beach
   const hotelMarquees = [
     { title: 'HOTEL SOLAIRE', sub: 'OCEAN DRIVE · ART DECO', bg: '#1e102b', fg: '#ff6ca8', acc: '#2cf3ff', x: 125, z: -65 },
     { title: 'THE FLAMINGO', sub: 'ROOFTOP LOUNGE & BAR', bg: '#161b30', fg: '#ffd166', acc: '#ff4d8d', x: 125, z: 25 },
@@ -217,6 +220,10 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     { title: 'CLUB NEON', sub: 'OPEN LATE · LIVE SYNTH', bg: '#180c2e', fg: '#2cf3ff', acc: '#ff2e93', x: -5, z: -65 },
     { title: 'VELVET PALMS', sub: 'MIDTOWN NIGHTCLUB', bg: '#220f24', fg: '#ff70a6', acc: '#ffe066', x: -5, z: 25 },
     { title: 'MARINA CLUB', sub: 'YACHT CHARTERS & GRILL', bg: '#0c2032', fg: '#72efdd', acc: '#ffb703', x: 12, z: 145 },
+    { title: 'WYNWOOD WALLS', sub: 'STREET ART · GALLERIES', bg: '#1a1030', fg: '#ffcf5c', acc: '#ff2e93', x: -185, z: -245 },
+    { title: 'SOL ARENA', sub: 'LIVE CONCERTS & HOOPS', bg: '#0c182e', fg: '#2cf3ff', acc: '#ff4d8d', x: -275, z: -245 },
+    { title: 'CAFE HABANA', sub: 'CORAL HEIGHTS · ESPRESSO', bg: '#2c1610', fg: '#ffd166', acc: '#ff8a3d', x: -275, z: 25 },
+    { title: 'BAYSIDE RESORT', sub: 'NORTH BEACH TOWERS', bg: '#0c2233', fg: '#72efdd', acc: '#2cf3ff', x: 125, z: -245 },
   ];
 
   for (const m of hotelMarquees) {

@@ -273,7 +273,9 @@ function equipProtagonistStreetGear(avatarRoot: THREE.Object3D): void {
  */
 function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: number): void {
   const styleIdx = Math.floor(variantIndex / 6) % PED_STYLES.length;
-  const style = PED_STYLES[(variantIndex * 5 + styleIdx) % PED_STYLES.length];
+  const style = PED_STYLES[styleIdx];
+  const hairTints = [0xffffff, 0x3b2a1e, 0xd4b27a, 0x222026, 0x8a482c, 0xc8c8ce];
+  const hairTint = hairTints[(styleIdx + variantIndex) % hairTints.length];
 
   // Subtle realistic human height & build variation (1.66m .. 1.90m)
   const hSeed = ((variantIndex * 37) % 15) / 14; // 0..1
@@ -282,8 +284,8 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
   const scaleXZ = 0.95 + wSeed * 0.10;
   avatarRoot.scale.set(scaleXZ, scaleY, scaleXZ);
 
-  // Apply tasteful outfit color tinting when not using the base unmodified look
-  if (variantIndex >= 6) {
+  // Apply tasteful outfit & hair tinting when not using the base unmodified look (tier 0)
+  if (styleIdx > 0) {
     avatarRoot.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh) || !(obj.material instanceof THREE.MeshStandardMaterial)) return;
       if (/outfit_top|wolf3d_outfit_top/i.test(obj.name)) {
@@ -297,6 +299,10 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
       } else if (/footwear/i.test(obj.name)) {
         const m = obj.material.clone();
         m.color.setHex(style.shoeTint);
+        obj.material = m;
+      } else if (/hair/i.test(obj.name) && hairTint !== 0xffffff) {
+        const m = obj.material.clone();
+        m.color.setHex(hairTint);
         obj.material = m;
       }
     });

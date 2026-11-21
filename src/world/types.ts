@@ -8,7 +8,10 @@ export type DistrictId =
   | 'palm-plaza'
   | 'downtown-biscayne'
   | 'key-sol'
-  | 'marina-cove';
+  | 'marina-cove'
+  | 'wynwood-arts'
+  | 'coral-heights'
+  | 'north-beach';
 
 export interface DistrictInfo {
   id: DistrictId;
@@ -16,7 +19,16 @@ export interface DistrictInfo {
   tagline: string;
 }
 
-export type BuildingStyle = 'art-deco' | 'skyscraper' | 'neon-club' | 'villa' | 'pavilion';
+export type BuildingStyle =
+  | 'art-deco'
+  | 'skyscraper'
+  | 'neon-club'
+  | 'villa'
+  | 'pavilion'
+  | 'warehouse-mural'
+  | 'mediterranean'
+  | 'resort-tower'
+  | 'stadium';
 
 export interface BuildingSpec {
   id: string;

@@ -121,10 +121,10 @@ function bootstrap(): void {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Ambient AI traffic cars (18 across 7 real 3D models), 52 varied pedestrians, & 13 coastal boats/ships
-  const trafficCars = createTrafficCars(blueprint.trafficNodes, 18);
+  // Ambient AI traffic cars (26 across 7 real 3D models), 72 evenly-spread varied pedestrians, & 13 coastal boats/ships
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 26);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
-  const pedestrians = createPedestrians(52);
+  const pedestrians = createPedestrians(72);
   const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
   const coastalBoats = createCoastalBoatFleet();
   const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
@@ -158,7 +158,7 @@ function bootstrap(): void {
     const boatCount = Object.keys(assets.boatGltfs).length;
     if (carCount > 0 || boatCount > 0 || assets.protagonistGltf) {
       hud.showToast(
-        `HD Assets Ready: ${carCount} car models, ${boatCount} boat & ship models, & 52 locals loaded!`,
+        `HD Assets Ready: ${carCount} car models, ${boatCount} boat & ship models, & 72 locals across 11 districts!`,
         'success',
       );
     }

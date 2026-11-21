@@ -356,7 +356,7 @@ export function createWoodPlankPbrSet(): PbrTextureSet {
  */
 export function createBuildingFacadePbr(
   baseHex: number,
-  style: 'skyscraper' | 'art-deco' | 'neon-club',
+  style: 'skyscraper' | 'art-deco' | 'neon-club' | 'warehouse-mural' | 'mediterranean' | 'resort-tower',
   repeatX: number,
   repeatY: number,
 ): PbrTextureSet {
@@ -481,6 +481,131 @@ export function createBuildingFacadePbr(
 
         for (let py = wy; py < wy + wh; py++) {
           for (let px = x; px < x + ww; px++) height[py * size + px] = 0.2;
+        }
+      }
+    }
+  } else if (style === 'warehouse-mural') {
+    // Vibrant Wynwood street-art mural brick/stucco warehouse with bold geometric pop-art & gallery doors!
+    const muralPalettes = [
+      ['#ff2e93', '#2cf3ff', '#ffd166', '#1b1734'],
+      ['#ff6b35', '#00d2d3', '#ffe66d', '#22183b'],
+      ['#9b5de5', '#f15bb5', '#00f5d4', '#161b33'],
+      ['#ff4d6d', '#ffbe0b', '#3a86ff', '#141829'],
+    ];
+    const pal = muralPalettes[baseHex % muralPalettes.length];
+    dCtx.fillStyle = pal[3];
+    dCtx.fillRect(0, 0, size, size);
+
+    // Bold diagonal color blocks & retro Miami sun-circles
+    dCtx.fillStyle = pal[0];
+    dCtx.beginPath();
+    dCtx.moveTo(0, size * 0.25);
+    dCtx.lineTo(size * 0.65, 0);
+    dCtx.lineTo(size, size * 0.42);
+    dCtx.lineTo(size * 0.3, size * 0.72);
+    dCtx.closePath();
+    dCtx.fill();
+
+    dCtx.fillStyle = pal[1];
+    dCtx.beginPath();
+    dCtx.arc(size * 0.72, size * 0.34, size * 0.22, 0, Math.PI * 2);
+    dCtx.fill();
+
+    dCtx.fillStyle = pal[2];
+    for (let s = 0; s < 5; s++) {
+      dCtx.fillRect(28 + s * 22, size * 0.54 + s * 14, size * 0.48, 12);
+    }
+
+    // Subtle painted cinderblock mortar lines
+    dCtx.strokeStyle = 'rgba(0,0,0,0.18)';
+    dCtx.lineWidth = 2;
+    for (let y = 0; y < size; y += 32) {
+      dCtx.beginPath();
+      dCtx.moveTo(0, y);
+      dCtx.lineTo(size, y);
+      dCtx.stroke();
+    }
+
+    // Clerestory warehouse windows near top + warm gallery glow at night
+    for (let x = 24; x < size - 24; x += 76) {
+      dCtx.fillStyle = '#182436';
+      dCtx.fillRect(x, 22, 54, 42);
+      rCtx.fillStyle = 'rgb(28,28,28)';
+      rCtx.fillRect(x, 22, 54, 42);
+      eCtx.fillStyle = '#ffe5ad';
+      eCtx.fillRect(x + 3, 25, 48, 36);
+    }
+  } else if (style === 'mediterranean') {
+    // Coral Heights / Little Havana warm stucco with arched windows & wrought-iron balconies
+    for (let y = 0; y < size; y += 85) {
+      // Decorative sandstone cornice molding
+      dCtx.fillStyle = 'rgba(255, 244, 226, 0.55)';
+      dCtx.fillRect(0, y, size, 9);
+      for (let x = 26; x < size - 26; x += 84) {
+        const wy = y + 22;
+        const ww = 38;
+        const wh = 48;
+        const seed = hash2(x * 0.19, y * 0.27);
+        const lit = seed < 0.52;
+
+        // Cream stone arch surround
+        dCtx.fillStyle = '#f5ead6';
+        dCtx.fillRect(x - 4, wy + 12, ww + 8, wh - 8);
+        dCtx.beginPath();
+        dCtx.arc(x + ww * 0.5, wy + 14, ww * 0.5 + 4, Math.PI, 0);
+        dCtx.fill();
+
+        // Recessed arched window pane
+        dCtx.fillStyle = lit ? '#6e5c4e' : '#1b2836';
+        dCtx.fillRect(x, wy + 14, ww, wh - 14);
+        dCtx.beginPath();
+        dCtx.arc(x + ww * 0.5, wy + 14, ww * 0.5, Math.PI, 0);
+        dCtx.fill();
+
+        // Dark wrought-iron balcony railing bars across lower half
+        dCtx.fillStyle = '#1d222b';
+        dCtx.fillRect(x - 6, wy + wh - 16, ww + 12, 3);
+        for (let bx = x - 4; bx <= x + ww + 4; bx += 7) {
+          dCtx.fillRect(bx, wy + wh - 16, 2, 16);
+        }
+
+        rCtx.fillStyle = 'rgb(30,30,30)';
+        rCtx.fillRect(x, wy + 4, ww, wh - 4);
+        if (lit) {
+          eCtx.fillStyle = '#ffd596';
+          eCtx.fillRect(x + 3, wy + 10, ww - 6, wh - 24);
+        }
+        for (let py = wy + 6; py < wy + wh; py++) {
+          for (let px = x; px < x + ww; px++) height[py * size + px] = 0.22;
+        }
+      }
+    }
+  } else if (style === 'resort-tower') {
+    // Sleek North Beach white-and-turquoise oceanfront luxury condo with wide bright glass slabs
+    for (let y = 0; y < size; y += 42) {
+      // Bright white cantilevered concrete balcony slab edge
+      dCtx.fillStyle = '#f4f7fb';
+      dCtx.fillRect(0, y, size, 12);
+      rCtx.fillStyle = 'rgb(165,165,165)';
+      rCtx.fillRect(0, y, size, 12);
+      for (let py = y; py < y + 12; py++) {
+        for (let px = 0; px < size; px++) height[py * size + px] = 0.96;
+      }
+
+      // Panoramic aqua-tinted balcony railing + interior floor-to-ceiling glass
+      for (let x = 0; x < size; x += 64) {
+        const seed = hash2(x * 0.11, y * 0.23);
+        const lit = seed < 0.45;
+        const grad = dCtx.createLinearGradient(x, y + 12, x, y + 42);
+        grad.addColorStop(0, lit ? '#84c9d4' : '#2a6f86');
+        grad.addColorStop(1, lit ? '#498b9e' : '#18495c');
+        dCtx.fillStyle = grad;
+        dCtx.fillRect(x + 2, y + 12, 60, 29);
+        rCtx.fillStyle = 'rgb(18,18,18)';
+        rCtx.fillRect(x + 2, y + 12, 60, 29);
+        if (lit) {
+          eCtx.fillStyle = seed < 0.22 ? '#fff0c2' : '#c6f6ff';
+          eCtx.fillRect(x + 6, y + 15, 52, 20);
         }
       }
     }

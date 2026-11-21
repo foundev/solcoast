@@ -257,13 +257,23 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(maxRightAhead).toBeGreaterThan(0.35);
   });
 
-  it('populates 50+ strolling locals, 7+ multi-model traffic classes, cruising boats, and valid optimized GLB assets', () => {
-    // 1. 52 distinct pedestrians distributed across all city corridors
-    const peds = createPedestrians(52);
-    expect(peds.length).toBe(52);
+  it('populates 72 non-clumping locals, 8 drivable car models, multi-model traffic, cruising boats, and valid optimized GLB assets', () => {
+    // 1. 72 distinct pedestrians evenly distributed with NO duplicate base avatars on the same route!
+    const peds = createPedestrians(72);
+    expect(peds.length).toBe(72);
+    const byRoute = new Map<number, number[]>();
+    for (const p of peds) {
+      const list = byRoute.get(p.routeIndex) ?? [];
+      list.push(p.variantIndex % 6);
+      byRoute.set(p.routeIndex, list);
+    }
+    for (const [routeIdx, bases] of byRoute) {
+      expect(new Set(bases).size, `route ${routeIdx} must not clone the same base avatar`).toBe(bases.length);
+    }
+
     const vehicles = DEFAULT_VEHICLES.map(createVehicleState);
-    expect(vehicles.length).toBe(6);
-    expect(new Set(vehicles.map((v) => v.config.modelKind)).size).toBe(6);
+    expect(vehicles.length).toBe(8);
+    expect(new Set(vehicles.map((v) => v.config.modelKind)).size).toBe(8);
 
     // 2. Multi-model AI traffic covers 7 distinct car models
     const traffic = createTrafficCars(blueprint.trafficNodes, 18);

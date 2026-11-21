@@ -348,10 +348,84 @@ function buildBuildingMesh(
   // True architectural story height scaling (~3.5m per story so windows match 1.8m humans & 1.2m cars)
   const rx = Math.max(1, Math.round(b.width / 16));
   const ry =
-    b.style === 'skyscraper'
-      ? Math.max(1, Math.round(b.height / 48))
-      : Math.max(1, Math.round(b.height / 24));
+    b.style === 'skyscraper' || b.style === 'resort-tower'
+      ? Math.max(1, Math.round(b.height / 44))
+      : b.style === 'warehouse-mural'
+        ? 1
+        : Math.max(1, Math.round(b.height / 24));
   const key = `${b.style}-${b.wallColor}-${rx}-${ry}`;
+
+  // Special Landmark: Circular Ribbed Sol Coast Stadium / Arena!
+  if (b.style === 'stadium') {
+    const outerR = b.width * 0.48;
+    const bowlMat = new THREE.MeshStandardMaterial({ color: 0xe6edf5, roughness: 0.42, metalness: 0.18 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x182436, roughness: 0.35, metalness: 0.55 });
+    const neonCyan = new THREE.MeshStandardMaterial({
+      color: 0x00f0ff,
+      emissive: 0x00f0ff,
+      emissiveIntensity: 1.8,
+      roughness: 0.2,
+    });
+    const neonPink = new THREE.MeshStandardMaterial({
+      color: 0xff2e93,
+      emissive: 0xff2e93,
+      emissiveIntensity: 1.6,
+      roughness: 0.2,
+    });
+    neonMaterials.push(neonCyan, neonPink);
+
+    const bowl = new THREE.Mesh(
+      new THREE.CylinderGeometry(outerR * 1.04, outerR * 0.92, b.height * 0.72, 28),
+      bowlMat,
+    );
+    bowl.position.y = b.height * 0.36;
+    bowl.castShadow = true;
+    bowl.receiveShadow = true;
+    group.add(bowl);
+
+    // Panoramic dark concourse glass band
+    const concourse = new THREE.Mesh(
+      new THREE.CylinderGeometry(outerR * 1.055, outerR * 0.98, 4.6, 28),
+      lobbyGlassMat,
+    );
+    concourse.position.y = 4.2;
+    group.add(concourse);
+
+    // Iconic cantilevered halo roof canopy + glowing neon stadium crown
+    const roofRim = new THREE.Mesh(new THREE.TorusGeometry(outerR * 0.94, 2.3, 12, 32), bowlMat);
+    roofRim.rotation.x = Math.PI * 0.5;
+    roofRim.position.y = b.height * 0.78;
+    roofRim.castShadow = true;
+    group.add(roofRim);
+
+    const innerDome = new THREE.Mesh(
+      new THREE.CylinderGeometry(outerR * 0.68, outerR * 0.94, 3.8, 28),
+      darkMat,
+    );
+    innerDome.position.y = b.height * 0.85;
+    group.add(innerDome);
+
+    const crownGlow = new THREE.Mesh(new THREE.TorusGeometry(outerR * 1.05, 0.42, 8, 36), neonCyan);
+    crownGlow.rotation.x = Math.PI * 0.5;
+    crownGlow.position.y = b.height * 0.78;
+    group.add(crownGlow);
+
+    const lowerGlow = new THREE.Mesh(new THREE.TorusGeometry(outerR * 1.03, 0.3, 8, 36), neonPink);
+    lowerGlow.rotation.x = Math.PI * 0.5;
+    lowerGlow.position.y = 7.0;
+    group.add(lowerGlow);
+
+    // Architectural radial exterior ribs around the arena bowl
+    for (let i = 0; i < 16; i++) {
+      const ang = (i / 16) * Math.PI * 2;
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.85, b.height * 0.76, 1.8), bowlMat);
+      rib.position.set(Math.cos(ang) * outerR * 1.01, b.height * 0.38, Math.sin(ang) * outerR * 1.01);
+      rib.rotation.y = -ang;
+      group.add(rib);
+    }
+
+    return group;
+  }
 
   let wallMat = facadeCache.get(key);
   if (!wallMat) {
@@ -369,11 +443,11 @@ function buildBuildingMesh(
         normalScale: new THREE.Vector2(0.85, 0.85),
         roughnessMap: pbr.roughnessMap,
         roughness: 1.0,
-        metalness: b.style === 'skyscraper' ? 0.52 : 0.14,
+        metalness: b.style === 'skyscraper' ? 0.52 : b.style === 'resort-tower' ? 0.34 : 0.12,
         emissive: new THREE.Color(0xffffff),
         emissiveMap: pbr.emissiveMap,
         emissiveIntensity: 0.25,
-        envMapIntensity: b.style === 'skyscraper' ? 1.6 : 1.05,
+        envMapIntensity: b.style === 'skyscraper' || b.style === 'resort-tower' ? 1.55 : 1.0,
       });
       windowMaterials.push(wallMat);
     }
@@ -506,6 +580,59 @@ function buildBuildingMesh(
     );
     pool.position.set(0, 0.08, b.depth * 0.5 + 3.2);
     group.add(pool);
+  } else if (b.style === 'warehouse-mural') {
+    // Wynwood industrial art gallery sawtooth skylight roof + steel overhang
+    const ridgeCount = Math.max(2, Math.round(b.depth / 8));
+    const ridgeDepth = b.depth / ridgeCount;
+    for (let r = 0; r < ridgeCount; r++) {
+      const saw = new THREE.Mesh(
+        new THREE.BoxGeometry(b.width * 0.94, 1.5, ridgeDepth * 0.55),
+        hvacMat,
+      );
+      saw.position.set(0, b.height + 0.65, -b.depth * 0.5 + (r + 0.5) * ridgeDepth);
+      saw.rotation.x = 0.28;
+      group.add(saw);
+    }
+  } else if (b.style === 'mediterranean') {
+    // Coral Heights / Little Havana hipped terracotta clay-tile roof + shaded stucco eaves
+    const roofRadius = Math.hypot(b.width, b.depth) * 0.54;
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(roofRadius, 3.6, 4), accentMat);
+    roof.rotation.y = Math.PI * 0.25;
+    roof.scale.set(b.width / Math.max(b.width, b.depth), 1, b.depth / Math.max(b.width, b.depth));
+    roof.position.y = b.height + 1.8;
+    roof.castShadow = true;
+    group.add(roof);
+
+    const eave = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width + 1.6, 0.35, b.depth + 1.6),
+      accentMat,
+    );
+    eave.position.y = b.height + 0.08;
+    group.add(eave);
+  } else if (b.style === 'resort-tower') {
+    // North Beach sleek cantilevered wave-balcony floor slabs + rooftop infinity lounge
+    const slabMat = new THREE.MeshStandardMaterial({ color: 0xf7fafe, roughness: 0.32, metalness: 0.08 });
+    for (let fy = 5.5; fy < b.height - 1.5; fy += 5.8) {
+      const waveOff = Math.sin(fy * 0.45) * 0.9;
+      const balcony = new THREE.Mesh(
+        new THREE.BoxGeometry(b.width + 2.2 + waveOff, 0.36, b.depth + 2.2 - waveOff * 0.5),
+        slabMat,
+      );
+      balcony.position.y = fy;
+      group.add(balcony);
+    }
+    const penthouse = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width * 0.62, 4.2, b.depth * 0.62),
+      lobbyGlassMat,
+    );
+    penthouse.position.y = b.height + 2.1;
+    group.add(penthouse);
+    const roofCap = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width * 0.72, 0.5, b.depth * 0.72),
+      slabMat,
+    );
+    roofCap.position.y = b.height + 4.35;
+    group.add(roofCap);
   } else if (b.style === 'neon-club') {
     // Rooftop HVAC box + sleek canopy entrance
     const hvac = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.8, 2.8), hvacMat);
@@ -649,8 +776,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   oceanMesh.position.set(160, -0.55, 0);
   root.add(oceanMesh);
 
-  // 2. Mainland Peninsula Base with PBR concrete sidewalk pavers
-  const mainlandGeo = new THREE.BoxGeometry(408, 2.2, 420);
+  // 2. Expanded Mainland Peninsula Base (Wynwood, Coral Heights, North Beach, Downtown, Neon Strip, Ocean Drive)
+  // Split cleanly so North Bay water east of x=156 (north of z=-182) stays open under Key Sol Causeway!
   const mainlandMat = new THREE.MeshStandardMaterial({
     map: sidewalkPbr.map,
     normalMap: sidewalkPbr.normalMap,
@@ -658,17 +785,29 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roughnessMap: sidewalkPbr.roughnessMap,
     roughness: 1.0,
   });
-  const mainland = new THREE.Mesh(mainlandGeo, mainlandMat);
-  mainland.position.set(-44, -1.11, -18);
+  const mainland = new THREE.Mesh(new THREE.BoxGeometry(584, 2.2, 602), mainlandMat);
+  mainland.position.set(-136, -1.11, -109);
   mainland.receiveShadow = true;
   root.add(mainland);
 
-  // Walkable Marina Cove waterfront coping curb (top sits cleanly at SEAWALL_HEIGHT = 0.24m matching physics!)
+  // Walkable Marina Cove & North Bay waterfront coping curbs (top sits cleanly at SEAWALL_HEIGHT = 0.24m!)
   const seawallMat = new THREE.MeshStandardMaterial({ color: 0xdce0e8, roughness: 0.72 });
-  const southWall = new THREE.Mesh(new THREE.BoxGeometry(408, 1.4, 2.7), seawallMat);
-  southWall.position.set(-44, SEAWALL_HEIGHT - 0.7, 191.8);
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(588, 1.4, 2.7), seawallMat);
+  southWall.position.set(-134, SEAWALL_HEIGHT - 0.7, 191.8);
   southWall.receiveShadow = true;
   root.add(southWall);
+
+  // North Bay east seawall promenade (north of Key Sol Causeway overlooking Key Sol Island)
+  const northBayEastWall = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.4, 200), seawallMat);
+  northBayEastWall.position.set(154.7, SEAWALL_HEIGHT - 0.7, -310);
+  northBayEastWall.receiveShadow = true;
+  root.add(northBayEastWall);
+
+  // North shoreline seawall along northern rim of Wynwood & North Beach
+  const northRimWall = new THREE.Mesh(new THREE.BoxGeometry(584, 1.4, 2.7), seawallMat);
+  northRimWall.position.set(-136, SEAWALL_HEIGHT - 0.7, -409);
+  northRimWall.receiveShadow = true;
+  root.add(northRimWall);
 
   // 3. Boardwalk Promenade with weathered coastal timber planks
   const boardwalkMat = new THREE.MeshStandardMaterial({
@@ -1073,6 +1212,51 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   const fountainSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.65, 3.6, 16), seawallMat);
   fountainSpire.position.set(25, parkY + 1.8, 25);
   root.add(fountainSpire);
+
+  // 10b. Coral Park & Outdoor Miami Basketball Court (-380..-290, -20..70 -> center -335, 25)
+  const coralGrass = new THREE.Mesh(
+    new THREE.BoxGeometry(66, 0.04, 66),
+    new THREE.MeshStandardMaterial({ color: 0x3f8c4f, roughness: 0.92 }),
+  );
+  coralGrass.position.set(-335, parkY + 0.015, 25);
+  coralGrass.receiveShadow = true;
+  root.add(coralGrass);
+
+  const courtMat = new THREE.MeshStandardMaterial({ color: 0x16808c, roughness: 0.72 });
+  const courtKeyMat = new THREE.MeshStandardMaterial({ color: 0xe64a78, roughness: 0.74 });
+  const courtLineMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.65 });
+  const courtDeck = new THREE.Mesh(new THREE.BoxGeometry(17, 0.05, 30), courtMat);
+  courtDeck.position.set(-335, parkY + 0.03, 25);
+  courtDeck.receiveShadow = true;
+  root.add(courtDeck);
+
+  // Painted center circle & coral key lanes + two glass basketball hoops!
+  const midRing = new THREE.Mesh(new THREE.RingGeometry(2.3, 2.55, 24), courtLineMat);
+  midRing.rotation.x = -Math.PI * 0.5;
+  midRing.position.set(-335, parkY + 0.065, 25);
+  root.add(midRing);
+
+  const hoopPostMat = new THREE.MeshStandardMaterial({ color: 0x222938, metalness: 0.7, roughness: 0.32 });
+  const backboardMat = new THREE.MeshStandardMaterial({ color: 0xedf6ff, roughness: 0.18, metalness: 0.1 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0xff5a22, roughness: 0.35, metalness: 0.6 });
+  for (const side of [-1, 1]) {
+    const keyPaint = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.055, 5.8), courtKeyMat);
+    keyPaint.position.set(-335, parkY + 0.034, 25 + side * 11.4);
+    root.add(keyPaint);
+
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 3.6, 8), hoopPostMat);
+    post.position.set(-335, parkY + 1.8, 25 + side * 14.4);
+    root.add(post);
+
+    const board = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.15, 0.08), backboardMat);
+    board.position.set(-335, parkY + 3.4, 25 + side * 13.7);
+    root.add(board);
+
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 8, 16), rimMat);
+    rim.rotation.x = Math.PI * 0.5;
+    rim.position.set(-335, parkY + 3.05, 25 + side * 13.3);
+    root.add(rim);
+  }
 
   // 11. PBR Buildings
   const facadeCache = new Map<string, THREE.MeshStandardMaterial>();
