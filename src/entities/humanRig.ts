@@ -31,7 +31,14 @@ export function makeInPlaceClip(clip: THREE.AnimationClip): THREE.AnimationClip 
 
 export interface HumanRigController {
   mixer: THREE.AnimationMixer;
-  update: (dt: number, speed: number, sprinting: boolean, grounded: boolean, elapsed: number) => void;
+  update: (
+    dt: number,
+    speed: number,
+    sprinting: boolean,
+    grounded: boolean,
+    elapsed: number,
+    ragdollFrozen?: boolean,
+  ) => void;
 }
 
 /**
@@ -85,9 +92,18 @@ export function createHumanRigController(
 
   return {
     mixer,
-    update(dt: number, speed: number, sprinting: boolean, grounded: boolean, _elapsed: number) {
+    update(
+      dt: number,
+      speed: number,
+      sprinting: boolean,
+      grounded: boolean,
+      _elapsed: number,
+      ragdollFrozen = false,
+    ) {
       let desired: HumanLocomotionMode;
-      if (!grounded && jumpAction) {
+      if (ragdollFrozen && jumpAction) {
+        desired = 'jump';
+      } else if (!grounded && jumpAction) {
         desired = 'jump';
       } else if (speed < 0.35) {
         desired = 'idle';
@@ -110,10 +126,15 @@ export function createHumanRigController(
         }
       }
 
-      if (walkAction && activeMode === 'walk') {
+      if (ragdollFrozen && jumpAction) {
+        // Hold limbs slightly splayed while tumbled/downed instead of walking horizontally on the pavement!
+        jumpAction.timeScale = 0.12;
+      } else if (walkAction && activeMode === 'walk') {
         walkAction.timeScale = clamp(speed / 2.9, 0.72, 1.55);
       } else if (runAction && activeMode === 'run') {
         runAction.timeScale = clamp(speed / 7.4, 0.85, 1.45);
+      } else if (jumpAction && activeMode === 'jump') {
+        jumpAction.timeScale = 1.0;
       }
 
       mixer.update(dt);

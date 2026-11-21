@@ -10,16 +10,28 @@ import {
   yawFromDir,
   type AABB,
 } from '../core/math';
+import {
+  applyCarHitToHuman,
+  computeTumblePivotY,
+  resolveCircleOrientedCar,
+  stepHumanRagdollPhysics,
+  type HumanBodyPhysics,
+  type HumanRagdollMode,
+} from '../core/physics';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
 import { createHumanRigController, type HumanRigController } from './humanRig';
+import type { PedestrianState } from './pedestrians';
+import type { TrafficCarState } from './traffic';
 import type { VehicleState } from './vehicle';
 
-export interface PlayerState {
+export interface PlayerState extends HumanBodyPhysics {
   x: number;
   y: number;
   z: number;
+  vx: number;
   vy: number;
+  vz: number;
   yaw: number;
   speed: number;
   grounded: boolean;
@@ -27,6 +39,15 @@ export interface PlayerState {
   walkPhase: number;
   vehicleId: string | null;
   walkedMeters: number;
+  ragdollMode: HumanRagdollMode;
+  ragdollTimer: number;
+  fallPitch: number;
+  fallRoll: number;
+  angVelPitch: number;
+  angVelRoll: number;
+  angVelYaw: number;
+  lastImpactSpeed: number;
+  lastImpactKind: 'none' | 'bump' | 'body';
 }
 
 export interface FootMoveInput {
@@ -55,12 +76,26 @@ export interface CharacterPose {
 }
 
 export function createInitialPlayerState(startingVehicle: VehicleState | null): PlayerState {
+  const basePhysics = {
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    ragdollMode: 'normal' as HumanRagdollMode,
+    ragdollTimer: 0,
+    fallPitch: 0,
+    fallRoll: 0,
+    angVelPitch: 0,
+    angVelRoll: 0,
+    angVelYaw: 0,
+    lastImpactSpeed: 0,
+    lastImpactKind: 'none' as const,
+  };
   if (startingVehicle) {
     return {
+      ...basePhysics,
       x: startingVehicle.x,
       y: startingVehicle.y,
       z: startingVehicle.z,
-      vy: 0,
       yaw: startingVehicle.yaw,
       speed: 0,
       grounded: true,
@@ -71,10 +106,10 @@ export function createInitialPlayerState(startingVehicle: VehicleState | null): 
     };
   }
   return {
+    ...basePhysics,
     x: 155,
     y: getGroundHeight(155, 28),
     z: 28,
-    vy: 0,
     yaw: 0,
     speed: 0,
     grounded: true,
@@ -91,8 +126,21 @@ export function stepPlayerOnFoot(
   dt: number,
   colliders: AABB[],
   vehicles: VehicleState[],
+  trafficCars: TrafficCarState[] = [],
+  pedestrians: PedestrianState[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
+  p.lastImpactSpeed = 0;
+  p.lastImpactKind = 'none';
+
+  // If player was knocked airborne, downed, or getting back up, realistic ragdoll physics drives motion
+  const ragdollLocked = stepHumanRagdollPhysics(p, safeDt, colliders, true);
+  if (ragdollLocked) {
+    p.grounded = p.ragdollMode !== 'airborne';
+    p.speed = Math.hypot(p.vx, p.vz);
+    p.sprinting = false;
+    return;
+  }
 
   const camFwd = forwardFromYaw(input.cameraYaw);
   const camRight = rightFromYaw(input.cameraYaw);
@@ -101,8 +149,9 @@ export function stepPlayerOnFoot(
   let moveZ = camFwd.z * input.forward + camRight.z * input.right;
   const moveLen = Math.hypot(moveX, moveZ);
 
-  const maxSpeed = input.sprint ? 12.2 : 6.4;
-  p.sprinting = input.sprint && moveLen > 0.1;
+  const stumbleDamp = p.ragdollMode === 'stumble' ? 0.55 : 1.0;
+  const maxSpeed = (input.sprint ? 12.2 : 6.4) * stumbleDamp;
+  p.sprinting = input.sprint && moveLen > 0.1 && p.ragdollMode === 'normal';
 
   if (moveLen > 0.05) {
     moveX /= moveLen;
@@ -117,10 +166,16 @@ export function stepPlayerOnFoot(
 
   const prevX = p.x;
   const prevZ = p.z;
-  let nextX = p.x + moveX * p.speed * safeDt;
-  let nextZ = p.z + moveZ * p.speed * safeDt;
+  const desiredVx = moveX * p.speed + (p.ragdollMode === 'stumble' ? p.vx * 0.45 : 0);
+  const desiredVz = moveZ * p.speed + (p.ragdollMode === 'stumble' ? p.vz * 0.45 : 0);
+  if (p.ragdollMode === 'normal') {
+    p.vx = desiredVx;
+    p.vz = desiredVz;
+  }
+  let nextX = p.x + desiredVx * safeDt;
+  let nextZ = p.z + desiredVz * safeDt;
 
-  const radius = 0.55;
+  const radius = 0.46;
   for (const box of colliders) {
     const res = resolveCircleAABB(nextX, nextZ, radius, box);
     if (res.hit) {
@@ -129,16 +184,93 @@ export function stepPlayerOnFoot(
     }
   }
 
+  // Solid oriented hull collisions + moving-car knockback against ALL parked/coasting player vehicles
+  p.x = nextX;
+  p.z = nextZ;
   for (const v of vehicles) {
-    const d = distXZ(nextX, nextZ, v.x, v.z);
-    const minDist = 1.95;
-    if (d < minDist && d > 1e-4) {
-      const push = minDist - d;
-      nextX += ((nextX - v.x) / d) * push;
-      nextZ += ((nextZ - v.z) / d) * push;
+    const hit = resolveCircleOrientedCar(p.x, p.z, radius, v);
+    if (hit.hit) {
+      applyCarHitToHuman(p, v, hit, true);
     }
   }
 
+  // Solid oriented hull collisions + moving-car knockdowns against ALL AI street traffic cars!
+  for (const tc of trafficCars) {
+    const tcHull = {
+      x: tc.x,
+      z: tc.z,
+      yaw: tc.yaw,
+      vx: tc.vx,
+      vz: tc.vz,
+      halfWidth: 1.04,
+      halfLength: 2.24,
+    };
+    const hit = resolveCircleOrientedCar(p.x, p.z, radius, tcHull);
+    if (hit.hit) {
+      const impact = applyCarHitToHuman(p, tcHull, hit, true);
+      if (impact > 2.2) {
+        // Traffic driver slams brakes on impact
+        tc.speed *= 0.35;
+      }
+    }
+  }
+
+  // Solid shoulder-to-shoulder & sprint-tackle collisions with ALL sidewalk pedestrians!
+  const pedMinDist = 0.86;
+  for (const ped of pedestrians) {
+    if (ped.ragdollMode === 'airborne' && ped.y > p.y + 1.4) continue;
+    const dx = p.x - ped.x;
+    const dz = p.z - ped.z;
+    const dSq = dx * dx + dz * dz;
+    if (dSq < pedMinDist * pedMinDist && dSq > 1e-6) {
+      const d = Math.sqrt(dSq);
+      const nx = dx / d; // points from pedestrian -> player
+      const nz = dz / d;
+      const overlap = pedMinDist - d;
+
+      // Separate both bodies cleanly so you can NEVER walk through someone
+      p.x += nx * overlap * 0.52;
+      p.z += nz * overlap * 0.52;
+      ped.x -= nx * overlap * 0.48;
+      ped.z -= nz * overlap * 0.48;
+
+      // Closing speed of player into pedestrian
+      const closing = -(desiredVx - ped.vx) * nx - (desiredVz - ped.vz) * nz;
+      if (closing > 1.4 && ped.ragdollMode !== 'airborne' && ped.ragdollMode !== 'downed') {
+        p.lastImpactSpeed = Math.max(p.lastImpactSpeed, closing);
+        if (closing >= 8.2 && p.sprinting) {
+          // Full-speed sprint shoulder-tackle knocks the pedestrian off their feet!
+          ped.vx = -nx * clamp(closing * 0.85, 5.5, 11.5);
+          ped.vz = -nz * clamp(closing * 0.85, 5.5, 11.5);
+          ped.vy = 2.6;
+          ped.ragdollMode = 'airborne';
+          ped.ragdollTimer = 1.45;
+          ped.angVelPitch = 4.6;
+          ped.angVelRoll = (Math.sin(ped.id * 3.1) >= 0 ? 1 : -1) * 2.2;
+          ped.angVelYaw = 2.5;
+          ped.lastImpactSpeed = closing;
+          ped.lastImpactKind = 'body';
+          p.speed *= 0.48;
+          p.lastImpactKind = 'body';
+        } else {
+          // Realistic shoulder bump / stumble recoil
+          ped.vx = -nx * clamp(closing * 0.95, 2.2, 5.6);
+          ped.vz = -nz * clamp(closing * 0.95, 2.2, 5.6);
+          ped.ragdollMode = 'stumble';
+          ped.ragdollTimer = 0.48;
+          ped.fallPitch = -clamp(closing * 0.055, 0.14, 0.36);
+          ped.fallRoll = (Math.sin(ped.id * 5.7) >= 0 ? 1 : -1) * 0.18;
+          ped.lastImpactSpeed = closing;
+          ped.lastImpactKind = 'bump';
+          p.speed *= 0.72;
+          p.lastImpactKind = 'bump';
+        }
+      }
+    }
+  }
+
+  nextX = p.x;
+  nextZ = p.z;
   if (isDeepWater(nextX, nextZ)) {
     if (!isDeepWater(nextX, prevZ)) {
       nextZ = prevZ;
@@ -154,11 +286,13 @@ export function stepPlayerOnFoot(
   p.z = nextZ;
 
   const groundY = getGroundHeight(p.x, p.z);
-  if (p.grounded && input.jump) {
+  if (p.grounded && input.jump && p.ragdollMode === 'normal') {
     p.vy = 8.4;
     p.grounded = false;
   }
-  if (p.grounded) {
+  if (p.ragdollMode === 'airborne') {
+    p.grounded = false;
+  } else if (p.grounded) {
     // Smoothly step up/down curbs, ramps, and boardwalk edges without sinking into geometry
     p.y = lerp(p.y, groundY, clamp(safeDt * 24, 0, 1));
     if (Math.abs(p.y - groundY) < 0.015) p.y = groundY;
@@ -353,8 +487,14 @@ export interface PlayerMeshHandles {
  */
 export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   const root = new THREE.Group();
+  // Center-of-mass tumble pivot (y = 0.92m) so airborne spins & downed poses lie flush on the ground
+  const tumblePivot = new THREE.Group();
+  tumblePivot.position.y = 0.92;
+  root.add(tumblePivot);
+
   const body = new THREE.Group();
-  root.add(body);
+  body.position.y = -0.92;
+  tumblePivot.add(body);
 
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xdca581, roughness: 0.58 });
   const shirtMat = new THREE.MeshStandardMaterial({ color: 0xe64878, roughness: 0.78 });
@@ -609,13 +749,14 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
 
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
     body.visible = false;
+    model.position.y = -0.92;
     model.traverse((obj) => {
       if (obj instanceof THREE.Mesh && obj.visible) {
         obj.castShadow = true;
         obj.receiveShadow = true;
       }
     });
-    root.add(model);
+    tumblePivot.add(model);
     humanRig = createHumanRigController(model, animations);
   };
 
@@ -626,9 +767,12 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     if (!root.visible) return;
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
+    tumblePivot.position.y = computeTumblePivotY(s.fallPitch, s.fallRoll, s.ragdollMode);
+    tumblePivot.rotation.set(s.fallPitch, 0, s.fallRoll);
 
+    const ragdollFrozen = s.ragdollMode === 'airborne' || s.ragdollMode === 'downed';
     if (humanRig) {
-      humanRig.update(dt, s.speed, s.sprinting, s.grounded, elapsed);
+      humanRig.update(dt, s.speed, s.sprinting, s.grounded, elapsed, ragdollFrozen);
       return;
     }
 

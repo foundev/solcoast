@@ -324,4 +324,96 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       );
     }
   });
+
+  it('resolves realistic solid collisions, hood launches, tumbles, slides, and recovery for people & cars', () => {
+    // 1. High-speed car hitting a pedestrian launches them realistically -> airborne -> downed -> recovering -> normal
+    const car = createVehicleState(DEFAULT_VEHICLES[0]);
+    car.x = 140;
+    car.z = 20;
+    car.yaw = 0; // heading North (-Z)
+    car.vx = 0;
+    car.vz = -18;
+    car.speed = 18;
+
+    const peds = createPedestrians(1);
+    const ped = peds[0];
+    ped.x = 140;
+    ped.z = 17.6; // right in front of bumper
+    ped.y = 0;
+
+    stepPedestrians(peds, [car], 1 / 60, [], blueprint.colliders);
+    expect(ped.ragdollMode).toBe('airborne');
+    expect(ped.vy).toBeGreaterThan(3);
+    expect(ped.vz).toBeLessThan(-10);
+    expect(car.lastCollisionImpact).toBeGreaterThan(2);
+
+    // Park the car and simulate 6 seconds so the pedestrian arcs, lands, slides, recovers, and stands back up!
+    car.vx = 0;
+    car.vz = 0;
+    car.speed = 0;
+    let sawDowned = false;
+    let sawRecovering = false;
+    let maxAirY = 0;
+    for (let i = 0; i < 360; i++) {
+      stepPedestrians(peds, [car], 1 / 60, [], blueprint.colliders);
+      maxAirY = Math.max(maxAirY, ped.y);
+      if (ped.ragdollMode === 'downed') sawDowned = true;
+      if (ped.ragdollMode === 'recovering') sawRecovering = true;
+    }
+    expect(maxAirY).toBeGreaterThan(0.5);
+    expect(sawDowned).toBe(true);
+    expect(sawRecovering).toBe(true);
+    expect(ped.ragdollMode).toBe('normal');
+
+    // 2. Player on foot cannot walk through a pedestrian (solid separation + stumble/tackle!)
+    const player = createInitialPlayerState(null);
+    player.x = 140;
+    player.z = 50;
+    player.y = 0;
+    player.speed = 11.5;
+    player.sprinting = true;
+
+    const bystander = createPedestrians(1)[0];
+    bystander.x = 140;
+    bystander.z = 49.4; // overlapping ahead
+    bystander.y = 0;
+
+    stepPlayerOnFoot(
+      player,
+      { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 },
+      1 / 60,
+      blueprint.colliders,
+      [],
+      [],
+      [bystander],
+    );
+    expect(Math.hypot(player.x - bystander.x, player.z - bystander.z)).toBeGreaterThanOrEqual(0.8);
+    expect(bystander.ragdollMode === 'airborne' || bystander.ragdollMode === 'stumble').toBe(true);
+
+    // 3. Moving traffic car hitting the player on foot knocks the player airborne & tumbles!
+    const walker = createInitialPlayerState(null);
+    walker.x = 140;
+    walker.z = 0;
+    walker.y = 0;
+    const traffic = createTrafficCars(blueprint.trafficNodes, 1);
+    traffic[0].x = 140;
+    traffic[0].z = 2.0;
+    traffic[0].yaw = 0; // heading North (-Z)
+    traffic[0].vx = 0;
+    traffic[0].vz = -14;
+    traffic[0].speed = 14;
+
+    stepPlayerOnFoot(
+      walker,
+      { forward: 0, right: 0, sprint: false, jump: false, cameraYaw: 0 },
+      1 / 60,
+      blueprint.colliders,
+      [],
+      traffic,
+      [],
+    );
+    expect(walker.ragdollMode).toBe('airborne');
+    expect(walker.vy).toBeGreaterThan(3);
+    expect(walker.vz).toBeLessThan(-8);
+  });
 });

@@ -1,12 +1,21 @@
 import * as THREE from 'three';
-import { clamp, createRng, distXZ, lerpAngle, yawFromDir } from '../core/math';
+import { clamp, createRng, distXZ, lerpAngle, yawFromDir, type AABB } from '../core/math';
+import {
+  applyCarHitToHuman,
+  computeTumblePivotY,
+  resolveCircleOrientedCar,
+  stepHumanRagdollPhysics,
+  type HumanBodyPhysics,
+  type HumanRagdollMode,
+} from '../core/physics';
 import type { ClonedPerson } from '../world/assets';
 import { getGroundHeight } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
 import { createHumanRigController, type HumanRigController } from './humanRig';
+import type { TrafficCarState } from './traffic';
 import type { VehicleState } from './vehicle';
 
-export interface PedestrianState {
+export interface PedestrianState extends HumanBodyPhysics {
   id: number;
   routeIndex: number;
   /** Unique deterministic appearance index guaranteed never to collide with neighbors on the same route */
@@ -14,12 +23,24 @@ export interface PedestrianState {
   x: number;
   y: number;
   z: number;
+  vx: number;
+  vy: number;
+  vz: number;
   yaw: number;
   speed: number;
   walkPhase: number;
   waypoints: { x: number; z: number }[];
   wpIndex: number;
   dir: 1 | -1;
+  ragdollMode: HumanRagdollMode;
+  ragdollTimer: number;
+  fallPitch: number;
+  fallRoll: number;
+  angVelPitch: number;
+  angVelRoll: number;
+  angVelYaw: number;
+  lastImpactSpeed: number;
+  lastImpactKind: 'none' | 'bump' | 'body';
 }
 
 // 18 scenic pedestrian stroll corridors spanning ALL 11 Sol Coast districts!
@@ -202,12 +223,24 @@ export function createPedestrians(count = 72): PedestrianState[] {
       x,
       y: getGroundHeight(x, z),
       z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
       yaw: yawFromDir(b.x - a.x, b.z - a.z),
       speed: 1.35 + rng() * 0.55,
       walkPhase: rng() * Math.PI * 2,
       waypoints: route,
       wpIndex: nextIdx,
       dir: slotOnRoute % 2 === 0 ? 1 : -1,
+      ragdollMode: 'normal',
+      ragdollTimer: 0,
+      fallPitch: 0,
+      fallRoll: 0,
+      angVelPitch: 0,
+      angVelRoll: 0,
+      angVelYaw: 0,
+      lastImpactSpeed: 0,
+      lastImpactKind: 'none',
     });
   }
 
@@ -218,11 +251,60 @@ export function stepPedestrians(
   peds: PedestrianState[],
   vehicles: VehicleState[],
   dt: number,
+  trafficCars: TrafficCarState[] = [],
+  colliders: AABB[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
+  const pedRadius = 0.44;
 
   for (let i = 0; i < peds.length; i++) {
     const p = peds[i];
+    p.lastImpactSpeed = 0;
+    p.lastImpactKind = 'none';
+
+    // 1. Check solid oriented vehicle collisions against player vehicles & AI traffic cars!
+    for (const v of vehicles) {
+      if (p.ragdollMode === 'airborne' && p.y > v.y + 2.0) continue;
+      const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, v);
+      if (hit.hit) {
+        const impact = applyCarHitToHuman(p, v, hit, false);
+        if (impact > 2.0) {
+          // Subtle realistic momentum absorption & suspension dip on the hitting car
+          const damp = clamp(1 - impact * 0.0035, 0.9, 0.99);
+          v.vx *= damp;
+          v.vz *= damp;
+          v.pitchTilt = clamp(v.pitchTilt + 0.018, -0.065, 0.065);
+          v.lastCollisionImpact = Math.max(v.lastCollisionImpact, impact * 0.65);
+        }
+      }
+    }
+
+    for (const tc of trafficCars) {
+      if (p.ragdollMode === 'airborne' && p.y > tc.y + 2.0) continue;
+      const tcHull = {
+        x: tc.x,
+        z: tc.z,
+        yaw: tc.yaw,
+        vx: tc.vx,
+        vz: tc.vz,
+        halfWidth: 1.04,
+        halfLength: 2.24,
+      };
+      const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, tcHull);
+      if (hit.hit) {
+        const impact = applyCarHitToHuman(p, tcHull, hit, false);
+        if (impact > 2.0) {
+          tc.speed *= 0.4;
+        }
+      }
+    }
+
+    // 2. If stumbling, airborne, downed, or recovering, run 3D physics tumble/slide/recovery!
+    if (stepHumanRagdollPhysics(p, safeDt, colliders, false)) {
+      continue;
+    }
+
+    // 3. Normal strolling locomotion along route with calm sidestep & personal-space separation
     const target = p.waypoints[p.wpIndex];
     let dx = target.x - p.x;
     let dz = target.z - p.z;
@@ -237,16 +319,18 @@ export function stepPedestrians(
       p.wpIndex = next;
     }
 
-    // Step aside calmly if a vehicle approaches close
+    // Step aside calmly if a slow vehicle creeps near (fast cars connect realistically!)
     let avoidX = 0;
     let avoidZ = 0;
     let speedBoost = 1.0;
     for (const v of vehicles) {
+      const carSpd = Math.hypot(v.vx, v.vz);
+      if (carSpd > 14) continue; // Too fast to magically teleport out of the way
       const d = distXZ(p.x, p.z, v.x, v.z);
-      if (d < 6.5 && d > 0.01) {
-        avoidX += ((p.x - v.x) / d) * 3.5;
-        avoidZ += ((p.z - v.z) / d) * 3.5;
-        speedBoost = 1.75;
+      if (d < 5.0 && d > 0.01) {
+        avoidX += ((p.x - v.x) / d) * 2.2;
+        avoidZ += ((p.z - v.z) / d) * 2.2;
+        speedBoost = 1.45;
       }
     }
 
@@ -273,8 +357,10 @@ export function stepPedestrians(
       dz /= len;
 
       const curSpeed = p.speed * speedBoost;
-      p.x += dx * curSpeed * safeDt;
-      p.z += dz * curSpeed * safeDt;
+      p.vx = dx * curSpeed;
+      p.vz = dz * curSpeed;
+      p.x += p.vx * safeDt;
+      p.z += p.vz * safeDt;
       p.y = getGroundHeight(p.x, p.z);
       p.yaw = lerpAngle(p.yaw, yawFromDir(dx, dz), clamp(safeDt * 8, 0, 1));
       p.walkPhase += curSpeed * safeDt * 2.1;
@@ -289,14 +375,15 @@ export interface PedestrianRenderer {
 
 interface PedInstance {
   root: THREE.Group;
+  tumblePivot: THREE.Group;
   variantIndex: number;
   rig: HumanRigController | null;
 }
 
 /**
  * Renders 70+ varied locals across all 11 districts using styled Ready Player Me
- * civilian avatars driven by 4 distinct studio optical mocap walk clips.
- * Strict 85m distance culling keeps GPU skinning fast at 60-120 FPS.
+ * civilian avatars driven by 4 distinct studio optical mocap walk clips, with
+ * center-of-mass tumble pivots for realistic knockdowns and ground slides.
  */
 export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Scene): PedestrianRenderer {
   const container = new THREE.Group();
@@ -316,8 +403,13 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
     pedRoot.position.set(p.x, p.y, p.z);
     pedRoot.rotation.y = -p.yaw;
     pedRoot.visible = false;
+
+    const tumblePivot = new THREE.Group();
+    tumblePivot.position.y = 0.92;
+    pedRoot.add(tumblePivot);
+
     container.add(pedRoot);
-    instances.push({ root: pedRoot, variantIndex: p.variantIndex, rig: null });
+    instances.push({ root: pedRoot, tumblePivot, variantIndex: p.variantIndex, rig: null });
   }
   scene.add(container);
 
@@ -330,6 +422,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         const cloned = clonePerson(inst.variantIndex);
         if (!cloned) continue;
 
+        cloned.scene.position.y = -0.92;
         cloned.scene.traverse((obj) => {
           if (obj instanceof THREE.Mesh) {
             obj.castShadow = false;
@@ -340,7 +433,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         const shadow = new THREE.Mesh(shadowGeo, shadowMat);
         shadow.position.y = 0.03;
         inst.root.add(shadow);
-        inst.root.add(cloned.scene);
+        inst.tumblePivot.add(cloned.scene);
 
         const rig = createHumanRigController(
           cloned.scene,
@@ -369,7 +462,12 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         inst.root.visible = true;
         inst.root.position.set(p.x, p.y, p.z);
         inst.root.rotation.y = -p.yaw;
-        inst.rig.update(dt, p.speed * 2.4, false, true, elapsedAccum + i);
+        inst.tumblePivot.position.y = computeTumblePivotY(p.fallPitch, p.fallRoll, p.ragdollMode);
+        inst.tumblePivot.rotation.set(p.fallPitch, 0, p.fallRoll);
+
+        const ragdollFrozen = p.ragdollMode === 'airborne' || p.ragdollMode === 'downed';
+        const animSpeed = p.ragdollMode === 'normal' ? p.speed * 2.4 : p.ragdollMode === 'recovering' ? 0.1 : 1.0;
+        inst.rig.update(dt, animSpeed, false, p.ragdollMode !== 'airborne', elapsedAccum + i, ragdollFrozen);
       }
     },
   };

@@ -13,6 +13,7 @@ export class SoundEngine {
   private hornOscA: OscillatorNode | null = null;
   private hornOscB: OscillatorNode | null = null;
   private hornGain: GainNode | null = null;
+  private lastImpactTime = 0;
   public enabled = true;
 
   public unlock(): void {
@@ -179,5 +180,67 @@ export class SoundEngine {
       osc.start(t0);
       osc.stop(t0 + 0.26);
     });
+  }
+
+  /**
+   * Realistic synthesized impact audio for shoulder bumps, car-hits-person thuds,
+   * and metallic vehicle fender-bender collisions. Cooldown-gated to prevent audio clipping.
+   */
+  public playImpact(kind: 'bump' | 'body' | 'car', intensity = 0.6): void {
+    if (!this.ctx || !this.enabled) return;
+    if (this.ctx.state === 'suspended') {
+      void this.ctx.resume();
+    }
+    const now = this.ctx.currentTime;
+    if (now - this.lastImpactTime < 0.085) return;
+    this.lastImpactTime = now;
+
+    const strength = clamp(intensity, 0.15, 1.0);
+
+    // Low-end kinetic thump (sine pitch-drop)
+    const thump = this.ctx.createOscillator();
+    const thumpGain = this.ctx.createGain();
+    thump.type = kind === 'car' ? 'triangle' : 'sine';
+    const startHz = kind === 'car' ? 145 : kind === 'body' ? 120 : 95;
+    const endHz = kind === 'car' ? 36 : 30;
+    thump.frequency.setValueAtTime(startHz, now);
+    thump.frequency.exponentialRampToValueAtTime(endHz, now + 0.14);
+
+    const vol = (kind === 'bump' ? 0.14 : kind === 'body' ? 0.24 : 0.28) * strength;
+    thumpGain.gain.setValueAtTime(0.001, now);
+    thumpGain.gain.linearRampToValueAtTime(vol, now + 0.008);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0008, now + (kind === 'car' ? 0.22 : 0.16));
+
+    thump.connect(thumpGain);
+    thumpGain.connect(this.ctx.destination);
+    thump.start(now);
+    thump.stop(now + 0.24);
+
+    // Brief filtered noise crunch for car metal or heavy body knockdowns
+    if (kind === 'car' || kind === 'body') {
+      const dur = kind === 'car' ? 0.18 : 0.1;
+      const samples = Math.floor(this.ctx.sampleRate * dur);
+      const buf = this.ctx.createBuffer(1, samples, this.ctx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        ch[i] = (Math.random() * 2 - 1) * (1 - i / samples);
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = kind === 'car' ? 'bandpass' : 'lowpass';
+      filter.frequency.value = kind === 'car' ? 780 : 420;
+      filter.Q.value = kind === 'car' ? 1.4 : 0.9;
+
+      const nGain = this.ctx.createGain();
+      nGain.gain.setValueAtTime((kind === 'car' ? 0.2 : 0.12) * strength, now);
+      nGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+      src.connect(filter);
+      filter.connect(nGain);
+      nGain.connect(this.ctx.destination);
+      src.start(now);
+    }
   }
 }

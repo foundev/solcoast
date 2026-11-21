@@ -14,6 +14,10 @@ export interface TrafficCarState {
   x: number;
   y: number;
   z: number;
+  vx: number;
+  vz: number;
+  impactVx: number;
+  impactVz: number;
   yaw: number;
   speed: number;
   cruiseSpeed: number;
@@ -43,14 +47,19 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
     const progress = rng();
     const pos = lanePosition(from, to, progress);
     const modelKind = TRAFFIC_MODELS[i % TRAFFIC_MODELS.length];
+    const initSpeed = 11 + rng() * 6;
     cars.push({
       id: i,
       modelKind,
       x: pos.x,
       y: getGroundHeight(pos.x, pos.z),
       z: pos.z,
+      vx: Math.sin(pos.yaw) * initSpeed,
+      vz: -Math.cos(pos.yaw) * initSpeed,
+      impactVx: 0,
+      impactVz: 0,
       yaw: pos.yaw,
-      speed: 11 + rng() * 6,
+      speed: initSpeed,
       cruiseSpeed: 12 + rng() * 6,
       color: modelKind === 'taxi' ? 0xf5b81d : TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
       fromNode: fromIdx,
@@ -103,15 +112,32 @@ export function stepTraffic(
       const dist = Math.hypot(dx, dz);
       if (dist < 13 && dx * fx + dz * fz > 0.35 * dist) {
         targetSpeed = 0;
-        break;
       }
-      if (dist < 3.4 && dist > 0.01) {
-        const push = (3.4 - dist) * 0.5;
-        pv.x += (dx / dist) * push;
-        pv.z += (dz / dist) * push;
-        pv.vx *= 0.72;
-        pv.vz *= 0.72;
-        pv.lastCollisionImpact = Math.max(pv.lastCollisionImpact, 8);
+      // Realistic momentum-based car-to-car collision impulse!
+      const minCarDist = 3.55;
+      if (dist < minCarDist && dist > 0.01) {
+        const nx = dx / dist;
+        const nz = dz / dist;
+        const overlap = minCarDist - dist;
+        pv.x += nx * overlap * 0.55;
+        pv.z += nz * overlap * 0.55;
+        car.x -= nx * overlap * 0.45;
+        car.z -= nz * overlap * 0.45;
+
+        const relVx = pv.vx - car.vx;
+        const relVz = pv.vz - car.vz;
+        const relAlongNormal = relVx * nx + relVz * nz;
+        if (relAlongNormal < 0) {
+          const impulse = -relAlongNormal * 0.72;
+          pv.vx += nx * impulse;
+          pv.vz += nz * impulse;
+          pv.vx *= 0.84;
+          pv.vz *= 0.84;
+          car.impactVx -= nx * clamp(impulse * 1.15, 0, 18);
+          car.impactVz -= nz * clamp(impulse * 1.15, 0, 18);
+          car.speed *= 0.4;
+          pv.lastCollisionImpact = Math.max(pv.lastCollisionImpact, Math.abs(relAlongNormal));
+        }
       }
     }
 
@@ -142,9 +168,18 @@ export function stepTraffic(
       car.progress -= 1;
     }
 
+    // Damp post-collision lateral shunt recoil smoothly before returning to lane
+    car.impactVx *= Math.exp(-4.2 * safeDt);
+    car.impactVz *= Math.exp(-4.2 * safeDt);
+    const prevX = car.x;
+    const prevZ = car.z;
+
     const pos = lanePosition(nodes[car.fromNode], nodes[car.toNode], clamp(car.progress, 0, 1));
-    car.x = lerp(car.x, pos.x, clamp(safeDt * 9, 0, 1));
-    car.z = lerp(car.z, pos.z, clamp(safeDt * 9, 0, 1));
+    const lanePull = Math.hypot(car.impactVx, car.impactVz) > 1.2 ? 1.8 : 9.0;
+    car.x = lerp(car.x, pos.x, clamp(safeDt * lanePull, 0, 1)) + car.impactVx * safeDt;
+    car.z = lerp(car.z, pos.z, clamp(safeDt * lanePull, 0, 1)) + car.impactVz * safeDt;
+    car.vx = (car.x - prevX) / safeDt;
+    car.vz = (car.z - prevZ) / safeDt;
     car.y = getGroundHeight(car.x, car.z);
     car.yaw = lerpAngle(car.yaw, pos.yaw, clamp(safeDt * 7, 0, 1));
   }

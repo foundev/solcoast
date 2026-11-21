@@ -379,8 +379,14 @@ function bootstrap(): void {
           player.y = exitPos.y;
           player.z = exitPos.z;
           player.yaw = activeVehicle.yaw;
+          player.vx = 0;
           player.vy = 0;
+          player.vz = 0;
           player.speed = 0;
+          player.ragdollMode = 'normal';
+          player.ragdollTimer = 0;
+          player.fallPitch = 0;
+          player.fallRoll = 0;
           activeVehicle.vx *= 0.2;
           activeVehicle.vz *= 0.2;
           activeVehicle = null;
@@ -437,11 +443,30 @@ function bootstrap(): void {
         dt,
         blueprint.colliders,
         vehicles,
+        trafficCars,
+        pedestrians,
       );
     }
 
     stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt);
-    stepPedestrians(pedestrians, vehicles, dt);
+    stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
+
+    // Trigger realistic impact sound effects for car crashes, car-vs-person knockdowns, and body bumps
+    if (activeVehicle && activeVehicle.lastCollisionImpact > 2.2) {
+      sound.playImpact('car', clamp(activeVehicle.lastCollisionImpact / 18, 0.25, 1.0));
+    } else if (player.lastImpactKind !== 'none' && player.lastImpactSpeed > 1.5) {
+      sound.playImpact(player.lastImpactKind, clamp(player.lastImpactSpeed / 14, 0.2, 1.0));
+    } else {
+      for (const ped of pedestrians) {
+        if (ped.lastImpactKind !== 'none' && ped.lastImpactSpeed > 2.0) {
+          const dSq = (ped.x - player.x) * (ped.x - player.x) + (ped.z - player.z) * (ped.z - player.z);
+          if (dSq < 35 * 35) {
+            sound.playImpact(ped.lastImpactKind, clamp(ped.lastImpactSpeed / 16, 0.2, 1.0));
+            break;
+          }
+        }
+      }
+    }
 
     const missionEvent = missions.update(dt, player.x, player.z, player.vehicleId);
     if (missionEvent) {
