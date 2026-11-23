@@ -109,6 +109,14 @@ export interface StorefrontDef {
   style: 'art-deco-hotel' | 'neon-club' | 'cuban-cafe' | 'modern-gallery';
 }
 
+export interface InteriorPropObb {
+  cx: number;
+  cz: number;
+  halfW: number;
+  halfD: number;
+  rotY: number;
+}
+
 export interface InteriorDef {
   id: InteriorId;
   name: string;
@@ -129,11 +137,14 @@ export interface InteriorDef {
   doorways: InteriorDoorwayDef[];
   /** Auto-generated perimeter & interior partition walls (with doorway cutouts) */
   walls: AABB[];
+  /** Auto-generated exact tight rotated 2D OBB colliders for every floor-standing 3D prop! */
+  propColliders: InteriorPropObb[];
   spawnX: number;
   spawnZ: number;
   spawnYaw: number;
   exitX: number;
   exitZ: number;
+  /** Exact architectural built-in colliders (bars, counters, DJ stage, sculpture plinths) */
   colliders: AABB[];
   props: InteriorPropPlacement[];
   npcs: InteriorNpcDef[];
@@ -223,8 +234,61 @@ function buildWallColliders(rooms: InteriorRoomDef[], doorways: InteriorDoorwayD
   });
 }
 
+// Exact measured floor-standing GLB footprints [widthX, depthZ] in meters (inset ~4-6cm on soft edges/leaves
+// so collisions hug the visible 3D mesh tightly with zero invisible forcefields!)
+const PROP_FOOTPRINTS: Partial<Record<InteriorPropKind, [number, number]>> = {
+  armchair: [0.74, 0.86],
+  art_deco_fountain: [3.05, 3.05],
+  artist_easel: [1.02, 0.84],
+  bar_stool: [0.42, 0.42],
+  bed_suite: [1.44, 1.98],
+  bistro_table: [1.26, 1.26],
+  cabinet: [2.36, 0.48],
+  chalkboard: [0.78, 0.58],
+  coffee_cart: [2.04, 0.98],
+  coffee_table: [0.54, 1.12],
+  console_table: [1.46, 0.52],
+  dining_chair: [0.38, 0.48],
+  dining_table: [2.16, 1.30],
+  display_shelves: [0.34, 1.02],
+  dj_booth_rig: [5.05, 1.00],
+  gallery_bench: [1.10, 0.44],
+  grand_piano: [1.44, 2.48],
+  grandfather_clock: [0.58, 0.40],
+  hotel_reception_desk: [4.95, 1.48],
+  lounge_chair: [0.88, 1.02],
+  metal_shelves: [2.26, 0.66],
+  neon_sculpture_arch: [2.04, 2.04],
+  pastry_display_case: [1.82, 0.82],
+  potted_plant_1: [0.40, 0.40],
+  potted_plant_2: [0.44, 0.44],
+  sofa_club: [1.50, 0.60],
+  sofa_luxury: [2.62, 0.86],
+  stage_lights: [3.40, 1.30],
+};
+
+function buildPropColliders(props: InteriorPropPlacement[]): InteriorPropObb[] {
+  const out: InteriorPropObb[] = [];
+  for (const p of props) {
+    if (p.hangFromCeiling) continue;
+    // Only floor-standing props collide at walking height (tabletop/wall/stage-top props skip)
+    if ((p.y ?? 0) >= 0.45) continue;
+    const fp = PROP_FOOTPRINTS[p.kind];
+    if (!fp) continue;
+    const sc = p.scale ?? 1.0;
+    out.push({
+      cx: p.x,
+      cz: p.z,
+      halfW: fp[0] * sc * 0.5,
+      halfD: fp[1] * sc * 0.5,
+      rotY: p.rotY ?? 0,
+    });
+  }
+  return out;
+}
+
 function makeVenue(
-  raw: Omit<InteriorDef, 'minX' | 'maxX' | 'minZ' | 'maxZ' | 'walls'>,
+  raw: Omit<InteriorDef, 'minX' | 'maxX' | 'minZ' | 'maxZ' | 'walls' | 'propColliders'>,
 ): InteriorDef {
   const minX = Math.min(...raw.rooms.map((r) => r.minX));
   const maxX = Math.max(...raw.rooms.map((r) => r.maxX));
@@ -237,6 +301,7 @@ function makeVenue(
     minZ,
     maxZ,
     walls: buildWallColliders(raw.rooms, raw.doorways),
+    propColliders: buildPropColliders(raw.props),
   };
 }
 
@@ -352,27 +417,8 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'z', coord: -2, min: -2.8, max: 2.8, height: 3.8, frameColor: 0xd9a84e },
     ],
     colliders: [
-      // Atrium scalloped brass reception desk
-      { minX: -8.6, maxX: -3.2, minZ: 1.5, maxZ: 3.3, minY: 0, maxY: 1.5 },
-      // Atrium central 3-tier Art Deco marble & gold fountain
-      { minX: -1.6, maxX: 1.6, minZ: 2.6, maxZ: 5.8, minY: 0, maxY: 2.6 },
-      // Atrium concert grand piano & bench
-      { minX: 4.8, maxX: 7.4, minZ: 0.2, maxZ: 3.0, minY: 0, maxY: 1.8 },
-      // Atrium west & east lounge islands
-      { minX: -8.1, maxX: -3.5, minZ: 5.9, maxZ: 9.0, minY: 0, maxY: 1.2 },
-      { minX: 3.5, maxX: 8.1, minZ: 5.9, maxZ: 9.0, minY: 0, maxY: 1.2 },
-      // Ocean Cocktail Lounge mahogany bar counter
-      { minX: 19.6, maxX: 21.4, minZ: -1.8, maxZ: 7.6, minY: 0, maxY: 1.5 },
-      // Lounge VIP booth (north)
-      { minX: 11.4, maxX: 16.5, minZ: -3.4, maxZ: -0.4, minY: 0, maxY: 1.2 },
-      // Lounge VIP booth (south)
-      { minX: 11.4, maxX: 16.5, minZ: 6.8, maxZ: 9.4, minY: 0, maxY: 1.2 },
-      // Penthouse Suite king bed
-      { minX: -1.6, maxX: 1.6, minZ: -14.6, maxZ: -11.0, minY: 0, maxY: 1.6 },
-      // Penthouse Suite west reading group
-      { minX: -8.2, maxX: -4.4, minZ: -12.0, maxZ: -7.5, minY: 0, maxY: 1.2 },
-      // Penthouse Suite east credenza
-      { minX: 5.2, maxX: 8.4, minZ: -12.5, maxZ: -7.5, minY: 0, maxY: 1.2 },
+      // Ocean Cocktail Lounge mahogany bar counter (exact mesh bounds: 1.85x9.4 centered at 20.5, 2.9)
+      { minX: 19.58, maxX: 21.42, minZ: -1.8, maxZ: 7.6, minY: 0, maxY: 1.2 },
     ],
     props: [
       // Grand Atrium — custom Blender Art Deco hero models (rotY=0 faces +Z lobby!) + Poly Haven furniture
@@ -600,17 +646,10 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'x', coord: -12, min: -3.5, max: 2.5, height: 3.6, frameColor: 0x1a1430, accentNeon: 0x2cf3ff },
     ],
     colliders: [
-      // Foyer coat check cabinet
-      { minX: 2.4, maxX: 3.9, minZ: 11.4, maxZ: 15.2, minY: 0, maxY: 1.6 },
-      // Elevated DJ Stage (North)
-      { minX: -5.8, maxX: 5.8, minZ: -11.5, maxZ: -6.8, minY: 0, maxY: 3.0 },
-      // East Dance Hall VIP Banquettes
-      { minX: 8.6, maxX: 11.8, minZ: -5.5, maxZ: 5.5, minY: 0, maxY: 1.4 },
-      // VIP Lounge Neon Bar Counter (West)
-      { minX: -22.2, maxX: -20.4, minZ: -6.2, maxZ: 4.2, minY: 0, maxY: 1.6 },
-      // VIP Lounge Seating Pods
-      { minX: -18.0, maxX: -13.6, minZ: -8.2, maxZ: -5.0, minY: 0, maxY: 1.3 },
-      { minX: -18.0, maxX: -13.6, minZ: 3.4, maxZ: 6.4, minY: 0, maxY: 1.3 },
+      // Elevated DJ Stage (exact mesh bounds: 11.4x4.4 centered at 0, -9.2)
+      { minX: -5.7, maxX: 5.7, minZ: -11.4, maxZ: -7.0, minY: 0, maxY: 3.0 },
+      // VIP Lounge Neon Bar Counter (exact mesh bounds: 1.85x10.4 centered at -21.3, -1.0)
+      { minX: -22.22, maxX: -20.38, minZ: -6.2, maxZ: 4.2, minY: 0, maxY: 1.2 },
     ],
     props: [
       // Foyer
@@ -833,21 +872,10 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'z', coord: 0, min: 2.0, max: 6.2, height: 3.2, frameColor: 0x6b4128 },
     ],
     colliders: [
-      // Espresso & pastry bar counter
-      { minX: -6.8, maxX: -1.4, minZ: 2.2, maxZ: 4.2, minY: 0, maxY: 1.4 },
-      // Curved glass bakery pastry display vitrine
-      { minX: -0.9, maxX: 1.3, minZ: 2.3, maxZ: 3.7, minY: 0, maxY: 1.6 },
-      // Front bistro table (right of door)
-      { minX: 3.2, maxX: 5.4, minZ: 7.4, maxZ: 9.6, minY: 0, maxY: 1.1 },
-      // Conservatory dining tables
-      { minX: 11.2, maxX: 14.4, minZ: 0.4, maxZ: 2.8, minY: 0, maxY: 1.1 },
-      { minX: 16.8, maxX: 19.8, minZ: 0.4, maxZ: 2.8, minY: 0, maxY: 1.1 },
-      { minX: 11.6, maxX: 14.0, minZ: 6.6, maxZ: 9.0, minY: 0, maxY: 1.1 },
-      { minX: 16.8, maxX: 19.2, minZ: 6.6, maxZ: 9.0, minY: 0, maxY: 1.1 },
-      // Kitchen stainless prep island
-      { minX: -3.2, maxX: 1.4, minZ: -6.2, maxZ: -4.4, minY: 0, maxY: 1.4 },
-      // Kitchen coffee roaster cart
-      { minX: -7.2, maxX: -4.4, minZ: -9.0, maxZ: -6.8, minY: 0, maxY: 1.8 },
+      // Espresso & pastry bar counter (exact mesh bounds: 5.4x2.0 centered at -4.1, 3.2)
+      { minX: -6.8, maxX: -1.4, minZ: 2.2, maxZ: 4.2, minY: 0, maxY: 1.2 },
+      // Kitchen stainless prep island (exact mesh bounds: 4.4x1.6 centered at -0.9, -5.3)
+      { minX: -3.1, maxX: 1.3, minZ: -6.1, maxZ: -4.5, minY: 0, maxY: 1.1 },
     ],
     props: [
       // Espresso Bar & Bakery — custom Blender 3-group espresso machine & glass pastry vitrine facing customers (+Z)!
@@ -1049,16 +1077,13 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'z', coord: -6, min: -2.8, max: 2.8, height: 3.8, frameColor: 0x2b2e38 },
     ],
     colliders: [
-      // Atrium central sculpture plinth
-      { minX: -2.4, maxX: 2.4, minZ: -0.6, maxZ: 2.8, minY: 0, maxY: 2.4 },
-      // Atrium curator desk
-      { minX: 5.4, maxX: 8.6, minZ: 4.8, maxZ: 6.4, minY: 0, maxY: 1.4 },
-      // Darkroom central monolith cluster
-      { minX: -18.8, maxX: -16.2, minZ: -1.6, maxZ: 1.6, minY: 0, maxY: 4.2 },
-      // Studio loft worktable
-      { minX: -6.8, maxX: -3.2, minZ: -13.8, maxZ: -11.4, minY: 0, maxY: 1.2 },
-      // Studio loft chill sofa nook
-      { minX: 4.4, maxX: 8.8, minZ: -16.8, maxZ: -12.4, minY: 0, maxY: 1.3 },
+      // Atrium central sculpture plinth (exact mesh bounds: 4.6x3.2 centered at 0, 1.1)
+      { minX: -2.3, maxX: 2.3, minZ: -0.5, maxZ: 2.7, minY: 0, maxY: 2.4 },
+      // Darkroom 4 glowing neon monolith columns (exact 0.45x0.45 columns)
+      { minX: -15.05, maxX: -14.55, minZ: -4.85, maxZ: -4.35, minY: 0, maxY: 4.2 },
+      { minX: -21.05, maxX: -20.55, minZ: -4.65, maxZ: -4.15, minY: 0, maxY: 4.2 },
+      { minX: -15.05, maxX: -14.55, minZ: 4.35, maxZ: 4.85, minY: 0, maxY: 4.2 },
+      { minX: -21.05, maxX: -20.55, minZ: 4.15, maxZ: 4.65, minY: 0, maxY: 4.2 },
     ],
     props: [
       // Main White-Cube Atrium
@@ -1205,6 +1230,55 @@ function isPointInsideVenueFloor(def: InteriorDef, x: number, z: number, margin 
   return false;
 }
 
+function resolveCircleOBB(
+  px: number,
+  pz: number,
+  radius: number,
+  obb: InteriorPropObb,
+): { hit: boolean; dx: number; dz: number } {
+  const cos = Math.cos(obb.rotY);
+  const sin = Math.sin(obb.rotY);
+  const relX = px - obb.cx;
+  const relZ = pz - obb.cz;
+
+  // Transform player into OBB local frame (inverse of Three.js Y-rotation)
+  const lx = relX * cos - relZ * sin;
+  const lz = relX * sin + relZ * cos;
+
+  const clx = clamp(lx, -obb.halfW, obb.halfW);
+  const clz = clamp(lz, -obb.halfD, obb.halfD);
+  const dlx = lx - clx;
+  const dlz = lz - clz;
+  const dSq = dlx * dlx + dlz * dlz;
+
+  if (dSq >= radius * radius) return { hit: false, dx: 0, dz: 0 };
+
+  let plx = 0;
+  let plz = 0;
+  if (dSq > 1e-6) {
+    const d = Math.sqrt(dSq);
+    const push = radius - d;
+    plx = (dlx / d) * push;
+    plz = (dlz / d) * push;
+  } else {
+    // Center inside OBB: push out along shallowest axis
+    const penX = obb.halfW - Math.abs(lx) + radius;
+    const penZ = obb.halfD - Math.abs(lz) + radius;
+    if (penX < penZ) {
+      plx = lx >= 0 ? penX : -penX;
+    } else {
+      plz = lz >= 0 ? penZ : -penZ;
+    }
+  }
+
+  // Rotate local push vector back to world XZ
+  return {
+    hit: true,
+    dx: plx * cos + plz * sin,
+    dz: -plx * sin + plz * cos,
+  };
+}
+
 /**
  * Steps player walking, sprinting, jumping & solid multi-room wall/furniture/NPC collisions.
  */
@@ -1241,9 +1315,10 @@ export function stepPlayerInInterior(
   let nextX = p.x + moveX * p.speed * safeDt;
   let nextZ = p.z + moveZ * p.speed * safeDt;
 
-  const radius = 0.44;
+  // Tight realistic human torso radius (28cm -> 56cm wide) so furniture never feels like an invisible forcefield!
+  const radius = 0.28;
 
-  // 1. Resolve all perimeter & multi-room partition walls (with smooth doorway cutouts)
+  // 2 passes resolve tight corners cleanly across walls, built-ins, and all individual 3D prop OBBs
   for (let pass = 0; pass < 2; pass++) {
     for (const wall of def.walls) {
       const res = resolveCircleAABB(nextX, nextZ, radius, wall);
@@ -1252,19 +1327,24 @@ export function stepPlayerInInterior(
         nextZ += res.dz;
       }
     }
-  }
-
-  // 2. Solid interior furniture, bar counters, beds, & sculpture pedestals
-  for (const box of def.colliders) {
-    const res = resolveCircleAABB(nextX, nextZ, radius, box);
-    if (res.hit) {
-      nextX += res.dx;
-      nextZ += res.dz;
+    for (const box of def.colliders) {
+      const res = resolveCircleAABB(nextX, nextZ, radius, box);
+      if (res.hit) {
+        nextX += res.dx;
+        nextZ += res.dz;
+      }
+    }
+    for (const obb of def.propColliders) {
+      const res = resolveCircleOBB(nextX, nextZ, radius, obb);
+      if (res.hit) {
+        nextX += res.dx;
+        nextZ += res.dz;
+      }
     }
   }
 
-  // 3. Solid indoor NPC bodies
-  const npcMinDist = 0.84;
+  // Solid indoor NPC bodies (tight natural 60cm personal space)
+  const npcMinDist = 0.6;
   for (const npc of def.npcs) {
     const dx = nextX - npc.x;
     const dz = nextZ - npc.z;

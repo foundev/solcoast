@@ -811,7 +811,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     // 6. Standing at Ocean Cocktail Lounge mahogany bar reaches Bartender Mateo across the counter
     expect(findNearbyInteriorNpc(hotel, 19.0, 2.6)?.id).toBe('solaire-bartender');
 
-    // 7. Indoor NPC bodies stay solid (cannot walk through them)
+    // 7. Indoor NPC bodies stay solid (tight 60cm personal space)
     const npc = hotel.npcs[2]; // Camila
     p.x = npc.x;
     p.z = npc.z + 1.4;
@@ -819,6 +819,30 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     for (let i = 0; i < 40; i++) {
       stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
     }
-    expect(Math.hypot(p.x - npc.x, p.z - npc.z)).toBeGreaterThanOrEqual(0.8);
+    expect(Math.hypot(p.x - npc.x, p.z - npc.z)).toBeGreaterThanOrEqual(0.58);
+    expect(Math.hypot(p.x - npc.x, p.z - npc.z)).toBeLessThan(0.85);
+
+    // 8. Individual 3D props have tight per-object OBB colliders (never walk through, never stopped 4ft away!)
+    const gallery = INTERIORS.find((v) => v.id === 'wynwood-gallery')!;
+    expect(gallery.propColliders.length).toBeGreaterThanOrEqual(15);
+    // Walk right up to the Gallery Bench at (0, -3.4) (halfD = 0.44 * 1.35 * 0.5 = 0.297m) from south
+    p.x = 0;
+    p.z = -1.5;
+    for (let i = 0; i < 90; i++) {
+      stepPlayerInInterior(p, gallery, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    // Stopped right against the bench edge (~0.58m from bench center, NOT 2m away and NOT inside it!)
+    expect(p.z).toBeGreaterThanOrEqual(-3.4 + 0.52);
+    expect(p.z).toBeLessThan(-3.4 + 0.72);
+
+    // Walk up to a Café Habana bar stool at (-4.1, 4.9) (cannot walk through it!)
+    const cafe = INTERIORS.find((v) => v.id === 'cafe-habana')!;
+    p.x = -4.1;
+    p.z = 6.2;
+    for (let i = 0; i < 60; i++) {
+      stepPlayerInInterior(p, cafe, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.z).toBeGreaterThanOrEqual(4.9 + 0.45);
+    expect(p.z).toBeLessThan(4.9 + 0.65);
   });
 });

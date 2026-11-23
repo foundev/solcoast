@@ -136,8 +136,8 @@ export class MinimapRenderer {
         );
       }
 
-      // 2. Furniture / counter / sculpture colliders
-      ctx.fillStyle = 'rgba(200, 214, 238, 0.28)';
+      // 2. Built-in counters & individual rotated 3D furniture OBBs
+      ctx.fillStyle = 'rgba(200, 214, 238, 0.34)';
       for (const box of activeInterior.colliders) {
         ctx.fillRect(
           ix(box.minX),
@@ -145,6 +145,19 @@ export class MinimapRenderer {
           (box.maxX - box.minX) * roomScale,
           (box.maxZ - box.minZ) * roomScale,
         );
+      }
+      ctx.fillStyle = 'rgba(210, 224, 245, 0.28)';
+      for (const obb of activeInterior.propColliders) {
+        ctx.save();
+        ctx.translate(ix(obb.cx), iz(obb.cz));
+        ctx.rotate(-obb.rotY);
+        ctx.fillRect(
+          -obb.halfW * roomScale,
+          -obb.halfD * roomScale,
+          obb.halfW * 2 * roomScale,
+          obb.halfD * 2 * roomScale,
+        );
+        ctx.restore();
       }
 
       // 3. Solid perimeter & interior partition walls (leaves open doorways visible!)
