@@ -213,10 +213,11 @@ async function bootstrap(): Promise<void> {
 
   const playerMesh = createPlayerMesh(scene);
 
-  // Ambient AI traffic cars (26 across 7 real 3D models), 72 evenly-spread varied pedestrians, & 13 coastal boats/ships
-  const trafficCars = createTrafficCars(blueprint.trafficNodes, 26);
+  // Ambient AI traffic cars (68 across 7 real 3D models with invisible horizon streaming),
+  // 144 varied locals & joggers across 36 citywide stroll corridors, & 13 coastal boats/ships
+  const trafficCars = createTrafficCars(blueprint.trafficNodes, 68);
   const trafficMeshes = createTrafficMeshes(trafficCars, scene);
-  const pedestrians = createPedestrians(72);
+  const pedestrians = createPedestrians(144);
   const pedestrianMeshes = createPedestrianMeshes(pedestrians, scene);
   const coastalBoats = createCoastalBoatFleet();
   const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
@@ -749,8 +750,8 @@ async function bootstrap(): Promise<void> {
 
         // Keep the live outdoor world (sky, sun, ocean waves, traffic cars, pedestrians & cruising boats)
         // stepping and visible right outside every hotel suite, penthouse, café & gallery window!
-        stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs);
-        stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
+        stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs, pWorld.x, pWorld.z);
+        stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders, pWorld.x, pWorld.z);
         focusVec.set(pWorld.x, pWorld.y, pWorld.z);
         const skyRes = sky.update(timeOfDayHours, elapsed, focusVec);
         cityHandles.updateAnimation(
@@ -1119,7 +1120,16 @@ async function bootstrap(): Promise<void> {
 
     // 2. Resolve exact SAT rigid-body collisions between ALL fleet vehicles & ALL AI traffic cars FIRST!
     resolveVehiclePairCollisions(vehicles);
-    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs);
+    stepTraffic(
+      trafficCars,
+      blueprint.trafficNodes,
+      vehicles,
+      dt,
+      blueprint.colliders,
+      blueprint.propObbs,
+      player.x,
+      player.z,
+    );
 
     // 3. Now step player (using up-to-date car positions so traffic can NEVER move onto/through the player!)
     if (activeVehicle) {
@@ -1147,7 +1157,7 @@ async function bootstrap(): Promise<void> {
       );
     }
 
-    stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
+    stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders, player.x, player.z);
 
     // Step real Rapier3D WASM 11-limb articulated ragdolls & 3-stage physical get-ups!
     if (ragdollWorld) {

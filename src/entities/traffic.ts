@@ -51,24 +51,79 @@ export interface TrafficCarState {
 const TRAFFIC_MODELS: CarModelKind[] = ['taxi', 'suv', 'ev', 'coupe', 'gt', 'jdm', 'spyder'];
 
 const TRAFFIC_COLORS = [
-  0xeef2f7, 0x2254a4, 0xd85c18, 0x158a64, 0xc42848, 0xd1a024, 0x5842a4, 0x1c7a88, 0x36404f,
+  0xeef2f7,
+  0x2254a4,
+  0xd85c18,
+  0x158a64,
+  0xc42848,
+  0xd1a024,
+  0x5842a4,
+  0x1c7a88,
+  0x36404f,
+  0xb9c3cf,
+  0x18253a,
+  0xd4507a,
+  0x26a69a,
+  0xc8a96e,
 ];
 
-export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarState[] {
+export const TRAFFIC_RENDER_DIST = 225;
+const TRAFFIC_RECYCLE_DIST = 320;
+const TRAFFIC_SPAWN_MIN = 230;
+const TRAFFIC_SPAWN_MAX = 305;
+
+export function createTrafficCars(nodes: TrafficNode[], count = 48): TrafficCarState[] {
   const rng = createRng(991122);
   const cars: TrafficCarState[] = [];
   if (nodes.length === 0) return cars;
 
+  // Identify central & coastal nodes so the player's starting neighborhood has lively traffic immediately
+  const coreIndices: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].x >= -240 && nodes[i].z >= -240 && nodes[i].neighbors.length > 0) {
+      coreIndices.push(i);
+    }
+  }
+
   for (let i = 0; i < count; i++) {
-    const fromIdx = Math.floor(rng() * nodes.length);
-    const from = nodes[fromIdx];
-    if (from.neighbors.length === 0) continue;
-    const toIdx = from.neighbors[Math.floor(rng() * from.neighbors.length)];
-    const to = nodes[toIdx];
-    const progress = rng();
-    const pos = lanePosition(from, to, progress);
+    const preferCore = coreIndices.length > 0 && i % 5 < 2;
+    let chosenFrom = -1;
+    let chosenTo = -1;
+    let chosenProgress = 0.5;
+    let chosenPos = { x: 0, z: 0, yaw: 0 };
+
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const fromIdx =
+        preferCore && attempt < 8
+          ? coreIndices[Math.floor(rng() * coreIndices.length)]
+          : Math.floor(rng() * nodes.length);
+      const from = nodes[fromIdx];
+      if (!from || from.neighbors.length === 0) continue;
+      const toIdx = from.neighbors[Math.floor(rng() * from.neighbors.length)];
+      const to = nodes[toIdx];
+      if (!to) continue;
+      const progress = 0.12 + rng() * 0.76;
+      const pos = lanePosition(from, to, progress);
+
+      let crowded = false;
+      for (let j = 0; j < cars.length; j++) {
+        const dx = cars[j].x - pos.x;
+        const dz = cars[j].z - pos.z;
+        if (dx * dx + dz * dz < 18 * 18) {
+          crowded = true;
+          break;
+        }
+      }
+      chosenFrom = fromIdx;
+      chosenTo = toIdx;
+      chosenProgress = progress;
+      chosenPos = pos;
+      if (!crowded) break;
+    }
+
+    if (chosenFrom < 0) continue;
     const modelKind = TRAFFIC_MODELS[i % TRAFFIC_MODELS.length];
-    const initSpeed = 11 + rng() * 6;
+    const initSpeed = 11 + rng() * 6.5;
     const mass =
       modelKind === 'suv'
         ? 2150
@@ -78,12 +133,12 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
     cars.push({
       id: i,
       modelKind,
-      x: pos.x,
-      y: getGroundHeight(pos.x, pos.z),
-      z: pos.z,
-      vx: Math.sin(pos.yaw) * initSpeed,
-      vz: -Math.cos(pos.yaw) * initSpeed,
-      yaw: pos.yaw,
+      x: chosenPos.x,
+      y: getGroundHeight(chosenPos.x, chosenPos.z),
+      z: chosenPos.z,
+      vx: Math.sin(chosenPos.yaw) * initSpeed,
+      vz: -Math.cos(chosenPos.yaw) * initSpeed,
+      yaw: chosenPos.yaw,
       yawRate: 0,
       mass,
       stunnedTimer: 0,
@@ -91,14 +146,14 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
       rollTilt: 0,
       suspOffset: 0,
       speed: initSpeed,
-      cruiseSpeed: 12 + rng() * 6,
+      cruiseSpeed: 12 + rng() * 6.5,
       color: modelKind === 'taxi' ? 0xf5b81d : TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
-      fromNode: fromIdx,
-      toNode: toIdx,
-      progress,
+      fromNode: chosenFrom,
+      toNode: chosenTo,
+      progress: chosenProgress,
       lastImpactSpeed: 0,
-      lastImpactX: pos.x,
-      lastImpactZ: pos.z,
+      lastImpactX: chosenPos.x,
+      lastImpactZ: chosenPos.z,
       lastImpactNx: 0,
       lastImpactNz: 1,
     });
@@ -191,6 +246,84 @@ function lanePosition(
   };
 }
 
+let trafficRecycleCursor = 0;
+
+/**
+ * Invisibly recycles a distant AI traffic car (> TRAFFIC_RECYCLE_DIST away) onto an
+ * uncrowded road segment in the outer horizon ring [TRAFFIC_SPAWN_MIN, TRAFFIC_SPAWN_MAX]
+ * around the player so every avenue stays lively without cars ever popping into view.
+ */
+function recycleTrafficNearFocus(
+  car: TrafficCarState,
+  cars: TrafficCarState[],
+  nodes: TrafficNode[],
+  playerVehicles: VehicleState[],
+  focusX: number,
+  focusZ: number,
+): void {
+  const nLen = nodes.length;
+  if (nLen === 0) return;
+  const minSq = TRAFFIC_SPAWN_MIN * TRAFFIC_SPAWN_MIN;
+  const maxSq = TRAFFIC_SPAWN_MAX * TRAFFIC_SPAWN_MAX;
+  const start = trafficRecycleCursor % nLen;
+  trafficRecycleCursor = (trafficRecycleCursor + 7) % nLen;
+
+  for (let step = 0; step < nLen; step++) {
+    const fromIdx = (start + step) % nLen;
+    const from = nodes[fromIdx];
+    if (from.neighbors.length === 0) continue;
+
+    for (let k = 0; k < from.neighbors.length; k++) {
+      const toIdx = from.neighbors[(car.id + k) % from.neighbors.length];
+      const to = nodes[toIdx];
+      if (!to) continue;
+      const t = 0.25 + ((car.id * 17 + step * 13) % 50) / 100;
+      const pos = lanePosition(from, to, t);
+      const dSq = (pos.x - focusX) * (pos.x - focusX) + (pos.z - focusZ) * (pos.z - focusZ);
+      if (dSq < minSq || dSq > maxSq) continue;
+
+      let clear = true;
+      for (let j = 0; j < cars.length; j++) {
+        const o = cars[j];
+        if (o === car) continue;
+        const dx = o.x - pos.x;
+        const dz = o.z - pos.z;
+        if (dx * dx + dz * dz < 20 * 20) {
+          clear = false;
+          break;
+        }
+      }
+      if (!clear) continue;
+      for (let j = 0; j < playerVehicles.length; j++) {
+        const pv = playerVehicles[j];
+        const dx = pv.x - pos.x;
+        const dz = pv.z - pos.z;
+        if (dx * dx + dz * dz < 24 * 24) {
+          clear = false;
+          break;
+        }
+      }
+      if (!clear) continue;
+
+      car.fromNode = fromIdx;
+      car.toNode = toIdx;
+      car.progress = t;
+      car.x = pos.x;
+      car.z = pos.z;
+      car.y = getGroundHeight(pos.x, pos.z);
+      car.yaw = pos.yaw;
+      car.yawRate = 0;
+      car.speed = car.cruiseSpeed;
+      car.vx = Math.sin(pos.yaw) * car.cruiseSpeed;
+      car.vz = -Math.cos(pos.yaw) * car.cruiseSpeed;
+      car.pitchTilt = 0;
+      car.rollTilt = 0;
+      car.suspOffset = 0;
+      return;
+    }
+  }
+}
+
 export function stepTraffic(
   cars: TrafficCarState[],
   nodes: TrafficNode[],
@@ -198,13 +331,32 @@ export function stepTraffic(
   dt: number,
   colliders: AABB[] = [],
   propObbs: OBB2D[] = [],
+  focusX?: number,
+  focusZ?: number,
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
+  const recycleSq = TRAFFIC_RECYCLE_DIST * TRAFFIC_RECYCLE_DIST;
+  let recycledThisStep = 0;
 
   // 1. Advance either lane-following AI or free-skidding post-crash rigid-body physics!
   for (let i = 0; i < cars.length; i++) {
     const car = cars[i];
     car.lastImpactSpeed = 0;
+
+    // GTA-style invisible horizon recycling keeps bustling traffic around the player across all 14 districts
+    if (
+      focusX !== undefined &&
+      focusZ !== undefined &&
+      car.stunnedTimer <= 0 &&
+      recycledThisStep < 2
+    ) {
+      const dfx = car.x - focusX;
+      const dfz = car.z - focusZ;
+      if (dfx * dfx + dfz * dfz > recycleSq) {
+        recycleTrafficNearFocus(car, cars, nodes, playerVehicles, focusX, focusZ);
+        recycledThisStep++;
+      }
+    }
 
     if (car.stunnedTimer > 0) {
       // Free-skidding GTA crash physics: car spins & slides freely on its tires after a collision!
@@ -301,9 +453,18 @@ export function stepTraffic(
         const other = cars[j];
         const dx = other.x - car.x;
         const dz = other.z - car.z;
-        const dist = distXZ(car.x, car.z, other.x, other.z);
-        if (dist < 11.5 && dx * fx + dz * fz > 0.5 * dist) {
-          targetSpeed = Math.min(targetSpeed, other.stunnedTimer > 0 ? 0 : other.speed * 0.6);
+        const dSq = dx * dx + dz * dz;
+        if (dSq > 12.5 * 12.5) continue;
+        const dist = Math.sqrt(dSq) || 0.001;
+        const fwdDot = (dx * fx + dz * fz) / dist;
+        if (fwdDot <= 0.52) continue;
+        const headingDot = fx * Math.sin(other.yaw) + fz * -Math.cos(other.yaw);
+        if (headingDot > 0.35) {
+          // Same-lane following: pace cleanly behind the car ahead
+          targetSpeed = Math.min(targetSpeed, other.stunnedTimer > 0 ? 0 : other.speed * 0.85);
+        } else if (dist < 8.5 && fwdDot > 0.72 && (other.speed > car.speed + 0.5 || other.id < car.id)) {
+          // Cross-traffic yield with deterministic tie-breaker so busy intersections never deadlock
+          targetSpeed = 0;
         }
       }
     }
@@ -577,7 +738,7 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
         const c = stateCars[i];
         if (focusX !== undefined && focusZ !== undefined) {
           const dSq = (c.x - focusX) * (c.x - focusX) + (c.z - focusZ) * (c.z - focusZ);
-          groups[i].visible = dSq <= 185 * 185;
+          groups[i].visible = dSq <= TRAFFIC_RENDER_DIST * TRAFFIC_RENDER_DIST;
           if (!groups[i].visible) continue;
         }
         groups[i].position.set(c.x, c.y + c.suspOffset, c.z);

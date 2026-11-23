@@ -9,7 +9,7 @@ import {
   type HumanRagdollMode,
 } from '../core/physics';
 import type { ClonedPerson } from '../world/assets';
-import { getGroundHeight } from '../world/cityData';
+import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
 import type { RagdollPhysicsWorld } from '../systems/ragdollWorld';
 import { createHumanRigController, type HumanRigController } from './humanRig';
@@ -44,8 +44,8 @@ export interface PedestrianState extends HumanBodyPhysics {
   lastImpactKind: 'none' | 'bump' | 'body';
 }
 
-// 18 scenic pedestrian stroll corridors spanning ALL 11 Sol Coast districts!
-const STROLL_ROUTES: { x: number; z: number }[][] = [
+// 36 scenic pedestrian stroll corridors spanning ALL 14 Sol Coast districts (avenues, cross-streets, beach, parks & hills)!
+export const STROLL_ROUTES: { x: number; z: number }[][] = [
   // 1. Boardwalk Promenade West Lane
   [
     { x: 156, z: -165 },
@@ -111,7 +111,7 @@ const STROLL_ROUTES: { x: number; z: number }[][] = [
     { x: 262, z: 163 },
     { x: 172, z: 163 },
   ],
-  // 10. Neon Strip Boulevard Sidewalk
+  // 10. Neon Strip Boulevard Sidewalk (East)
   [
     { x: -8, z: -175 },
     { x: -8, z: -65 },
@@ -178,16 +178,163 @@ const STROLL_ROUTES: { x: number; z: number }[][] = [
     { x: 82, z: -215 },
     { x: 82, z: -368 },
   ],
+  // 19. Ocean Drive Café Sidewalk Counter-Flow (Hotel Solaire Strip)
+  [
+    { x: 130, z: 148 },
+    { x: 130, z: 45 },
+    { x: 130, z: -55 },
+    { x: 130, z: -168 },
+  ],
+  // 20. Collins Avenue West Sidewalk
+  [
+    { x: 60, z: -368 },
+    { x: 60, z: -188 },
+    { x: 60, z: -8 },
+    { x: 60, z: 148 },
+  ],
+  // 21. Collins Avenue East Sidewalk
+  [
+    { x: 80, z: 148 },
+    { x: 80, z: -8 },
+    { x: 80, z: -188 },
+    { x: 80, z: -368 },
+  ],
+  // 22. Sol Beach Mid-Sand & Surf Counter-Stroll
+  [
+    { x: 186, z: 140 },
+    { x: 182, z: 38 },
+    { x: 188, z: -55 },
+    { x: 180, z: -152 },
+  ],
+  // 23. Neon Boulevard West Sidewalk (Midtown & Club Neon)
+  [
+    { x: -30, z: 148 },
+    { x: -30, z: 30 },
+    { x: -30, z: -90 },
+    { x: -30, z: -210 },
+  ],
+  // 24. Biscayne Avenue East Sidewalk (Financial District)
+  [
+    { x: -100, z: -280 },
+    { x: -100, z: -150 },
+    { x: -100, z: -20 },
+    { x: -100, z: 148 },
+  ],
+  // 25. 12th Street Cross-Town Corridor (Hotel Solaire <-> Club Neon <-> Downtown)
+  [
+    { x: 128, z: -100 },
+    { x: 20, z: -100 },
+    { x: -110, z: -100 },
+    { x: -278, z: -100 },
+  ],
+  // 26. 5th Street Cross-Town Corridor (Café Habana <-> Palm Plaza <-> Ocean Dr)
+  [
+    { x: -280, z: -10 },
+    { x: -140, z: -10 },
+    { x: -10, z: -10 },
+    { x: 128, z: -10 },
+  ],
+  // 27. 1st Street Cross-Town Corridor (Coral Heights <-> Downtown <-> South Beach)
+  [
+    { x: 128, z: 80 },
+    { x: 10, z: 80 },
+    { x: -130, z: 80 },
+    { x: -280, z: 80 },
+  ],
+  // 28. Causeway Boulevard North Midtown Promenade
+  [
+    { x: -280, z: -190 },
+    { x: -140, z: -190 },
+    { x: -10, z: -190 },
+    { x: 128, z: -190 },
+  ],
+  // 29. North Bay Highlands — Highland Pkwy Scenic Sidewalk
+  [
+    { x: -548, z: -550 },
+    { x: -370, z: -550 },
+    { x: -190, z: -550 },
+    { x: -10, z: -550 },
+    { x: 128, z: -550 },
+  ],
+  // 30. North Bay Highlands — Vista Crest Rd Promenade
+  [
+    { x: 128, z: -460 },
+    { x: -40, z: -460 },
+    { x: -210, z: -460 },
+    { x: -380, z: -460 },
+    { x: -548, z: -460 },
+  ],
+  // 31. North Bay Rd Cross-City Bluff Walk
+  [
+    { x: -548, z: -370 },
+    { x: -370, z: -370 },
+    { x: -190, z: -370 },
+    { x: -10, z: -370 },
+    { x: 128, z: -370 },
+  ],
+  // 32. Sunset Hills — Sunset Ridge Dr Hilltop Overlook
+  [
+    { x: -550, z: -548 },
+    { x: -550, z: -410 },
+    { x: -550, z: -280 },
+    { x: -550, z: -150 },
+  ],
+  // 33. Sunset Hills — Grove Terrace Hillside Stroll
+  [
+    { x: -460, z: -548 },
+    { x: -460, z: -380 },
+    { x: -460, z: -220 },
+    { x: -460, z: -80 },
+  ],
+  // 34. Coconut Grove — Grove Botanical Park Loop
+  [
+    { x: -542, z: -92 },
+    { x: -488, z: -92 },
+    { x: -488, z: -38 },
+    { x: -542, z: -38 },
+  ],
+  // 35. Coconut Grove — Coral Way South Boulevard
+  [
+    { x: -370, z: -210 },
+    { x: -370, z: -70 },
+    { x: -370, z: 60 },
+    { x: -370, z: 148 },
+  ],
+  // 36. Coconut Grove — Southwest Terrace Loop
+  [
+    { x: -460, z: -10 },
+    { x: -460, z: 148 },
+    { x: -550, z: 148 },
+    { x: -550, z: -10 },
+  ],
+  // 37. Sunset Hills — Coral Way North Ridge Sidewalk
+  [
+    { x: -370, z: -548 },
+    { x: -370, z: -430 },
+    { x: -370, z: -310 },
+    { x: -370, z: -215 },
+  ],
+  // 38. North Bay Highlands — Palm Grove Ave North Sidewalk
+  [
+    { x: -280, z: -548 },
+    { x: -280, z: -430 },
+    { x: -280, z: -310 },
+    { x: -280, z: -215 },
+  ],
 ];
 
 const BASE_AVATAR_COUNT = 6;
+export const PED_RENDER_DIST = 110;
+const PED_RECYCLE_DIST = 175;
+const PED_SPAWN_MIN = 112;
+const PED_SPAWN_MAX = 170;
 
 /**
  * Computes evenly spaced positions along a multi-segment route so pedestrians
  * start well-distributed instead of clumping together, and assigns every walker
  * on the same route a guaranteed DISTINCT base avatar model (avoiding modulo collisions!).
  */
-export function createPedestrians(count = 72): PedestrianState[] {
+export function createPedestrians(count = 144): PedestrianState[] {
   const rng = createRng(551305);
   const peds: PedestrianState[] = [];
   const routeCount = STROLL_ROUTES.length;
@@ -208,14 +355,17 @@ export function createPedestrians(count = 72): PedestrianState[] {
 
     const a = route[startIdx];
     const b = route[nextIdx];
-    const x = a.x + (b.x - a.x) * t + (rng() - 0.5) * 1.6;
-    const z = a.z + (b.z - a.z) * t + (rng() - 0.5) * 1.6;
+    const x = a.x + (b.x - a.x) * t + (rng() - 0.5) * 1.4;
+    const z = a.z + (b.z - a.z) * t + (rng() - 0.5) * 1.4;
 
     // Guarantee each slot (0..perRoute-1) on the SAME route gets a DIFFERENT base avatar (0..5)!
-    // Previous bug: `routeCount (12) % 6 === 0` caused every walker on a route to share `i % 6`!
     const avatarBase = (slotOnRoute + routeIdx * 5) % BASE_AVATAR_COUNT;
     const styleTier = (routeIdx + slotOnRoute * 3) % 12;
     const variantIndex = styleTier * BASE_AVATAR_COUNT + avatarBase;
+
+    // Mix casual strollers (1.2-1.75 m/s) with energetic boardwalk/park/avenue joggers (2.2-2.7 m/s)
+    const isJogger = (i * 7 + routeIdx) % 11 === 0;
+    const speed = isJogger ? 2.2 + rng() * 0.5 : 1.2 + rng() * 0.55;
 
     peds.push({
       id: i,
@@ -228,7 +378,7 @@ export function createPedestrians(count = 72): PedestrianState[] {
       vy: 0,
       vz: 0,
       yaw: yawFromDir(b.x - a.x, b.z - a.z),
-      speed: 1.35 + rng() * 0.55,
+      speed,
       walkPhase: rng() * Math.PI * 2,
       waypoints: route,
       wpIndex: nextIdx,
@@ -250,24 +400,118 @@ export function createPedestrians(count = 72): PedestrianState[] {
   return peds;
 }
 
+let pedRecycleCursor = 0;
+
+/**
+ * Invisibly streams distant non-ragdolling pedestrians (> PED_RECYCLE_DIST away) onto active
+ * sidewalks in the outer ring [PED_SPAWN_MIN, PED_SPAWN_MAX] around the player so every district
+ * feels lively with strolling locals and joggers without popping into view.
+ */
+function recyclePedestrianNearFocus(
+  p: PedestrianState,
+  peds: PedestrianState[],
+  focusX: number,
+  focusZ: number,
+): void {
+  const rCount = STROLL_ROUTES.length;
+  const minSq = PED_SPAWN_MIN * PED_SPAWN_MIN;
+  const maxSq = PED_SPAWN_MAX * PED_SPAWN_MAX;
+  const startRoute = pedRecycleCursor % rCount;
+  pedRecycleCursor = (pedRecycleCursor + 5) % rCount;
+
+  for (let rStep = 0; rStep < rCount; rStep++) {
+    const rIdx = (startRoute + rStep) % rCount;
+    const route = STROLL_ROUTES[rIdx];
+    const segCount = route.length;
+
+    for (let seg = 0; seg < segCount; seg++) {
+      const a = route[seg];
+      const b = route[(seg + 1) % segCount];
+      // Sample 6 evenly distributed candidate points along each sidewalk segment
+      for (let s = 0; s < 6; s++) {
+        const jitter = ((p.id * 17 + rStep * 11 + s * 7) % 11) * 0.01;
+        const t = 0.06 + s * 0.16 + jitter;
+        const sx = a.x + (b.x - a.x) * t;
+        const sz = a.z + (b.z - a.z) * t;
+        const dSq = (sx - focusX) * (sx - focusX) + (sz - focusZ) * (sz - focusZ);
+        if (dSq < minSq || dSq > maxSq) continue;
+        if (isDeepWater(sx, sz)) continue;
+
+        let crowded = false;
+        for (let j = 0; j < peds.length; j++) {
+          const o = peds[j];
+          if (o === p) continue;
+          const ox = o.x - sx;
+          const oz = o.z - sz;
+          if (ox * ox + oz * oz < 3.4 * 3.4) {
+            crowded = true;
+            break;
+          }
+        }
+        if (crowded) continue;
+
+        p.routeIndex = rIdx;
+        p.waypoints = route;
+        p.wpIndex = (seg + 1) % segCount;
+        p.dir = (p.id + rStep) % 2 === 0 ? 1 : -1;
+        p.x = sx;
+        p.z = sz;
+        p.y = getGroundHeight(sx, sz);
+        p.vx = 0;
+        p.vz = 0;
+        p.yaw = yawFromDir(b.x - a.x, b.z - a.z);
+        return;
+      }
+    }
+  }
+}
+
 export function stepPedestrians(
   peds: PedestrianState[],
   vehicles: VehicleState[],
   dt: number,
   trafficCars: TrafficCarState[] = [],
   colliders: AABB[] = [],
+  focusX?: number,
+  focusZ?: number,
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   const pedRadius = 0.44;
+  const recycleSq = PED_RECYCLE_DIST * PED_RECYCLE_DIST;
+  const activeSimSq = (PED_RENDER_DIST + 30) * (PED_RENDER_DIST + 30);
+  let recycledThisStep = 0;
 
   for (let i = 0; i < peds.length; i++) {
     const p = peds[i];
     p.lastImpactSpeed = 0;
     p.lastImpactKind = 'none';
 
-    // 1. Check solid oriented vehicle collisions against player vehicles & AI traffic cars!
+    let distFocusSq = 0;
+    if (focusX !== undefined && focusZ !== undefined) {
+      const dfx = p.x - focusX;
+      const dfz = p.z - focusZ;
+      distFocusSq = dfx * dfx + dfz * dfz;
+      if (
+        p.ragdollMode === 'normal' &&
+        !p.rapierControlled &&
+        distFocusSq > recycleSq &&
+        recycledThisStep < 4
+      ) {
+        recyclePedestrianNearFocus(p, peds, focusX, focusZ);
+        recycledThisStep++;
+        const nfx = p.x - focusX;
+        const nfz = p.z - focusZ;
+        distFocusSq = nfx * nfx + nfz * nfz;
+      }
+    }
+    const isNearFocus = focusX === undefined || distFocusSq <= activeSimSq;
+
+    // 1. Check solid oriented vehicle collisions against player vehicles & nearby AI traffic cars!
     for (const v of vehicles) {
       if (p.ragdollMode === 'airborne' && p.y > v.y + 2.0) continue;
+      const dxv = p.x - v.x;
+      const dzv = p.z - v.z;
+      if (dxv * dxv + dzv * dzv > 12) continue;
       const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, v);
       if (hit.hit) {
         const impact = applyCarHitToHuman(p, v, hit, false);
@@ -281,22 +525,27 @@ export function stepPedestrians(
       }
     }
 
-    for (const tc of trafficCars) {
-      if (p.ragdollMode === 'airborne' && p.y > tc.y + 2.0) continue;
-      const tcHull = {
-        x: tc.x,
-        z: tc.z,
-        yaw: tc.yaw,
-        vx: tc.vx,
-        vz: tc.vz,
-        halfWidth: 1.04,
-        halfLength: 2.24,
-      };
-      const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, tcHull);
-      if (hit.hit) {
-        const impact = applyCarHitToHuman(p, tcHull, hit, false);
-        if (impact > 2.0) {
-          tc.speed *= 0.4;
+    if (isNearFocus) {
+      for (const tc of trafficCars) {
+        if (p.ragdollMode === 'airborne' && p.y > tc.y + 2.0) continue;
+        const dxt = p.x - tc.x;
+        const dzt = p.z - tc.z;
+        if (dxt * dxt + dzt * dzt > 12) continue;
+        const tcHull = {
+          x: tc.x,
+          z: tc.z,
+          yaw: tc.yaw,
+          vx: tc.vx,
+          vz: tc.vz,
+          halfWidth: 1.04,
+          halfLength: 2.24,
+        };
+        const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, tcHull);
+        if (hit.hit) {
+          const impact = applyCarHitToHuman(p, tcHull, hit, false);
+          if (impact > 2.0) {
+            tc.speed *= 0.4;
+          }
         }
       }
     }
@@ -311,7 +560,7 @@ export function stepPedestrians(
       continue;
     }
 
-    // 3. Normal strolling locomotion along route with calm sidestep & personal-space separation
+    // 4. Normal strolling locomotion along route with calm sidestep & personal-space separation
     const target = p.waypoints[p.wpIndex];
     let dx = target.x - p.x;
     let dz = target.z - p.z;
@@ -330,29 +579,31 @@ export function stepPedestrians(
     let avoidX = 0;
     let avoidZ = 0;
     let speedBoost = 1.0;
-    for (const v of vehicles) {
-      const carSpd = Math.hypot(v.vx, v.vz);
-      if (carSpd > 14) continue; // Too fast to magically teleport out of the way
-      const d = distXZ(p.x, p.z, v.x, v.z);
-      if (d < 5.0 && d > 0.01) {
-        avoidX += ((p.x - v.x) / d) * 2.2;
-        avoidZ += ((p.z - v.z) / d) * 2.2;
-        speedBoost = 1.45;
+    if (isNearFocus) {
+      for (const v of vehicles) {
+        const carSpd = Math.hypot(v.vx, v.vz);
+        if (carSpd > 14) continue; // Too fast to magically teleport out of the way
+        const d = distXZ(p.x, p.z, v.x, v.z);
+        if (d < 5.0 && d > 0.01) {
+          avoidX += ((p.x - v.x) / d) * 2.2;
+          avoidZ += ((p.z - v.z) / d) * 2.2;
+          speedBoost = 1.45;
+        }
       }
-    }
 
-    // Gentle personal-space separation so pedestrians naturally pass each other instead of clumping
-    for (let j = 0; j < peds.length; j++) {
-      if (i === j) continue;
-      const other = peds[j];
-      const ox = p.x - other.x;
-      const oz = p.z - other.z;
-      const dSq = ox * ox + oz * oz;
-      if (dSq < 2.4 * 2.4 && dSq > 0.0001) {
-        const d = Math.sqrt(dSq);
-        const push = (2.4 - d) * 0.75;
-        avoidX += (ox / d) * push;
-        avoidZ += (oz / d) * push;
+      // Gentle personal-space separation so pedestrians naturally pass each other instead of clumping
+      for (let j = 0; j < peds.length; j++) {
+        if (i === j) continue;
+        const other = peds[j];
+        const ox = p.x - other.x;
+        const oz = p.z - other.z;
+        const dSq = ox * ox + oz * oz;
+        if (dSq < 2.4 * 2.4 && dSq > 0.0001) {
+          const d = Math.sqrt(dSq);
+          const push = (2.4 - d) * 0.75;
+          avoidX += (ox / d) * push;
+          avoidZ += (oz / d) * push;
+        }
       }
     }
 
@@ -430,6 +681,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
   scene.add(container);
 
   let elapsedAccum = 0;
+  let frameCount = 0;
 
   return {
     root: container,
@@ -474,7 +726,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         const inst = instances[i];
         if (!inst.avatarRoot) continue;
         const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);
-        if (dSq > 85 * 85) continue;
+        if (dSq > PED_RENDER_DIST * PED_RENDER_DIST) continue;
 
         // Ensure neutral tumblePivot & fresh world matrices before spawning 11-limb Rapier ragdoll
         inst.root.visible = true;
@@ -501,6 +753,9 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
       ragdollWorld?: RagdollPhysicsWorld | null,
     ) {
       elapsedAccum += dt;
+      frameCount++;
+      const renderDistSq = PED_RENDER_DIST * PED_RENDER_DIST;
+      const halfRateSq = 68 * 68;
       for (let i = 0; i < statePeds.length && i < instances.length; i++) {
         const p = statePeds[i];
         const inst = instances[i];
@@ -530,9 +785,9 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
           }
         }
 
-        // Distance-cull far skinned pedestrians (>85m) so 70+ locals across the city stay butter-smooth!
+        // Distance-cull far skinned pedestrians (>110m) & half-rate animate distant walkers (68-110m)
         const dSq = (p.x - focusX) * (p.x - focusX) + (p.z - focusZ) * (p.z - focusZ);
-        if (dSq > 85 * 85) {
+        if (dSq > renderDistSq) {
           inst.root.visible = false;
           continue;
         }
@@ -542,9 +797,14 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
         inst.tumblePivot.position.y = computeTumblePivotY(p.fallPitch, p.fallRoll, p.ragdollMode);
         inst.tumblePivot.rotation.set(p.fallPitch, 0, p.fallRoll);
 
+        if (dSq > halfRateSq && ((i + frameCount) & 1) === 1) {
+          continue;
+        }
+        const rigDt = dSq > halfRateSq ? dt * 2 : dt;
         const ragdollFrozen = p.ragdollMode === 'airborne' || p.ragdollMode === 'downed';
+        const isJogging = p.speed > 2.05;
         const animSpeed = p.ragdollMode === 'normal' ? p.speed * 2.4 : p.ragdollMode === 'recovering' ? 0.1 : 1.0;
-        inst.rig.update(dt, animSpeed, false, p.ragdollMode !== 'airborne', elapsedAccum + i, ragdollFrozen);
+        inst.rig.update(rigDt, animSpeed, isJogging, p.ragdollMode !== 'airborne', elapsedAccum + i, ragdollFrozen);
       }
     },
   };

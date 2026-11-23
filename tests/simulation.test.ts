@@ -13,7 +13,12 @@ import { InputManager } from '../src/core/input';
 import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
 import { createHumanRigController } from '../src/entities/humanRig';
-import { createPedestrians, stepPedestrians } from '../src/entities/pedestrians';
+import {
+  PED_RENDER_DIST,
+  STROLL_ROUTES,
+  createPedestrians,
+  stepPedestrians,
+} from '../src/entities/pedestrians';
 import {
   applySeatedDrivingPose,
   computeCharacterPose,
@@ -23,7 +28,13 @@ import {
   findNearestVehicle,
   stepPlayerOnFoot,
 } from '../src/entities/player';
-import { createTrafficCars, findNearestTrafficCar, relocateTrafficCarAway, stepTraffic } from '../src/entities/traffic';
+import {
+  TRAFFIC_RENDER_DIST,
+  createTrafficCars,
+  findNearestTrafficCar,
+  relocateTrafficCarAway,
+  stepTraffic,
+} from '../src/entities/traffic';
 import {
   DEFAULT_VEHICLES,
   DRIVER_SEAT_OFFSETS,
@@ -40,7 +51,7 @@ import {
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
 import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS, INTERIOR_TEXTURE_KEYS } from '../src/world/assets';
-import { createCityBlueprint, getGroundHeight } from '../src/world/cityData';
+import { createCityBlueprint, getGroundHeight, isDeepWater } from '../src/world/cityData';
 import {
   FLOOR_STRIDE_Y,
   INTERIOR_ORIGIN_Y,
@@ -1396,6 +1407,45 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       }
     } finally {
       (globalThis as unknown as { document?: unknown }).document = prevDoc;
+    }
+  });
+
+  it('maintains lively proximity-streamed traffic and pedestrians across all 14 districts without water/building spawns', () => {
+    // 1. All 36 stroll routes cover the full expanded city (including Sunset Hills & North Bay Highlands)
+    //    and every waypoint sits on dry walkable ground outside building colliders!
+    expect(STROLL_ROUTES.length).toBeGreaterThanOrEqual(36);
+    expect(STROLL_ROUTES.some((r) => r.some((pt) => pt.x <= -540 && pt.z <= -450))).toBe(true);
+    expect(STROLL_ROUTES.some((r) => r.some((pt) => pt.z <= -540))).toBe(true);
+
+    for (let ri = 0; ri < STROLL_ROUTES.length; ri++) {
+      for (const wp of STROLL_ROUTES[ri]) {
+        expect(isDeepWater(wp.x, wp.z), `route ${ri + 1} (${wp.x},${wp.z}) must not be in deep water`).toBe(false);
+        const insideBuilding = blueprint.colliders.some(
+          (b) => wp.x > b.minX + 0.2 && wp.x < b.maxX - 0.2 && wp.z > b.minZ + 0.2 && wp.z < b.maxZ - 0.2,
+        );
+        expect(insideBuilding, `route ${ri + 1} (${wp.x},${wp.z}) must not lie inside a building`).toBe(false);
+      }
+    }
+
+    // 2. High-density fleet (68 traffic cars & 144 pedestrians) invisibly streams lively crowds around the player
+    const traffic = createTrafficCars(blueprint.trafficNodes, 68);
+    const peds = createPedestrians(144);
+    expect(traffic.length).toBe(68);
+    expect(peds.length).toBe(144);
+
+    // Step around Ocean Drive (140, -60) then relocate focus to Sunset Hills (-470, -470)
+    for (const [fx, fz, label] of [
+      [140, -60, 'Ocean Drive'],
+      [-470, -470, 'Sunset Hills'],
+    ] as const) {
+      for (let step = 0; step < 120; step++) {
+        stepTraffic(traffic, blueprint.trafficNodes, [], 1 / 60, blueprint.colliders, blueprint.propObbs, fx, fz);
+        stepPedestrians(peds, [], 1 / 60, traffic, blueprint.colliders, fx, fz);
+      }
+      const nearTraffic = traffic.filter((c) => Math.hypot(c.x - fx, c.z - fz) <= TRAFFIC_RENDER_DIST + 85).length;
+      const nearPeds = peds.filter((p) => Math.hypot(p.x - fx, p.z - fz) <= PED_RENDER_DIST + 65).length;
+      expect(nearTraffic, `${label} should have lively local traffic`).toBeGreaterThanOrEqual(40);
+      expect(nearPeds, `${label} should have lively local pedestrian crowds`).toBeGreaterThanOrEqual(60);
     }
   });
 });
