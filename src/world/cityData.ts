@@ -625,6 +625,113 @@ export function createCityBlueprint(): CityBlueprint {
     }
   }
 
+  // 2b. Replace procedural box buildings on the 4 enterable venue blocks (after all block rng() calls complete
+  //     so deterministic RNG state is 100% preserved) with the exact multi-wing world-space colliders of the
+  //     unified inside/outside 3D venue buildings (Hotel Solaire, Club Neon, Café Habana, Wynwood Art Gallery)!
+  const VENUE_HOST_BLOCKS = [
+    { minX: 74, maxX: 135, minZ: -105, maxZ: -22 }, // Hotel Solaire block
+    { minX: -15, maxX: 65, minZ: -105, maxZ: -22 }, // Club Neon block
+    { minX: -285, maxX: -202, minZ: -35, maxZ: 65 }, // Café Habana block
+    { minX: -195, maxX: -112, minZ: -285, maxZ: -202 }, // Wynwood Art Gallery block
+  ];
+  for (let i = buildings.length - 1; i >= 0; i--) {
+    const b = buildings[i];
+    const inHostBlock = VENUE_HOST_BLOCKS.some(
+      (hb) => b.x >= hb.minX && b.x <= hb.maxX && b.z >= hb.minZ && b.z <= hb.maxZ,
+    );
+    if (inHostBlock) {
+      const cIdx = colliders.indexOf(b.collider);
+      if (cIdx !== -1) colliders.splice(cIdx, 1);
+      buildings.splice(i, 1);
+    }
+  }
+
+  // Exact world-space building specs & multi-wing exterior wall footprint colliders for the 4 unified enterable buildings
+  const hotelMainCol: AABB = { minX: 108.0, maxX: 124.0, minZ: -58.4, maxZ: -26.4, minY: 0, maxY: 16.0 };
+  const clubMainCol: AABB = { minX: -1.8, maxX: 7.2, minZ: -52.4, maxZ: -44.4, minY: 0, maxY: 5.0 };
+  const cafeMainCol: AABB = { minX: -272.9, maxX: -251.9, minZ: 0.4, maxZ: 16.4, minY: 0, maxY: 5.5 };
+  const galleryMainCol: AABB = { minX: -183.6, maxX: -167.6, minZ: -239.4, maxZ: -217.4, minY: 0, maxY: 7.0 };
+
+  buildings.push(
+    {
+      id: 'b-108',
+      x: 116.0,
+      z: -42.4,
+      width: 16.0,
+      depth: 32.0,
+      height: 15.0,
+      baseY: SIDEWALK_HEIGHT,
+      style: 'art-deco',
+      wallColor: 0xfbf0e4,
+      accentColor: 0xff6ca8,
+      neonColor: 0x2cf3ff,
+      hasRoofSign: true,
+      collider: hotelMainCol,
+    },
+    {
+      id: 'b-89',
+      x: 13.7,
+      z: -48.4,
+      width: 31.0,
+      depth: 24.0,
+      height: 8.0,
+      baseY: SIDEWALK_HEIGHT,
+      style: 'neon-club',
+      wallColor: 0x151224,
+      accentColor: 0x2cf3ff,
+      neonColor: 0xff2e93,
+      hasRoofSign: true,
+      collider: clubMainCol,
+    },
+    {
+      id: 'b-30',
+      x: -262.4,
+      z: 8.4,
+      width: 21.0,
+      depth: 16.0,
+      height: 5.0,
+      baseY: SIDEWALK_HEIGHT,
+      style: 'mediterranean',
+      wallColor: 0xf3d7b4,
+      accentColor: 0xc25435,
+      collider: cafeMainCol,
+    },
+    {
+      id: 'b-43',
+      x: -175.6,
+      z: -228.4,
+      width: 16.0,
+      depth: 22.0,
+      height: 6.5,
+      baseY: SIDEWALK_HEIGHT,
+      style: 'warehouse-mural',
+      wallColor: 0x110000,
+      accentColor: 0xffcf5c,
+      neonColor: 0x2cf3ff,
+      hasRoofSign: true,
+      collider: galleryMainCol,
+    },
+  );
+
+  colliders.push(
+    // Hotel Solaire (Ocean Drive): Main Lobby + South Suite Podium, North Ocean Lounge Wing & Rear Bath Podiums
+    hotelMainCol,
+    { minX: 108.0, maxX: 122.0, minZ: -71.4, maxZ: -58.4, minY: 0, maxY: 16.0 },
+    { minX: 102.0, maxX: 108.0, minZ: -33.4, maxZ: -26.4, minY: 0, maxY: 16.0 },
+    { minX: 102.0, maxX: 108.0, minZ: -70.4, maxZ: -63.4, minY: 0, maxY: 16.0 },
+    // Club Neon (Neon Strip): Velvet Entry Foyer, Main Dance Hall & VIP Bar Wing
+    clubMainCol,
+    { minX: 7.2, maxX: 29.2, minZ: -60.4, maxZ: -36.4, minY: 0, maxY: 9.0 },
+    { minX: 10.2, maxX: 26.2, minZ: -73.4, maxZ: -60.4, minY: 0, maxY: 5.5 },
+    // Café Habana (Coral Heights): Espresso Bar + Roastery & Palm Conservatory Dining
+    cafeMainCol,
+    { minX: -272.9, maxX: -259.9, minZ: 16.4, maxZ: 30.4, minY: 0, maxY: 5.8 },
+    // Wynwood Art Gallery (Wynwood Arts): Main Atrium, Light Lab Wing & Artist Studio Loft
+    galleryMainCol,
+    { minX: -181.6, maxX: -165.6, minZ: -252.4, maxZ: -239.4, minY: 0, maxY: 6.2 },
+    { minX: -167.6, maxX: -155.6, minZ: -238.4, maxZ: -218.4, minY: 0, maxY: 5.8 },
+  );
+
   // 3. Key Sol luxury coastal villas inside the island loop
   const villaCoords = [
     { x: 288, z: -225, w: 22, d: 18, h: 9.5 },

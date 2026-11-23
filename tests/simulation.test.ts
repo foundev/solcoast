@@ -38,6 +38,7 @@ import {
   findNearbyInteriorNpc,
   getFloorFromPlayerY,
   getInteriorRoomAt,
+  getVisualFloorBaseY,
   interiorLocalToWorld,
   stepInteriorPatrols,
   stepPlayerInInterior,
@@ -803,6 +804,46 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     const w3F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y * 2, 12, 2);
     expect(w2F.y - w1F.y).toBeCloseTo(4.8, 2);
     expect(w3F.y - w2F.y).toBeCloseTo(4.8, 2);
+    expect(getVisualFloorBaseY(0)).toBeCloseTo(0, 3);
+    expect(getVisualFloorBaseY(1)).toBeCloseTo(w2F.y - w1F.y, 3);
+    expect(getVisualFloorBaseY(2)).toBeCloseTo(w3F.y - w1F.y, 3);
+
+    // Every single window across all 4 venues sits on a true exterior perimeter wall (never blocked by an adjacent room!)
+    for (const v of INTERIORS) {
+      expect(v.windows?.length ?? 0, `${v.id} must have windows`).toBeGreaterThan(0);
+      for (const win of v.windows ?? []) {
+        const wf = win.floor ?? 0;
+        const mid = (win.min + win.max) * 0.5;
+        const sameFloorRooms = v.rooms.filter((r) => (r.floor ?? 0) === wf);
+        const owner = sameFloorRooms.find((r) =>
+          win.axis === 'x'
+            ? (Math.abs(r.minX - win.coord) < 0.08 || Math.abs(r.maxX - win.coord) < 0.08) &&
+              mid >= r.minZ &&
+              mid <= r.maxZ
+            : (Math.abs(r.minZ - win.coord) < 0.08 || Math.abs(r.maxZ - win.coord) < 0.08) &&
+              mid >= r.minX &&
+              mid <= r.maxX,
+        );
+        expect(owner, `${v.id} window at ${win.axis}=${win.coord} (${win.min}..${win.max}) must belong to a room`).toBeDefined();
+        const outSign =
+          win.axis === 'x'
+            ? Math.abs(owner!.maxX - win.coord) < 0.08
+              ? 1
+              : -1
+            : Math.abs(owner!.maxZ - win.coord) < 0.08
+              ? 1
+              : -1;
+        const testX = win.axis === 'x' ? win.coord + outSign * 0.25 : mid;
+        const testZ = win.axis === 'z' ? win.coord + outSign * 0.25 : mid;
+        const blockedByOtherRoom = sameFloorRooms.some(
+          (r) => r !== owner && testX > r.minX + 0.02 && testX < r.maxX - 0.02 && testZ > r.minZ + 0.02 && testZ < r.maxZ - 0.02,
+        );
+        expect(
+          blockedByOtherRoom,
+          `${v.id} window at ${win.axis}=${win.coord} (${win.min}..${win.max}) must face the exterior world`,
+        ).toBe(false);
+      }
+    }
     // Floor 3 Penthouse elevator requires VIP keycard!
     expect(hotel.elevators!.find((e) => e.floor === 2)?.requiredKeycard).toBe('hotel-penthouse');
     // Uniformed hotel staff (concierge, bellhop, maid, security, bartender, waiter) present!

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { InteriorPropKind, InteriorTextureKey, InteriorTextureMap, LoadedGameAssets } from './assets';
+import type { InteriorPropKind, InteriorTextureMap, LoadedGameAssets } from './assets';
 import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
@@ -1374,9 +1374,6 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     'b-30': 'building_cafe_habana',
     'b-43': 'building_wynwood_gallery',
   };
-  const showcaseFallbacks = new Map<string, { spec: BuildingSpec; mesh: THREE.Object3D }>();
-  const showcaseGltfMap = new Map<string, THREE.Object3D>();
-  const allBuildingEntries: { spec: BuildingSpec; mesh: THREE.Object3D }[] = [];
   const showcaseBuildingsRoot = new THREE.Group();
   root.add(showcaseBuildingsRoot);
   let fallbackLighthouseMesh: THREE.Object3D | null = null;
@@ -1393,9 +1390,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       hvacMat,
     );
     root.add(mesh);
-    allBuildingEntries.push({ spec: b, mesh });
     if (b.id in SHOWCASE_BUILDING_MAP) {
-      showcaseFallbacks.set(b.id, { spec: b, mesh });
+      mesh.visible = false;
     }
     if (b.id === 'south-pier-lighthouse') {
       fallbackLighthouseMesh = mesh;
@@ -1656,72 +1652,14 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
-  let cachedShowcaseTexMap: InteriorTextureMap | null = null;
-  const showcasePbrMaterials: { mat: THREE.MeshStandardMaterial; key: InteriorTextureKey }[] = [];
-
-  const bindShowcaseTextures = (texMap: InteriorTextureMap) => {
-    for (const entry of showcasePbrMaterials) {
-      const pbr = texMap[entry.key];
-      if (!pbr) continue;
-      entry.mat.map = pbr.map;
-      entry.mat.normalMap = pbr.normalMap;
-      entry.mat.normalScale = new THREE.Vector2(0.85, 0.85);
-      entry.mat.roughnessMap = pbr.roughnessMap;
-      entry.mat.needsUpdate = true;
-    }
+  const attachShowcaseBuildings = (_propsMap: Map<InteriorPropKind, THREE.Group>) => {
+    // Enterable landmark buildings (Hotel Solaire, Club Neon, Café Habana, Wynwood Art Gallery) are permanently
+    // rendered in world space by interiorSystem with unified 1-to-1 physical inside/outside walls and windows!
+    showcaseBuildingsRoot.visible = false;
   };
 
-  const attachShowcaseBuildings = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
-    for (const [bid, kind] of Object.entries(SHOWCASE_BUILDING_MAP)) {
-      const fb = showcaseFallbacks.get(bid);
-      const src = propsMap.get(kind);
-      if (!fb || !src) continue;
-
-      const inst = src.clone(true);
-      inst.position.set(fb.spec.x, fb.spec.baseY, fb.spec.z);
-
-      inst.traverse((obj) => {
-        if (!(obj instanceof THREE.Mesh)) return;
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-        for (const m of mats) {
-          if (!(m instanceof THREE.MeshStandardMaterial)) continue;
-          const n = m.name || '';
-          if (n.startsWith('PBR_Plaster_')) showcasePbrMaterials.push({ mat: m, key: 'plaster' });
-          else if (n.startsWith('PBR_Marble_')) showcasePbrMaterials.push({ mat: m, key: 'marble' });
-          else if (n.startsWith('PBR_Concrete_')) showcasePbrMaterials.push({ mat: m, key: 'concrete' });
-          else if (n.startsWith('PBR_Terracotta_')) showcasePbrMaterials.push({ mat: m, key: 'terracotta' });
-          else if (n.startsWith('PBR_Parquet_')) showcasePbrMaterials.push({ mat: m, key: 'parquet' });
-          else if (n.startsWith('PBR_Brick_')) showcasePbrMaterials.push({ mat: m, key: 'brick' });
-
-          if (n.startsWith('Neon_')) {
-            neonMaterials.push(m);
-          } else if (n.startsWith('Glass_')) {
-            m.transparent = true;
-            m.depthWrite = false;
-            if (m.opacity >= 0.98) m.opacity = 0.34;
-            m.needsUpdate = true;
-            windowMaterials.push(m);
-          } else if (n.startsWith('Interior_')) {
-            windowMaterials.push(m);
-          }
-        }
-      });
-
-      showcaseBuildingsRoot.add(inst);
-      showcaseGltfMap.set(bid, inst);
-      fb.mesh.visible = false;
-    }
-
-    if (cachedShowcaseTexMap) {
-      bindShowcaseTextures(cachedShowcaseTexMap);
-    }
-  };
-
-  const applyShowcaseTextures = (texMap: InteriorTextureMap) => {
-    cachedShowcaseTexMap = texMap;
-    bindShowcaseTextures(texMap);
+  const applyShowcaseTextures = (_texMap: InteriorTextureMap) => {
+    // Showcase exterior PBR textures are now bound directly via interiorSystem.applyPbrTextures on the unified venues
   };
 
   const attachWorldProps = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
@@ -1843,34 +1781,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
-  const HOST_BLOCK_BOUNDS: Record<string, { minX: number; maxX: number; minZ: number; maxZ: number }> = {
-    'hotel-solaire': { minX: 74, maxX: 135, minZ: -105, maxZ: -22 },
-    'club-neon': { minX: -15, maxX: 65, minZ: -105, maxZ: -22 },
-    'cafe-habana': { minX: -285, maxX: -202, minZ: -35, maxZ: 65 },
-    'wynwood-gallery': { minX: -195, maxX: -112, minZ: -285, maxZ: -202 },
-  };
-
-  const setActiveInteriorBuilding = (interiorId: string | null) => {
-    const box = interiorId ? HOST_BLOCK_BOUNDS[interiorId] : null;
-    for (const entry of allBuildingEntries) {
-      const bid = entry.spec.id;
-      if (bid === 'south-pier-lighthouse' && fallbackLighthouseMesh && worldPropsGltfRoot.children.length > 0) {
-        continue;
-      }
-      const inHostBlock =
-        box !== null &&
-        entry.spec.x >= box.minX &&
-        entry.spec.x <= box.maxX &&
-        entry.spec.z >= box.minZ &&
-        entry.spec.z <= box.maxZ;
-      const gltfInst = showcaseGltfMap.get(bid);
-      if (gltfInst) {
-        gltfInst.visible = !inHostBlock;
-        entry.mesh.visible = false;
-      } else {
-        entry.mesh.visible = !inHostBlock;
-      }
-    }
+  const setActiveInteriorBuilding = (_interiorId: string | null) => {
+    // No building swapping needed: the 4 enterable buildings are unified 3D structures permanently visible in world space!
   };
 
   const hideFallbackYachts = () => {
