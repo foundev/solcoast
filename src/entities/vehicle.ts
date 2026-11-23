@@ -48,6 +48,18 @@ export const DRIVER_SEAT_OFFSETS: Record<CarModelKind, { x: number; y: number; z
 
 export type VehicleBodyStyle = 'supercar' | 'sedan' | 'spyder' | 'coupe';
 
+export type EngineSoundProfile =
+  | 'exotic-v12'
+  | 'muscle-v8'
+  | 'flat6'
+  | 'turbo-jdm'
+  | 'sport-v6'
+  | 'electric-ev'
+  | 'commuter-i4'
+  | 'heavy-v8';
+
+export type TorqueProfile = 'ev' | 'high-rev' | 'balanced' | 'low-end';
+
 export interface VehicleConfig {
   id: string;
   name: string;
@@ -62,20 +74,160 @@ export interface VehicleConfig {
   accel: number;
   brakeDecel: number;
   turnRate: number;
+  grip: number;
+  driftBias: number;
+  mass: number;
+  numGears: number;
+  shiftDuration: number;
+  torqueProfile: TorqueProfile;
+  engineSound: EngineSoundProfile;
 }
 
-const MODEL_SPEC_TABLE: Record<
-  CarModelKind,
-  { name: string; style: VehicleBodyStyle; maxSpeed: number; accel: number; brakeDecel: number; turnRate: number }
-> = {
-  ferrari: { name: 'Solstice GT', style: 'supercar', maxSpeed: 54, accel: 24, brakeDecel: 38, turnRate: 2.35 },
-  spyder: { name: 'Coastal Spyder', style: 'spyder', maxSpeed: 52, accel: 23, brakeDecel: 37, turnRate: 2.45 },
-  gt: { name: 'Street GT', style: 'coupe', maxSpeed: 53, accel: 25, brakeDecel: 38, turnRate: 2.4 },
-  coupe: { name: 'Miami GT Coupe', style: 'coupe', maxSpeed: 52, accel: 24, brakeDecel: 37, turnRate: 2.4 },
-  jdm: { name: 'Biscayne JDM', style: 'coupe', maxSpeed: 51, accel: 24, brakeDecel: 37, turnRate: 2.5 },
-  ev: { name: 'Metro EV', style: 'sedan', maxSpeed: 50, accel: 26, brakeDecel: 36, turnRate: 2.15 },
-  taxi: { name: 'Sol City Taxi', style: 'sedan', maxSpeed: 47, accel: 21, brakeDecel: 35, turnRate: 2.2 },
-  suv: { name: 'Coastal SUV', style: 'sedan', maxSpeed: 46, accel: 20, brakeDecel: 34, turnRate: 2.05 },
+interface ModelPerfPreset {
+  name: string;
+  style: VehicleBodyStyle;
+  maxSpeed: number;
+  accel: number;
+  brakeDecel: number;
+  turnRate: number;
+  grip: number;
+  driftBias: number;
+  mass: number;
+  numGears: number;
+  shiftDuration: number;
+  torqueProfile: TorqueProfile;
+  engineSound: EngineSoundProfile;
+}
+
+export const MODEL_SPEC_TABLE: Record<CarModelKind, ModelPerfPreset> = {
+  // Italian mid-engine V12 exotic: highest top speed (~152 mph), 7-speed rapid dual-clutch, high-RPM scream!
+  ferrari: {
+    name: 'Solstice GT',
+    style: 'supercar',
+    maxSpeed: 68,
+    accel: 32,
+    brakeDecel: 46,
+    turnRate: 2.55,
+    grip: 9.0,
+    driftBias: 1.12,
+    mass: 1410,
+    numGears: 7,
+    shiftDuration: 0.09,
+    torqueProfile: 'high-rev',
+    engineSound: 'exotic-v12',
+  },
+  // Twin-turbo V8 super-coupe: ferocious midrange punch (~141 mph), playful RWD power-oversteer!
+  gt: {
+    name: 'Street GT',
+    style: 'coupe',
+    maxSpeed: 63,
+    accel: 30,
+    brakeDecel: 43,
+    turnRate: 2.42,
+    grip: 7.7,
+    driftBias: 1.24,
+    mass: 1560,
+    numGears: 6,
+    shiftDuration: 0.12,
+    torqueProfile: 'low-end',
+    engineSound: 'muscle-v8',
+  },
+  // Lightweight flat-6 roadster: razor-sharp canyon handling (~130 mph), lightest chassis!
+  spyder: {
+    name: 'Coastal Spyder',
+    style: 'spyder',
+    maxSpeed: 58,
+    accel: 26,
+    brakeDecel: 41,
+    turnRate: 2.72,
+    grip: 8.3,
+    driftBias: 1.16,
+    mass: 1320,
+    numGears: 6,
+    shiftDuration: 0.14,
+    torqueProfile: 'high-rev',
+    engineSound: 'flat6',
+  },
+  // Tuned turbo drift coupe: loose tail-happy drift bias, turbo spool + blow-off flutter on shifts!
+  jdm: {
+    name: 'Biscayne JDM',
+    style: 'coupe',
+    maxSpeed: 56,
+    accel: 27,
+    brakeDecel: 39,
+    turnRate: 2.68,
+    grip: 6.7,
+    driftBias: 1.38,
+    mass: 1390,
+    numGears: 6,
+    shiftDuration: 0.13,
+    torqueProfile: 'high-rev',
+    engineSound: 'turbo-jdm',
+  },
+  // Balanced V6 grand tourer (~121 mph), refined grip & smooth shifts
+  coupe: {
+    name: 'Miami GT Coupe',
+    style: 'coupe',
+    maxSpeed: 54,
+    accel: 23,
+    brakeDecel: 37,
+    turnRate: 2.36,
+    grip: 8.4,
+    driftBias: 1.12,
+    mass: 1580,
+    numGears: 6,
+    shiftDuration: 0.16,
+    torqueProfile: 'balanced',
+    engineSound: 'sport-v6',
+  },
+  // Dual-motor AWD EV: blistering instant 0-60 launch, planted battery grip, 1-speed direct drive & inverter whine!
+  ev: {
+    name: 'Metro EV',
+    style: 'sedan',
+    maxSpeed: 55,
+    accel: 34,
+    brakeDecel: 39,
+    turnRate: 2.24,
+    grip: 9.8,
+    driftBias: 0.92,
+    mass: 1940,
+    numGears: 1,
+    shiftDuration: 0,
+    torqueProfile: 'ev',
+    engineSound: 'electric-ev',
+  },
+  // Everyday city cruiser taxi: modest 94 mph top speed, softer suspension, 5-speed commuter auto
+  taxi: {
+    name: 'Sol City Taxi',
+    style: 'sedan',
+    maxSpeed: 42,
+    accel: 17,
+    brakeDecel: 32,
+    turnRate: 2.18,
+    grip: 8.1,
+    driftBias: 1.0,
+    mass: 1710,
+    numGears: 5,
+    shiftDuration: 0.2,
+    torqueProfile: 'balanced',
+    engineSound: 'commuter-i4',
+  },
+  // Heavy luxury V8 SUV: 2.35-ton ramming tank, deep bassy growl, wide body roll, 92 mph top speed
+  suv: {
+    name: 'Coastal SUV',
+    style: 'sedan',
+    maxSpeed: 41,
+    accel: 16,
+    brakeDecel: 30,
+    turnRate: 1.92,
+    grip: 8.6,
+    driftBias: 0.96,
+    mass: 2350,
+    numGears: 5,
+    shiftDuration: 0.22,
+    torqueProfile: 'low-end',
+    engineSound: 'heavy-v8',
+  },
 };
 
 export function getModelDisplayName(kind: CarModelKind): string {
@@ -90,6 +242,7 @@ export function createVehicleConfigForModel(
   spawnYaw: number,
   customName?: string,
   customColorHex?: number,
+  defaultPaintIndex = 0,
 ): VehicleConfig {
   const spec = MODEL_SPEC_TABLE[modelKind];
   return {
@@ -97,7 +250,7 @@ export function createVehicleConfigForModel(
     name: customName ?? spec.name,
     style: spec.style,
     modelKind,
-    defaultPaintIndex: 0,
+    defaultPaintIndex,
     customColorHex,
     spawnX,
     spawnZ,
@@ -106,122 +259,25 @@ export function createVehicleConfigForModel(
     accel: spec.accel,
     brakeDecel: spec.brakeDecel,
     turnRate: spec.turnRate,
+    grip: spec.grip,
+    driftBias: spec.driftBias,
+    mass: spec.mass,
+    numGears: spec.numGears,
+    shiftDuration: spec.shiftDuration,
+    torqueProfile: spec.torqueProfile,
+    engineSound: spec.engineSound,
   };
 }
 
 export const DEFAULT_VEHICLES: VehicleConfig[] = [
-  {
-    id: 'solstice-gt',
-    name: 'Solstice GT',
-    style: 'supercar',
-    modelKind: 'ferrari',
-    defaultPaintIndex: 0,
-    spawnX: 144,
-    spawnZ: 28,
-    spawnYaw: 0,
-    maxSpeed: 54,
-    accel: 24,
-    brakeDecel: 38,
-    turnRate: 2.35,
-  },
-  {
-    id: 'biscayne-ev',
-    name: 'Biscayne EV',
-    style: 'sedan',
-    modelKind: 'ev',
-    defaultPaintIndex: 1,
-    spawnX: -196,
-    spawnZ: -38,
-    spawnYaw: 0,
-    maxSpeed: 50,
-    accel: 26,
-    brakeDecel: 36,
-    turnRate: 2.15,
-  },
-  {
-    id: 'keysol-spyder',
-    name: 'Key Sol Spyder',
-    style: 'spyder',
-    modelKind: 'spyder',
-    defaultPaintIndex: 2,
-    spawnX: 18,
-    spawnZ: 164,
-    spawnYaw: Math.PI * 0.5,
-    maxSpeed: 52,
-    accel: 23,
-    brakeDecel: 37,
-    turnRate: 2.45,
-  },
-  {
-    id: 'neon-apex',
-    name: 'Neon Apex',
-    style: 'coupe',
-    modelKind: 'gt',
-    defaultPaintIndex: 3,
-    spawnX: -16,
-    spawnZ: -90,
-    spawnYaw: Math.PI,
-    maxSpeed: 53,
-    accel: 25,
-    brakeDecel: 38,
-    turnRate: 2.4,
-  },
-  {
-    id: 'ocean-taxi',
-    name: 'Sol City Taxi',
-    style: 'sedan',
-    modelKind: 'taxi',
-    defaultPaintIndex: 5,
-    spawnX: 74,
-    spawnZ: 18,
-    spawnYaw: 0,
-    maxSpeed: 47,
-    accel: 21,
-    brakeDecel: 35,
-    turnRate: 2.2,
-  },
-  {
-    id: 'midnight-jdm',
-    name: 'Biscayne JDM',
-    style: 'coupe',
-    modelKind: 'jdm',
-    defaultPaintIndex: 4,
-    spawnX: -66,
-    spawnZ: 164,
-    spawnYaw: Math.PI * 0.5,
-    maxSpeed: 51,
-    accel: 24,
-    brakeDecel: 37,
-    turnRate: 2.5,
-  },
-  {
-    id: 'coral-suv',
-    name: 'Coral Cruiser SUV',
-    style: 'sedan',
-    modelKind: 'suv',
-    defaultPaintIndex: 0,
-    spawnX: -286,
-    spawnZ: 28,
-    spawnYaw: 0,
-    maxSpeed: 46,
-    accel: 20,
-    brakeDecel: 34,
-    turnRate: 2.05,
-  },
-  {
-    id: 'wynwood-coupe',
-    name: 'Wynwood GT Coupe',
-    style: 'coupe',
-    modelKind: 'coupe',
-    defaultPaintIndex: 1,
-    spawnX: -196,
-    spawnZ: -268,
-    spawnYaw: Math.PI,
-    maxSpeed: 52,
-    accel: 24,
-    brakeDecel: 37,
-    turnRate: 2.4,
-  },
+  createVehicleConfigForModel('solstice-gt', 'ferrari', 144, 28, 0, 'Solstice GT', undefined, 0),
+  createVehicleConfigForModel('biscayne-ev', 'ev', -196, -38, 0, 'Biscayne EV', undefined, 1),
+  createVehicleConfigForModel('keysol-spyder', 'spyder', 18, 164, Math.PI * 0.5, 'Key Sol Spyder', undefined, 2),
+  createVehicleConfigForModel('neon-apex', 'gt', -16, -90, Math.PI, 'Neon Apex', undefined, 3),
+  createVehicleConfigForModel('ocean-taxi', 'taxi', 74, 18, 0, 'Sol City Taxi', undefined, 5),
+  createVehicleConfigForModel('midnight-jdm', 'jdm', -66, 164, Math.PI * 0.5, 'Biscayne JDM', undefined, 4),
+  createVehicleConfigForModel('coral-suv', 'suv', -286, 28, 0, 'Coral Cruiser SUV', undefined, 0),
+  createVehicleConfigForModel('wynwood-coupe', 'coupe', -196, -268, Math.PI, 'Wynwood GT Coupe', undefined, 1),
 ];
 
 export interface VehicleDriveInput {
@@ -259,6 +315,14 @@ export interface VehicleState {
   paintIndex: number;
   odometerMeters: number;
   mass: number;
+  /** Active gear (-1 = R, 0 = N, 1..numGears = forward gears; EV uses 1 = D) */
+  gear: number;
+  /** Normalized engine RPM (0.12 = idle, 1.0 = redline) with real gear-ratio drops & downshift blips */
+  rpm: number;
+  /** Seconds remaining in active gear-change clutch/DCT cut */
+  shiftTimer: number;
+  /** Triggered for one tick when an upshift or downshift occurs (drives shift audio!) */
+  lastShiftKind: 'none' | 'up' | 'down';
   lastCollisionImpact: number;
   lastImpactX: number;
   lastImpactZ: number;
@@ -288,14 +352,6 @@ export function computeGroundSlopeTilt(
 }
 
 export function createVehicleState(cfg: VehicleConfig): VehicleState {
-  const mass =
-    cfg.modelKind === 'suv'
-      ? 2150
-      : cfg.modelKind === 'taxi' || cfg.modelKind === 'ev'
-        ? 1720
-        : cfg.modelKind === 'ferrari'
-          ? 1450
-          : 1540;
   const initSlope = computeGroundSlopeTilt(cfg.spawnX, cfg.spawnZ, cfg.spawnYaw);
   return {
     id: cfg.id,
@@ -325,7 +381,11 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
     headlightsOn: true,
     paintIndex: cfg.defaultPaintIndex,
     odometerMeters: 0,
-    mass,
+    mass: cfg.mass,
+    gear: 0,
+    rpm: cfg.numGears <= 1 ? 0.05 : 0.14,
+    shiftTimer: 0,
+    lastShiftKind: 'none',
     lastCollisionImpact: 0,
     lastImpactX: cfg.spawnX,
     lastImpactZ: cfg.spawnZ,
@@ -352,6 +412,10 @@ export function stepVehiclePhysics(
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   v.lastCollisionImpact = 0;
+  v.lastShiftKind = 'none';
+  if (v.shiftTimer > 0) {
+    v.shiftTimer = Math.max(0, v.shiftTimer - safeDt);
+  }
 
   const fwd = forwardFromYaw(v.yaw);
   const right = rightFromYaw(v.yaw);
@@ -372,7 +436,7 @@ export function stepVehiclePhysics(
   let accelForce = 0;
 
   if (v.grounded) {
-    // 1. Longitudinal drive, braking, handbrake & aerodynamic drag
+    // 1. Longitudinal drive with per-car torque curve & momentary shift power-cut
     if (input.handbrake) {
       v.braking = true;
       const hbDecel = v.config.brakeDecel * 0.52 * safeDt;
@@ -384,9 +448,21 @@ export function stepVehiclePhysics(
         forwardSpeed += v.config.brakeDecel * safeDt;
       } else {
         const topRatio = clamp(forwardSpeed / v.config.maxSpeed, 0, 1);
-        // Punchy low-end launch torque tapering smoothly toward top speed
-        const torqueCurve = 1.18 - topRatio * 0.78;
-        const delta = input.throttle * v.config.accel * torqueCurve * safeDt;
+        let torqueCurve: number;
+        if (v.config.torqueProfile === 'ev') {
+          // Electric dual-motor: ferocious 0-60 instant torque, tapering smoothly near top speed
+          torqueCurve = topRatio < 0.45 ? 1.32 - topRatio * 0.35 : 1.16 - (topRatio - 0.45) * 1.45;
+        } else if (v.config.torqueProfile === 'high-rev') {
+          // High-revving exotic / flat-6 / turbo: builds power cleanly through mid & upper band
+          torqueCurve = 0.96 + Math.sin(topRatio * Math.PI * 0.85) * 0.34 - topRatio * 0.42;
+        } else if (v.config.torqueProfile === 'low-end') {
+          // Torquey V8: strong grunt off the line & mid-range
+          torqueCurve = 1.24 - topRatio * 0.72;
+        } else {
+          torqueCurve = 1.12 - topRatio * 0.7;
+        }
+        const shiftCut = v.shiftTimer > 0 && v.config.numGears > 1 ? 0.38 : 1.0;
+        const delta = input.throttle * v.config.accel * Math.max(0.24, torqueCurve) * shiftCut * safeDt;
         forwardSpeed += delta;
         accelForce = delta / safeDt;
       }
@@ -410,22 +486,27 @@ export function stepVehiclePhysics(
 
     forwardSpeed = clamp(forwardSpeed, -17, v.config.maxSpeed);
 
-    // 2. GTA-style yaw rotational inertia & front/rear tire slip dynamics!
+    // 2. GTA-style yaw rotational inertia & per-car tire slip/drift personality!
     const dirSign = forwardSpeed >= -0.1 ? 1 : -1;
     const speedEngage = clamp(Math.abs(forwardSpeed) / 6.5, 0, 1);
     const highSpeedTrim = 1.0 - clamp(Math.abs(forwardSpeed) / (v.config.maxSpeed * 1.55), 0, 0.36);
 
     // Handbrake or hard RWD throttle-cornering breaks rear traction into a smooth drift!
     const powerOversteer =
-      isSportRwd && input.throttle > 0.65 && Math.abs(input.steer) > 0.5 && absSpeed > 10 && absSpeed < 34;
-    const rearBreakaway = input.handbrake && absSpeed > 5.5 ? 1.48 : powerOversteer ? 1.18 : 1.0;
+      isSportRwd && input.throttle > 0.65 && Math.abs(input.steer) > 0.5 && absSpeed > 10 && absSpeed < 38;
+    const rearBreakaway =
+      input.handbrake && absSpeed > 5.5
+        ? 1.38 * v.config.driftBias
+        : powerOversteer
+          ? 1.08 * v.config.driftBias
+          : 1.0;
 
     // Target angular velocity from steering + natural counter-steer recovery when sliding
     const desiredYawRate =
       input.steer * v.config.turnRate * speedEngage * highSpeedTrim * rearBreakaway * dirSign;
 
     // Responsive turn-in with real rotational inertia (lets car hold a slide & counter-steer!)
-    const yawResponse = input.handbrake ? 5.2 : 8.5;
+    const yawResponse = input.handbrake ? 5.0 : 8.5;
     v.yawRate = lerp(v.yawRate, desiredYawRate, clamp(safeDt * yawResponse, 0, 1));
     if (absSpeed < 0.35 && Math.abs(v.yawRate) < 0.15) {
       v.yawRate *= Math.exp(-10 * safeDt);
@@ -437,13 +518,13 @@ export function stepVehiclePhysics(
     const newRight = rightFromYaw(v.yaw);
     const oldLat = v.vx * newRight.x + v.vz * newRight.z;
 
-    // Dynamic tire lateral grip: tight when cruising, sliding smoothly on handbrake/power-drift!
+    // Dynamic per-car lateral grip (EV planted AWD vs JDM drift tail vs Exotic crisp grip!)
     const slipRatio = clamp(Math.abs(oldLat) / 11, 0, 1);
-    const baseGrip = isSportRwd ? 7.8 : 9.2;
+    const baseGrip = v.config.grip;
     const lateralGrip = input.handbrake
-      ? 1.55
+      ? 1.55 / Math.max(0.85, v.config.driftBias * 0.9)
       : powerOversteer
-        ? 3.4
+        ? 3.6 / Math.max(0.9, v.config.driftBias)
         : lerp(baseGrip, baseGrip * 0.52, slipRatio * 0.65);
 
     // Slight rear kickout during handbrake/power-slide adds authentic GTA drift angle!
@@ -597,6 +678,62 @@ export function stepVehiclePhysics(
   v.odometerMeters += horizMoved;
   v.wheelSpin += (v.speed / 0.37) * safeDt;
 
+  // 6. Real Multi-Gear Transmission & RPM Simulation (upshift RPM drop + downshift rev-match blip!)
+  const numGears = v.config.numGears;
+  if (numGears <= 1) {
+    // Single-speed direct-drive EV: smooth continuous RPM rise with zero shift interruptions
+    v.gear = v.speed < -0.5 ? -1 : Math.abs(v.speed) < 0.35 ? 0 : 1;
+    const targetEvRpm = clamp(0.05 + (Math.abs(v.speed) / v.config.maxSpeed) * 0.95, 0.05, 1.0);
+    v.rpm = lerp(v.rpm, targetEvRpm, clamp(safeDt * 12, 0, 1));
+  } else if (v.speed < -0.5) {
+    v.gear = -1;
+    const revRpm = clamp(0.18 + (Math.abs(v.speed) / 17) * 0.72 + Math.abs(input.throttle) * 0.08, 0.14, 0.96);
+    v.rpm = lerp(v.rpm, revRpm, clamp(safeDt * 10, 0, 1));
+  } else if (v.speed < 0.35 && input.throttle <= 0.05) {
+    v.gear = 0;
+    v.rpm = lerp(v.rpm, 0.14, clamp(safeDt * 8, 0, 1));
+  } else {
+    if (v.gear < 1) v.gear = 1;
+    if (v.gear > numGears) v.gear = numGears;
+
+    // Progressive per-gear top speed ratio (shorter punchy lower gears, tall overdrive top gear!)
+    const gearMaxSpeed = (g: number): number => {
+      const frac = Math.pow(g / numGears, 1.18);
+      return v.config.maxSpeed * (0.15 + frac * 0.89);
+    };
+    const gearLow = v.gear === 1 ? 0 : gearMaxSpeed(v.gear - 1) * 0.56;
+    const gearHigh = gearMaxSpeed(v.gear);
+    const rawRpm = clamp(0.16 + ((v.speed - gearLow) / Math.max(3, gearHigh - gearLow)) * 0.82, 0.16, 1.02);
+
+    // Upshift near redline when accelerating; downshift with hysteresis when decelerating/braking
+    if (v.shiftTimer <= 0) {
+      if (v.gear < numGears && rawRpm >= 0.94 && input.throttle > 0.1) {
+        v.gear += 1;
+        v.shiftTimer = v.config.shiftDuration;
+        v.lastShiftKind = 'up';
+        // Crisp RPM drop on upshift (gives unmistakable rising-dropping shift cadence!)
+        v.rpm = clamp(v.rpm * 0.64, 0.34, 0.68);
+      } else if (v.gear > 1 && rawRpm <= 0.35 && (input.throttle <= 0.25 || v.braking)) {
+        v.gear -= 1;
+        v.shiftTimer = v.config.shiftDuration * 0.85;
+        v.lastShiftKind = 'down';
+        // Sporty rev-match throttle blip on downshift!
+        v.rpm = clamp(rawRpm + 0.34, 0.48, 0.88);
+      }
+    }
+
+    const newLow = v.gear === 1 ? 0 : gearMaxSpeed(v.gear - 1) * 0.56;
+    const newHigh = gearMaxSpeed(v.gear);
+    const loadBump = input.throttle > 0.1 ? input.throttle * 0.06 : 0;
+    const targetRpm = clamp(
+      0.16 + ((v.speed - newLow) / Math.max(3, newHigh - newLow)) * 0.8 + loadBump,
+      0.14,
+      1.0,
+    );
+    const rpmTrackRate = v.shiftTimer > 0 ? 7.5 : 14.0;
+    v.rpm = lerp(v.rpm, targetRpm, clamp(safeDt * rpmTrackRate, 0, 1));
+  }
+
   const accelInstant = accelForce !== 0 ? accelForce : (v.speed - prevForward) / safeDt;
   // Soft suspension cars (SUV/Taxi/Sedan) roll & squat more than stiff supercars!
   const softness = v.style === 'sedan' ? 1.45 : v.style === 'spyder' ? 1.15 : 0.95;
@@ -677,6 +814,13 @@ export function computeGear(speedMetersPerSec: number): string {
   if (mph < 92) return '4';
   if (mph < 112) return '5';
   return '6';
+}
+
+export function formatVehicleGear(v: VehicleState): string {
+  if (v.gear < 0) return 'R';
+  if (v.gear === 0) return 'N';
+  if (v.config.numGears <= 1) return 'D';
+  return String(v.gear);
 }
 
 function createLicensePlateTexture(): THREE.CanvasTexture {

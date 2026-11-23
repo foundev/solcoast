@@ -1308,13 +1308,20 @@ async function bootstrap(): Promise<void> {
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
 
-    const speedNorm = activeVehicle
-      ? clamp(Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed, 0, 1)
-      : 0;
-
     if (activeVehicle) {
       const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
-      sound.updateDriving(true, speedNorm, snap.forward, driftAmt, snap.horn);
+      if (activeVehicle.lastShiftKind !== 'none') {
+        sound.playGearShift(activeVehicle.config.engineSound, activeVehicle.lastShiftKind);
+      }
+      sound.updateDriving(
+        true,
+        activeVehicle.rpm,
+        snap.forward,
+        driftAmt,
+        snap.horn,
+        activeVehicle.config.engineSound,
+        activeVehicle.shiftTimer > 0,
+      );
       lastPlayerStepIdx = Math.floor(player.walkPhase / Math.PI);
       wasPlayerGrounded = true;
       prevPlayerVy = 0;

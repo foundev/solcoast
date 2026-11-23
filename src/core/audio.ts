@@ -1,3 +1,4 @@
+import type { EngineSoundProfile } from '../entities/vehicle';
 import { clamp, rightFromYaw } from './math';
 
 export type FootstepSurface = 'concrete' | 'sand' | 'wood' | 'tile' | 'carpet';
@@ -89,10 +90,16 @@ export class SoundEngine {
   private ctx: AudioContext | null = null;
   private noiseBuf: AudioBuffer | null = null;
 
-  // Player vehicle continuous nodes
+  // Player vehicle multi-voice engine + turbo + drift + horn continuous nodes
   private engineOsc: OscillatorNode | null = null;
   private engineSub: OscillatorNode | null = null;
+  private engineHarm: OscillatorNode | null = null;
+  private engineHarmGain: GainNode | null = null;
+  private engineFilter: BiquadFilterNode | null = null;
   private engineGain: GainNode | null = null;
+  private turboOsc: OscillatorNode | null = null;
+  private turboGain: GainNode | null = null;
+  private activeEngineProfile: EngineSoundProfile | null = null;
   private driftGain: GainNode | null = null;
   private hornOscA: OscillatorNode | null = null;
   private hornOscB: OscillatorNode | null = null;
@@ -134,10 +141,11 @@ export class SoundEngine {
     }
     this.noiseBuf = noiseBuf;
 
-    // 1. Player car engine main + sub harmonic
+    // 1. Multi-voice per-car engine synthesizer (primary firing + sub exhaust + upper harmonic + turbo spool)
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 420;
+    filter.frequency.value = 460;
+    filter.Q.value = 1.1;
 
     const engineGain = ctx.createGain();
     engineGain.gain.value = 0.0;
@@ -150,16 +158,41 @@ export class SoundEngine {
     sub.type = 'triangle';
     sub.frequency.value = 32;
 
+    const harm = ctx.createOscillator();
+    harm.type = 'sawtooth';
+    harm.frequency.value = 128;
+
+    const harmGain = ctx.createGain();
+    harmGain.gain.value = 0.25;
+
     osc.connect(filter);
     sub.connect(filter);
+    harm.connect(harmGain);
+    harmGain.connect(filter);
     filter.connect(engineGain);
     engineGain.connect(ctx.destination);
     osc.start();
     sub.start();
+    harm.start();
+
+    // Subtle high-frequency turbocharger spool / EV inverter harmonic voice
+    const turboOsc = ctx.createOscillator();
+    turboOsc.type = 'sine';
+    turboOsc.frequency.value = 1400;
+    const turboGain = ctx.createGain();
+    turboGain.gain.value = 0;
+    turboOsc.connect(turboGain);
+    turboGain.connect(ctx.destination);
+    turboOsc.start();
 
     this.engineOsc = osc;
     this.engineSub = sub;
+    this.engineHarm = harm;
+    this.engineHarmGain = harmGain;
+    this.engineFilter = filter;
     this.engineGain = engineGain;
+    this.turboOsc = turboOsc;
+    this.turboGain = turboGain;
 
     // 2. Tire drift screech (filtered looping noise)
     const driftNoiseSrc = ctx.createBufferSource();
@@ -289,6 +322,7 @@ export class SoundEngine {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     this.engineGain?.gain.setTargetAtTime(0, now, 0.05);
+    this.turboGain?.gain.setTargetAtTime(0, now, 0.05);
     this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
     this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
     this.trafficGain?.gain.setTargetAtTime(0, now, 0.08);
@@ -298,10 +332,12 @@ export class SoundEngine {
 
   public updateDriving(
     inCar: boolean,
-    speedNorm: number,
+    rpmNorm: number,
     throttle: number,
     driftAmount: number,
     horn: boolean,
+    profile: EngineSoundProfile = 'exotic-v12',
+    shiftActive = false,
   ): void {
     if (!this.ctx || !this.enabled) {
       this.silenceContinuous();
@@ -313,20 +349,164 @@ export class SoundEngine {
     const now = this.ctx.currentTime;
     if (!inCar) {
       this.engineGain?.gain.setTargetAtTime(0, now, 0.05);
+      this.turboGain?.gain.setTargetAtTime(0, now, 0.05);
       this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
       this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
       return;
     }
 
-    const rpm = clamp(0.18 + speedNorm * 0.72 + Math.abs(throttle) * 0.16, 0.15, 1.1);
-    const baseFreq = 46 + rpm * 150;
-    this.engineOsc?.frequency.setTargetAtTime(baseFreq, now, 0.04);
-    this.engineSub?.frequency.setTargetAtTime(baseFreq * 0.5, now, 0.04);
-    this.engineGain?.gain.setTargetAtTime(
-      0.025 + Math.abs(throttle) * 0.03 + speedNorm * 0.02,
+    // Reconfigure oscillator waveforms cleanly when switching car archetypes
+    if (this.activeEngineProfile !== profile && this.engineOsc && this.engineSub && this.engineHarm) {
+      this.activeEngineProfile = profile;
+      if (profile === 'electric-ev') {
+        this.engineOsc.type = 'sine';
+        this.engineSub.type = 'triangle';
+        this.engineHarm.type = 'sine';
+      } else if (profile === 'muscle-v8' || profile === 'heavy-v8') {
+        this.engineOsc.type = 'sawtooth';
+        this.engineSub.type = 'square';
+        this.engineHarm.type = 'sawtooth';
+      } else if (profile === 'exotic-v12' || profile === 'flat6') {
+        this.engineOsc.type = 'sawtooth';
+        this.engineSub.type = 'triangle';
+        this.engineHarm.type = 'sawtooth';
+      } else {
+        this.engineOsc.type = 'sawtooth';
+        this.engineSub.type = 'triangle';
+        this.engineHarm.type = 'triangle';
+      }
+    }
+
+    const rpm = clamp(rpmNorm, 0.04, 1.05);
+    const load = clamp(Math.abs(throttle), 0, 1);
+
+    // Per-car acoustic synthesis parameters (idleHz, redlineHz, subRatio, harmRatio, harmLevel, filterBase, filterSpan, baseVol, turboLevel)
+    let idleHz = 56;
+    let redlineHz = 220;
+    let subRatio = 0.5;
+    let harmRatio = 2.0;
+    let harmLevel = 0.25;
+    let filterBase = 260;
+    let filterSpan = 850;
+    let baseVol = 0.045;
+    let turboLevel = 0;
+
+    if (profile === 'exotic-v12') {
+      // High-pitched Italian V12 wail with singing 3rd harmonic!
+      idleHz = 76;
+      redlineHz = 365;
+      subRatio = 0.5;
+      harmRatio = 1.5;
+      harmLevel = 0.44;
+      filterBase = 420;
+      filterSpan = 1650;
+      baseVol = 0.052;
+    } else if (profile === 'muscle-v8') {
+      // Throaty rumbling cross-plane twin-turbo V8 growl!
+      idleHz = 40;
+      redlineHz = 178;
+      subRatio = 0.506; // Slight detune creates authentic V8 burble beat!
+      harmRatio = 1.49;
+      harmLevel = 0.36;
+      filterBase = 220;
+      filterSpan = 880;
+      baseVol = 0.056;
+      turboLevel = 0.008;
+    } else if (profile === 'flat6') {
+      // Metallic raspy boxer flat-6 bark!
+      idleHz = 60;
+      redlineHz = 278;
+      subRatio = 0.5;
+      harmRatio = 2.02;
+      harmLevel = 0.38;
+      filterBase = 360;
+      filterSpan = 1350;
+      baseVol = 0.048;
+    } else if (profile === 'turbo-jdm') {
+      // Zippy high-revving tuner coupe + distinct spooling turbo whistle!
+      idleHz = 64;
+      redlineHz = 295;
+      subRatio = 0.5;
+      harmRatio = 2.0;
+      harmLevel = 0.3;
+      filterBase = 340;
+      filterSpan = 1280;
+      baseVol = 0.046;
+      turboLevel = 0.015;
+    } else if (profile === 'sport-v6') {
+      // Smooth, warm grand-touring V6 purr
+      idleHz = 50;
+      redlineHz = 218;
+      subRatio = 0.5;
+      harmRatio = 1.5;
+      harmLevel = 0.24;
+      filterBase = 290;
+      filterSpan = 960;
+      baseVol = 0.044;
+    } else if (profile === 'electric-ev') {
+      // Futuristic clean dual-motor electric inverter whine (silent at standstill!)
+      idleHz = 135;
+      redlineHz = 780;
+      subRatio = 0.5;
+      harmRatio = 2.0;
+      harmLevel = 0.32;
+      filterBase = 550;
+      filterSpan = 2200;
+      baseVol = 0.036;
+      turboLevel = 0.012;
+    } else if (profile === 'heavy-v8') {
+      // Deep, bassy luxury SUV V8 rumble
+      idleHz = 32;
+      redlineHz = 132;
+      subRatio = 0.505;
+      harmRatio = 1.5;
+      harmLevel = 0.28;
+      filterBase = 170;
+      filterSpan = 560;
+      baseVol = 0.055;
+    } else {
+      // commuter-i4 (Sol City Taxi)
+      idleHz = 46;
+      redlineHz = 168;
+      subRatio = 0.5;
+      harmRatio = 2.0;
+      harmLevel = 0.18;
+      filterBase = 230;
+      filterSpan = 640;
+      baseVol = 0.04;
+    }
+
+    const freq = idleHz + (redlineHz - idleHz) * rpm;
+    const shiftDip = shiftActive && profile !== 'electric-ev' ? 0.52 : 1.0;
+
+    this.engineOsc?.frequency.setTargetAtTime(freq, now, 0.025);
+    this.engineSub?.frequency.setTargetAtTime(freq * subRatio, now, 0.025);
+    this.engineHarm?.frequency.setTargetAtTime(freq * harmRatio, now, 0.025);
+    this.engineHarmGain?.gain.setTargetAtTime(harmLevel * (0.65 + rpm * 0.45), now, 0.03);
+    this.engineFilter?.frequency.setTargetAtTime(
+      filterBase + filterSpan * (rpm * 0.72 + load * 0.35),
       now,
-      0.06,
+      0.03,
     );
+
+    const vol =
+      profile === 'electric-ev'
+        ? baseVol * clamp((rpm - 0.05) * 1.15, 0, 1) * (0.6 + load * 0.55)
+        : (baseVol * 0.42 + baseVol * 0.55 * load + baseVol * 0.38 * rpm) * shiftDip;
+    this.engineGain?.gain.setTargetAtTime(vol, now, 0.03);
+
+    // Turbo spool whine (JDM / twin-turbo V8) or high-frequency EV inverter shimmer
+    if (turboLevel > 0) {
+      const turboFreq = profile === 'electric-ev' ? 680 + rpm * 1950 : 1250 + rpm * 2100;
+      const turboVol =
+        profile === 'electric-ev'
+          ? turboLevel * clamp((rpm - 0.08) * 1.1, 0, 1)
+          : turboLevel * clamp((rpm - 0.35) * 1.4, 0, 1) * (0.35 + load * 0.85) * shiftDip;
+      this.turboOsc?.frequency.setTargetAtTime(turboFreq, now, 0.04);
+      this.turboGain?.gain.setTargetAtTime(turboVol, now, 0.05);
+    } else {
+      this.turboGain?.gain.setTargetAtTime(0, now, 0.05);
+    }
 
     const driftVol = clamp(driftAmount * 0.075, 0, 0.075);
     this.driftGain?.gain.setTargetAtTime(driftVol, now, 0.04);
@@ -334,6 +514,121 @@ export class SoundEngine {
     this.hornGain?.gain.setTargetAtTime(horn ? 0.065 : 0, now, 0.02);
     void this.hornOscA;
     void this.hornOscB;
+  }
+
+  /**
+   * Plays authentic upshift / downshift mechanical & exhaust transients per car class:
+   * - Exotic V12 / V8 / Flat-6: crisp dual-clutch bark or exhaust crackle on upshift + rev-match blip on downshift!
+   * - Turbo JDM: iconic blow-off valve ("pssh-tu-tu!") air release on upshift!
+   * - Commuter / SUV: subtle mechanical transmission thump!
+   */
+  public playGearShift(profile: EngineSoundProfile, kind: 'up' | 'down'): void {
+    if (!this.ctx || !this.noiseBuf || !this.enabled || profile === 'electric-ev') return;
+    if (this.ctx.state === 'suspended') {
+      void this.ctx.resume();
+    }
+    const now = this.ctx.currentTime;
+
+    if (kind === 'up') {
+      if (profile === 'turbo-jdm') {
+        // Iconic turbo blow-off valve flutter ("pssh-tu-tu!")
+        for (let i = 0; i < 3; i++) {
+          const t0 = now + i * 0.048;
+          const src = this.ctx.createBufferSource();
+          src.buffer = this.noiseBuf;
+          const bp = this.ctx.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(2400 - i * 320, t0);
+          bp.Q.value = 3.2;
+          const g = this.ctx.createGain();
+          const amp = (0.048 - i * 0.012);
+          g.gain.setValueAtTime(0.0008, t0);
+          g.gain.linearRampToValueAtTime(amp, t0 + 0.008);
+          g.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.055);
+          src.connect(bp);
+          bp.connect(g);
+          g.connect(this.ctx.destination);
+          src.start(t0, Math.random() * 1.2, 0.065);
+        }
+      } else if (profile === 'exotic-v12' || profile === 'muscle-v8' || profile === 'flat6') {
+        // Crisp dual-clutch / sport exhaust upshift bark & subtle pop!
+        const bark = this.ctx.createOscillator();
+        const bGain = this.ctx.createGain();
+        bark.type = 'sawtooth';
+        const fStart = profile === 'exotic-v12' ? 240 : profile === 'flat6' ? 195 : 135;
+        bark.frequency.setValueAtTime(fStart, now);
+        bark.frequency.exponentialRampToValueAtTime(fStart * 0.45, now + 0.075);
+        const filt = this.ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.value = profile === 'exotic-v12' ? 950 : 620;
+        bGain.gain.setValueAtTime(0.001, now);
+        bGain.gain.linearRampToValueAtTime(0.055, now + 0.007);
+        bGain.gain.exponentialRampToValueAtTime(0.0006, now + 0.085);
+        bark.connect(filt);
+        filt.connect(bGain);
+        bGain.connect(this.ctx.destination);
+        bark.start(now);
+        bark.stop(now + 0.095);
+
+        // Brief exhaust burble pop
+        const popSrc = this.ctx.createBufferSource();
+        popSrc.buffer = this.noiseBuf;
+        const popBp = this.ctx.createBiquadFilter();
+        popBp.type = 'bandpass';
+        popBp.frequency.value = profile === 'muscle-v8' ? 320 : 540;
+        popBp.Q.value = 1.6;
+        const popG = this.ctx.createGain();
+        popG.gain.setValueAtTime(0.048, now + 0.01);
+        popG.gain.exponentialRampToValueAtTime(0.0006, now + 0.075);
+        popSrc.connect(popBp);
+        popBp.connect(popG);
+        popG.connect(this.ctx.destination);
+        popSrc.start(now + 0.01, Math.random() * 1.2, 0.075);
+      } else {
+        // Soft mechanical gear engagement thump on V6 / Taxi / SUV
+        const thud = this.ctx.createOscillator();
+        const tg = this.ctx.createGain();
+        thud.type = 'sine';
+        thud.frequency.setValueAtTime(92, now);
+        thud.frequency.exponentialRampToValueAtTime(44, now + 0.065);
+        tg.gain.setValueAtTime(0.001, now);
+        tg.gain.linearRampToValueAtTime(0.032, now + 0.006);
+        tg.gain.exponentialRampToValueAtTime(0.0006, now + 0.072);
+        thud.connect(tg);
+        tg.connect(this.ctx.destination);
+        thud.start(now);
+        thud.stop(now + 0.08);
+      }
+    } else {
+      // Downshift: crisp throttle rev-match blip!
+      const isSporty =
+        profile === 'exotic-v12' || profile === 'muscle-v8' || profile === 'flat6' || profile === 'turbo-jdm';
+      const blip = this.ctx.createOscillator();
+      const bFilt = this.ctx.createBiquadFilter();
+      const bGain = this.ctx.createGain();
+      blip.type = isSporty ? 'sawtooth' : 'triangle';
+      const baseHz =
+        profile === 'exotic-v12'
+          ? 165
+          : profile === 'flat6' || profile === 'turbo-jdm'
+            ? 135
+            : profile === 'muscle-v8'
+              ? 88
+              : 74;
+      blip.frequency.setValueAtTime(baseHz, now);
+      blip.frequency.exponentialRampToValueAtTime(baseHz * 1.62, now + 0.055);
+      blip.frequency.exponentialRampToValueAtTime(baseHz * 1.12, now + 0.14);
+      bFilt.type = 'lowpass';
+      bFilt.frequency.value = isSporty ? 920 : 420;
+      bGain.gain.setValueAtTime(0.001, now);
+      bGain.gain.linearRampToValueAtTime(isSporty ? 0.048 : 0.025, now + 0.022);
+      bGain.gain.exponentialRampToValueAtTime(0.0006, now + 0.145);
+      blip.connect(bFilt);
+      bFilt.connect(bGain);
+      bGain.connect(this.ctx.destination);
+      blip.start(now);
+      blip.stop(now + 0.155);
+    }
   }
 
   /** Updates subtle continuous spatialized ambience (passing traffic hum, ocean surf, Club Neon bass). */

@@ -2,7 +2,7 @@ import { distXZ } from '../core/math';
 import type { PlayerState } from '../entities/player';
 import {
   PAINT_FINISHES,
-  computeGear,
+  formatVehicleGear,
   speedToMph,
   type VehicleState,
 } from '../entities/vehicle';
@@ -183,10 +183,10 @@ export class HudController {
       const mph = speedToMph(activeVehicle.speed);
       this.vehicleNameEl.textContent = activeVehicle.name.toUpperCase();
       this.speedValEl.textContent = String(mph);
-      this.gearValEl.textContent = computeGear(activeVehicle.speed);
+      this.gearValEl.textContent = formatVehicleGear(activeVehicle);
       this.vehicleBadgeEl.classList.toggle('hidden', !activeVehicle.drifting);
-      const speedNorm = Math.min(1, Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed);
-      this.rpmFillEl.style.width = `${Math.round(8 + speedNorm * 92)}%`;
+      const rpmPct = Math.round(6 + Math.min(1, Math.max(0, activeVehicle.rpm)) * 94);
+      this.rpmFillEl.style.width = `${rpmPct}%`;
       const finish = PAINT_FINISHES[activeVehicle.paintIndex % PAINT_FINISHES.length];
       this.paintNameEl.textContent = finish.name;
       this.odoValEl.textContent = `${(activeVehicle.odometerMeters / 1609.34).toFixed(1)} mi`;

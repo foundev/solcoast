@@ -24,10 +24,12 @@ import {
 import { createTrafficCars, findNearestTrafficCar, relocateTrafficCarAway, stepTraffic } from '../src/entities/traffic';
 import {
   DEFAULT_VEHICLES,
+  MODEL_SPEC_TABLE,
   computeGear,
   computeGroundSlopeTilt,
   createVehicleConfigForModel,
   createVehicleState,
+  formatVehicleGear,
   getModelDisplayName,
   resolveVehiclePairCollisions,
   speedToMph,
@@ -1208,5 +1210,45 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(detectInteriorFootstepSurface('carpet')).toBe('carpet');
     expect(detectInteriorFootstepSurface('marble')).toBe('tile');
     expect(detectInteriorFootstepSurface('wood')).toBe('wood');
+  });
+
+  it('gives all 8 car models distinct performance/sound profiles and simulates real upshifting & downshifting', () => {
+    const models = Object.values(MODEL_SPEC_TABLE);
+    expect(models.length).toBe(8);
+    // Every model class has its own distinct engine sound profile!
+    expect(new Set(models.map((m) => m.engineSound)).size).toBe(8);
+    // Supercar top speed & EV launch torque clearly beat heavy SUV / Taxi
+    expect(MODEL_SPEC_TABLE.ferrari.maxSpeed).toBeGreaterThan(MODEL_SPEC_TABLE.suv.maxSpeed + 20);
+    expect(MODEL_SPEC_TABLE.ev.accel).toBeGreaterThan(MODEL_SPEC_TABLE.taxi.accel + 12);
+
+    // Accelerate the 7-speed Solstice GT and verify real upshifts fire, then brake and verify downshifts fire!
+    const ferrari = createVehicleState(DEFAULT_VEHICLES[0]);
+    ferrari.x = 140;
+    ferrari.z = 120;
+    ferrari.yaw = 0;
+    let upshifts = 0;
+    for (let i = 0; i < 240; i++) {
+      stepVehiclePhysics(ferrari, { throttle: 1, steer: 0, handbrake: false }, 1 / 60, []);
+      if (ferrari.lastShiftKind === 'up') upshifts++;
+    }
+    expect(upshifts).toBeGreaterThanOrEqual(3);
+    expect(ferrari.gear).toBeGreaterThanOrEqual(4);
+
+    let downshifts = 0;
+    for (let i = 0; i < 160; i++) {
+      stepVehiclePhysics(ferrari, { throttle: -1, steer: 0, handbrake: false }, 1 / 60, []);
+      if (ferrari.lastShiftKind === 'down') downshifts++;
+    }
+    expect(downshifts).toBeGreaterThanOrEqual(2);
+
+    // EV uses 1-speed direct drive ('D') with zero gear shifts!
+    const ev = createVehicleState(DEFAULT_VEHICLES[1]);
+    let evShifts = 0;
+    for (let i = 0; i < 180; i++) {
+      stepVehiclePhysics(ev, { throttle: 1, steer: 0, handbrake: false }, 1 / 60, []);
+      if (ev.lastShiftKind !== 'none') evShifts++;
+    }
+    expect(evShifts).toBe(0);
+    expect(formatVehicleGear(ev)).toBe('D');
   });
 });
