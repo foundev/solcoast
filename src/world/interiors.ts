@@ -1545,7 +1545,7 @@ function buildArchitecturalStorefront(def: InteriorDef, index: number): OutdoorS
     new THREE.PlaneGeometry(6.8, 1.45),
     new THREE.MeshBasicMaterial({ map: signTex }),
   );
-  signMesh.position.set(0, 4.35, canopyDepth + 0.12);
+  signMesh.position.set(0, 4.35, canopyDepth + 0.15);
   group.add(signMesh);
 
   const signBack = new THREE.Mesh(new THREE.BoxGeometry(7.0, 1.6, 0.24), frameMat);
@@ -1701,15 +1701,15 @@ function addAreaRug(
   borderHex: number,
 ): void {
   const outer = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 0.024, d),
+    new THREE.BoxGeometry(w, 0.03, d),
     new THREE.MeshStandardMaterial({ color: borderHex, roughness: 0.92 }),
   );
-  outer.position.set(cx, 0.012, cz);
+  outer.position.set(cx, 0.015, cz);
   const inner = new THREE.Mesh(
-    new THREE.BoxGeometry(w - 0.34, 0.028, d - 0.34),
+    new THREE.BoxGeometry(w - 0.34, 0.016, d - 0.34),
     new THREE.MeshStandardMaterial({ color: mainHex, roughness: 0.95 }),
   );
-  inner.position.set(cx, 0.014, cz);
+  inner.position.set(cx, 0.038, cz);
   group.add(outer, inner);
 }
 
@@ -2099,7 +2099,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         map: createSignTexture('HOTEL SOLAIRE', 'EST. 1938 · OCEAN DRIVE', '#2b1a14', '#ffe6b0', '#d9a84e'),
       }),
     );
-    hotelCrest.position.set(-5.9, 3.3, -1.78);
+    hotelCrest.position.set(-5.9, 3.3, -1.75);
     group.add(featureWall, hotelCrest);
 
     // Tall Sunlit Ocean Drive Windows flanking the Atrium Front Entrance
@@ -2294,15 +2294,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     hoodDuct.position.set(-0.9, 3.5, -5.3);
     group.add(island, hoodCanopy, hoodDuct);
 
-    // Framed Vintage Havana Art on Conservatory North Wall
+    // Framed Vintage Havana Art on Conservatory North Wall (4 cm proud of frame to prevent Z-fighting)
     for (let i = 0; i < 3; i++) {
       const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.6, 0.08), darkWoodMat);
-      frame.position.set(10.8 + i * 4.0, 2.4, -1.9);
+      frame.position.set(10.8 + i * 4.0, 2.4, -1.92);
       const art = new THREE.Mesh(
         new THREE.PlaneGeometry(2.0, 1.4),
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(i + 1) }),
       );
-      art.position.set(10.8 + i * 4.0, 2.4, -1.85);
+      art.position.set(10.8 + i * 4.0, 2.4, -1.84);
       group.add(frame, art);
     }
   } else {
@@ -2328,14 +2328,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const frameGroup = new THREE.Group();
       frameGroup.position.set(x, y, z);
       frameGroup.rotation.y = ry;
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(3.64, 2.64, 0.1), doorFrameMat);
-      frame.position.z = -0.05;
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(3.64, 2.64, 0.08), doorFrameMat);
+      frame.position.z = -0.04;
       const art = new THREE.Mesh(
         new THREE.PlaneGeometry(3.4, 2.4),
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(idx) }),
       );
-      const placard = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 0.22), placardMat);
-      placard.position.set(1.55, -1.48, 0.01);
+      art.position.z = 0.035;
+      const placard = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.22, 0.03), placardMat);
+      placard.position.set(1.55, -1.48, -0.02);
       frameGroup.add(frame, art, placard);
       group.add(frameGroup);
     });
