@@ -9,6 +9,7 @@ import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../s
 import { createHumanRigController } from '../src/entities/humanRig';
 import { createPedestrians, stepPedestrians } from '../src/entities/pedestrians';
 import {
+  applySeatedDrivingPose,
   computeCharacterPose,
   computeSafeExitPosition,
   createInitialPlayerState,
@@ -691,5 +692,48 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       (globalThis as unknown as { window?: unknown }).window = prevWin;
       (globalThis as unknown as { document?: unknown }).document = prevDoc;
     }
+  });
+
+  it('seats the real street-tough protagonist cleanly behind the wheel at 10-and-2 with legs in the footwell', async () => {
+    (globalThis as unknown as { self: unknown; createImageBitmap: unknown }).self = globalThis;
+    (globalThis as unknown as { createImageBitmap: unknown }).createImageBitmap = async () => ({
+      width: 1,
+      height: 1,
+      close() {},
+    });
+
+    const loader = new GLTFLoader();
+    const buf = fs.readFileSync(path.resolve(__dirname, '../public/assets/models/avatar_5.glb'));
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => loader.parse(ab, '', resolve, reject));
+
+    const parent = new THREE.Group();
+    const avatar = gltf.scene;
+    avatar.rotation.y = Math.PI;
+    parent.add(avatar);
+    parent.updateMatrixWorld(true);
+
+    const restQuats = new Map<string, THREE.Quaternion>();
+    avatar.traverse((o) => restQuats.set(o.name, o.quaternion.clone()));
+
+    applySeatedDrivingPose(avatar, restQuats, 0.35);
+    parent.updateMatrixWorld(true);
+
+    const wp = (name: string) => avatar.getObjectByName(name)!.getWorldPosition(new THREE.Vector3());
+    const lHand = wp('LeftHand');
+    const rHand = wp('RightHand');
+    const head = wp('Head');
+    const lFoot = wp('LeftFoot');
+
+    // Both hands forward on the steering wheel (-Z), separated ~28-38cm horizontally
+    expect(lHand.z).toBeLessThan(-0.28);
+    expect(rHand.z).toBeLessThan(-0.28);
+    expect(rHand.x - lHand.x).toBeGreaterThan(0.22);
+    expect(rHand.x - lHand.x).toBeLessThan(0.45);
+    // Turning right (+steerAngle) lifts left hand higher than right hand on the wheel rim
+    expect(lHand.y).toBeGreaterThan(rHand.y + 0.03);
+    // Head upright above Hips and feet tucked down in the pedal footwell
+    expect(head.y).toBeGreaterThan(0.5);
+    expect(lFoot.y).toBeLessThan(-0.3);
   });
 });

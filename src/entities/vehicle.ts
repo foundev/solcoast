@@ -33,6 +33,18 @@ export const PAINT_FINISHES: PaintFinish[] = [
   { name: 'Solar Gold', hex: 0xe89e1e, accentHex: 0xfff0b3, caliperHex: 0xe62e4d },
 ];
 
+/** Exact measured cockpit driver-seat Hips anchor (local to vehicle bodyGroup) for every 3D car model */
+export const DRIVER_SEAT_OFFSETS: Record<CarModelKind, { x: number; y: number; z: number }> = {
+  ferrari: { x: -0.36, y: 0.36, z: 0.14 },
+  spyder: { x: -0.38, y: 0.48, z: 0.08 },
+  gt: { x: -0.38, y: 0.41, z: -0.06 },
+  coupe: { x: -0.38, y: 0.44, z: -0.02 },
+  jdm: { x: -0.35, y: 0.44, z: 0.18 },
+  ev: { x: -0.38, y: 0.56, z: 0.04 },
+  taxi: { x: -0.38, y: 0.58, z: 0.02 },
+  suv: { x: -0.4, y: 0.64, z: 0.04 },
+};
+
 export type VehicleBodyStyle = 'supercar' | 'sedan' | 'spyder' | 'coupe';
 
 export interface VehicleConfig {
@@ -808,33 +820,6 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
   steeringWheel.add(wheelRim);
   bodyGroup.add(steeringWheel);
 
-  // Visible seated driver inside cockpit when occupied (looks awesome in Spyder & through glass!)
-  const seatedDriver = new THREE.Group();
-  seatedDriver.position.set(-0.4, 0.84, 0.26);
-  const drvTorso = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.17, 0.14, 0.36, 10),
-    new THREE.MeshStandardMaterial({ color: 0xf0eee8, roughness: 0.72 }),
-  );
-  drvTorso.position.y = 0.1;
-  const drvHead = new THREE.Mesh(
-    new THREE.SphereGeometry(0.105, 12, 10),
-    new THREE.MeshStandardMaterial({ color: 0xdca581, roughness: 0.6 }),
-  );
-  drvHead.position.y = 0.36;
-  const drvHair = new THREE.Mesh(
-    new THREE.SphereGeometry(0.11, 10, 8),
-    new THREE.MeshStandardMaterial({ color: 0x231914, roughness: 0.85 }),
-  );
-  drvHair.scale.set(0.95, 0.8, 1.02);
-  drvHair.position.set(0, 0.4, 0.015);
-  const drvShades = new THREE.Mesh(
-    new THREE.BoxGeometry(0.16, 0.045, 0.04),
-    new THREE.MeshPhysicalMaterial({ color: 0x09101a, roughness: 0.06, clearcoat: 1 }),
-  );
-  drvShades.position.set(0, 0.37, -0.095);
-  seatedDriver.add(drvTorso, drvHead, drvHair, drvShades);
-  bodyGroup.add(seatedDriver);
-
   // 3. Sculpted Lofted Glass Greenhouse OR Open-Top Spyder Windshield & Roll Hoops
   if (state.style === 'spyder') {
     const wsFrame = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.52, 0.055), glassMat);
@@ -1038,14 +1023,13 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     caliperMaterial.color.setHex(p.caliperHex);
   };
 
-  const syncFromState = (s: VehicleState, nightFactor: number, dt = 1 / 60, isOccupied = false) => {
+  const syncFromState = (s: VehicleState, nightFactor: number, dt = 1 / 60, _isOccupied = false) => {
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
     bodyGroup.position.y = s.suspOffset;
     bodyGroup.rotation.x = s.pitchTilt;
     bodyGroup.rotation.z = s.rollTilt;
 
-    seatedDriver.visible = isOccupied;
     steeringWheel.rotation.z = -s.steerAngle * 2.2;
 
     for (const p of frontWheelPivots) {

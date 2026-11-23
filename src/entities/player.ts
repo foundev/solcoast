@@ -23,7 +23,7 @@ import { createContactShadowTexture } from '../world/textures';
 import { createHumanRigController, type HumanRigController } from './humanRig';
 import type { PedestrianState } from './pedestrians';
 import type { TrafficCarState } from './traffic';
-import type { VehicleState } from './vehicle';
+import { DRIVER_SEAT_OFFSETS, type VehicleState } from './vehicle';
 
 export interface PlayerState extends HumanBodyPhysics {
   x: number;
@@ -500,8 +500,141 @@ export function computeCharacterPose(s: PlayerState, elapsed = 0): CharacterPose
 export interface PlayerMeshHandles {
   root: THREE.Group;
   getAvatarRoot: () => THREE.Object3D | null;
-  syncFromState: (state: PlayerState, elapsed?: number, dt?: number) => void;
+  syncFromState: (
+    state: PlayerState,
+    elapsed?: number,
+    dt?: number,
+    activeVehicle?: VehicleState | null,
+    activeVehicleBodyGroup?: THREE.Group | null,
+    hideInHoodCam?: boolean,
+  ) => void;
   attachGltfCharacter: (model: THREE.Object3D, animations: THREE.AnimationClip[]) => void;
+}
+
+const SEATED_BONES = [
+  'Hips',
+  'Spine',
+  'Spine1',
+  'Spine2',
+  'Neck',
+  'Head',
+  'LeftShoulder',
+  'LeftArm',
+  'LeftForeArm',
+  'RightShoulder',
+  'RightArm',
+  'RightForeArm',
+  'LeftUpLeg',
+  'LeftLeg',
+  'RightUpLeg',
+  'RightLeg',
+] as const;
+
+const _seatPos = new THREE.Vector3();
+const _seatQuat = new THREE.Quaternion();
+const _aimP0 = new THREE.Vector3();
+const _aimP1 = new THREE.Vector3();
+const _aimCurDir = new THREE.Vector3();
+const _aimDesDir = new THREE.Vector3();
+const _aimDelta = new THREE.Quaternion();
+const _aimWorldQ = new THREE.Quaternion();
+const _aimParentQ = new THREE.Quaternion();
+const _seatReclineQ = new THREE.Quaternion();
+const _seatHeadTurnQ = new THREE.Quaternion();
+const _seatEul = new THREE.Euler(0, 0, 0, 'XYZ');
+
+function aimBoneInAvatarSpace(
+  avatarRoot: THREE.Object3D,
+  bone: THREE.Object3D,
+  child: THREE.Object3D,
+  targetDirLocalToRoot: THREE.Vector3,
+): void {
+  if (!bone.parent) return;
+  avatarRoot.updateMatrixWorld(true);
+  bone.getWorldPosition(_aimP0);
+  child.getWorldPosition(_aimP1);
+  _aimCurDir.subVectors(_aimP1, _aimP0).normalize();
+
+  // Convert desired direction from avatar's parent (entityRoot, facing -Z) space to world space
+  const refObj = avatarRoot.parent ?? avatarRoot;
+  refObj.getWorldQuaternion(_aimWorldQ);
+  _aimDesDir.copy(targetDirLocalToRoot).normalize().applyQuaternion(_aimWorldQ);
+
+  _aimDelta.setFromUnitVectors(_aimCurDir, _aimDesDir);
+  bone.getWorldQuaternion(_aimWorldQ);
+  _aimWorldQ.premultiply(_aimDelta);
+  bone.parent.getWorldQuaternion(_aimParentQ);
+  bone.quaternion.copy(_aimParentQ).invert().multiply(_aimWorldQ);
+  bone.updateMatrixWorld(true);
+}
+
+/**
+ * Poses the Ready Player Me street-tough protagonist cleanly seated in the driver's bucket seat,
+ * legs tucked into the footwell, torso reclined slightly, head turning into corners, and both
+ * hands gripping the steering wheel at 10-and-2!
+ */
+export function applySeatedDrivingPose(
+  avatarRoot: THREE.Object3D,
+  restQuats: Map<string, THREE.Quaternion>,
+  steerAngle: number,
+): void {
+  // Start from clean rest pose so AnimationMixer tracks don't fight or drift
+  for (const name of SEATED_BONES) {
+    const b = avatarRoot.getObjectByName(name);
+    const rq = restQuats.get(name);
+    if (b && rq) b.quaternion.copy(rq);
+  }
+
+  const hips = avatarRoot.getObjectByName('Hips');
+  const head = avatarRoot.getObjectByName('Head');
+  const lUpLeg = avatarRoot.getObjectByName('LeftUpLeg');
+  const lLeg = avatarRoot.getObjectByName('LeftLeg');
+  const lFoot = avatarRoot.getObjectByName('LeftFoot');
+  const rUpLeg = avatarRoot.getObjectByName('RightUpLeg');
+  const rLeg = avatarRoot.getObjectByName('RightLeg');
+  const rFoot = avatarRoot.getObjectByName('RightFoot');
+  const lArm = avatarRoot.getObjectByName('LeftArm');
+  const lFore = avatarRoot.getObjectByName('LeftForeArm');
+  const lHand = avatarRoot.getObjectByName('LeftHand');
+  const rArm = avatarRoot.getObjectByName('RightArm');
+  const rFore = avatarRoot.getObjectByName('RightForeArm');
+  const rHand = avatarRoot.getObjectByName('RightHand');
+
+  if (hips) {
+    // Anchor pelvis right at local (0, 0, 0) (aligned to DRIVER_SEAT_OFFSETS) with sporty recline
+    hips.position.set(0, 0, 0);
+    _seatEul.set(-0.12, 0, 0);
+    _seatReclineQ.setFromEuler(_seatEul);
+    hips.quaternion.multiply(_seatReclineQ);
+  }
+
+  if (head) {
+    _seatEul.set(0.06, -steerAngle * 0.45, 0);
+    _seatHeadTurnQ.setFromEuler(_seatEul);
+    head.quaternion.multiply(_seatHeadTurnQ);
+  }
+
+  avatarRoot.updateMatrixWorld(true);
+
+  if (lUpLeg && lLeg && lFoot) {
+    aimBoneInAvatarSpace(avatarRoot, lUpLeg, lLeg, _seatPos.set(-0.08, -0.15, -0.98));
+    aimBoneInAvatarSpace(avatarRoot, lLeg, lFoot, _seatPos.set(0, -0.85, -0.52));
+  }
+  if (rUpLeg && rLeg && rFoot) {
+    aimBoneInAvatarSpace(avatarRoot, rUpLeg, rLeg, _seatPos.set(0.08, -0.15, -0.98));
+    aimBoneInAvatarSpace(avatarRoot, rLeg, rFoot, _seatPos.set(0, -0.85, -0.52));
+  }
+
+  // Dynamic steering wheel hand motion: turning right lifts left hand & dips right hand along the rim!
+  const steerShift = clamp(steerAngle * 0.48, -0.22, 0.22);
+  if (lArm && lFore && lHand) {
+    aimBoneInAvatarSpace(avatarRoot, lArm, lFore, _seatPos.set(-0.18, -0.45 + steerShift * 0.4, -0.88));
+    aimBoneInAvatarSpace(avatarRoot, lFore, lHand, _seatPos.set(0.22, 0.25 + steerShift, -0.94));
+  }
+  if (rArm && rFore && rHand) {
+    aimBoneInAvatarSpace(avatarRoot, rArm, rFore, _seatPos.set(0.18, -0.45 - steerShift * 0.4, -0.88));
+    aimBoneInAvatarSpace(avatarRoot, rFore, rHand, _seatPos.set(-0.22, 0.25 - steerShift, -0.94));
+  }
 }
 
 /**
@@ -772,6 +905,9 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
 
   let humanRig: HumanRigController | null = null;
   let gltfAvatarRoot: THREE.Object3D | null = null;
+  const restBoneQuats = new Map<string, THREE.Quaternion>();
+  const savedHipsPos = new THREE.Vector3(0, 1.02, 0);
+  let wasSeated = false;
 
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
     body.visible = false;
@@ -782,6 +918,14 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
         obj.receiveShadow = true;
       }
     });
+    restBoneQuats.clear();
+    for (const name of SEATED_BONES) {
+      const b = model.getObjectByName(name);
+      if (b) restBoneQuats.set(name, b.quaternion.clone());
+    }
+    const hips = model.getObjectByName('Hips');
+    if (hips) savedHipsPos.copy(hips.position);
+
     tumblePivot.add(model);
     gltfAvatarRoot = model;
     humanRig = createHumanRigController(model, animations);
@@ -789,9 +933,51 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
 
   scene.add(root);
 
-  const syncFromState = (s: PlayerState, elapsed = 0, dt = 1 / 60) => {
-    root.visible = s.vehicleId === null;
-    if (!root.visible) return;
+  const syncFromState = (
+    s: PlayerState,
+    elapsed = 0,
+    dt = 1 / 60,
+    activeVehicle?: VehicleState | null,
+    activeVehicleBodyGroup?: THREE.Group | null,
+    hideInHoodCam = false,
+  ) => {
+    // When driving a vehicle, render our REAL street-tough protagonist seated behind the wheel!
+    if (s.vehicleId !== null) {
+      if (!gltfAvatarRoot || !activeVehicle || !activeVehicleBodyGroup || hideInHoodCam) {
+        root.visible = false;
+        return;
+      }
+      root.visible = true;
+      contactShadow.visible = false;
+      activeVehicleBodyGroup.updateMatrixWorld(true);
+
+      const seat = DRIVER_SEAT_OFFSETS[activeVehicle.config.modelKind] ?? DRIVER_SEAT_OFFSETS.ferrari;
+      _seatPos.set(seat.x, seat.y, seat.z).applyMatrix4(activeVehicleBodyGroup.matrixWorld);
+      activeVehicleBodyGroup.getWorldQuaternion(_seatQuat);
+
+      root.position.copy(_seatPos);
+      root.quaternion.copy(_seatQuat);
+      // Center tumblePivot at 0 so Hips local (0,0,0) lands directly on the exact seat coordinate!
+      tumblePivot.position.set(0, 0, 0);
+      tumblePivot.rotation.set(0, 0, 0);
+      gltfAvatarRoot.position.y = 0;
+
+      applySeatedDrivingPose(gltfAvatarRoot, restBoneQuats, activeVehicle.steerAngle);
+      wasSeated = true;
+      return;
+    }
+
+    // Restoring on-foot stance cleanly when exiting a car
+    if (wasSeated && gltfAvatarRoot) {
+      wasSeated = false;
+      gltfAvatarRoot.position.y = -0.92;
+      const hips = gltfAvatarRoot.getObjectByName('Hips');
+      if (hips) hips.position.copy(savedHipsPos);
+      root.rotation.set(0, -s.yaw, 0);
+    }
+
+    root.visible = true;
+    contactShadow.visible = true;
 
     // When Rapier3D articulated ragdoll or 3-stage physical get-up owns the player skeleton,
     // keep tumblePivot neutral so Rapier drives every real bone directly without fighting AnimationMixer!
@@ -802,7 +988,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
     }
 
     root.position.set(s.x, s.y, s.z);
-    root.rotation.y = -s.yaw;
+    root.rotation.set(0, -s.yaw, 0);
     tumblePivot.position.y = computeTumblePivotY(s.fallPitch, s.fallRoll, s.ragdollMode);
     tumblePivot.rotation.set(s.fallPitch, 0, s.fallRoll);
 

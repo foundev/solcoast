@@ -627,7 +627,15 @@ function bootstrap(): void {
       const occupied = activeVehicle !== null && activeVehicle.id === v.id;
       vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
     }
-    playerMesh.syncFromState(player, elapsed, dt);
+    const activeBodyGroup = activeVehicle ? (vehicleMeshes.get(activeVehicle.id)?.bodyGroup ?? null) : null;
+    playerMesh.syncFromState(
+      player,
+      elapsed,
+      dt,
+      activeVehicle,
+      activeBodyGroup,
+      cameraCtrl.mode === 'hood',
+    );
     trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, player.x, player.z);
     pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z, ragdollWorld);
     boatMeshes.update(elapsed, dt, skyRes.nightFactor);
