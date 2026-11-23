@@ -43,7 +43,17 @@ export type InteriorPropKind =
   | 'bronze_shark'
   | 'grandfather_clock'
   | 'spray_paint'
-  | 'ornate_mirror';
+  | 'ornate_mirror'
+  | 'grand_piano'
+  | 'art_deco_fountain'
+  | 'dj_booth_rig'
+  | 'espresso_machine'
+  | 'pastry_display_case'
+  | 'neon_sculpture_arch'
+  | 'artist_easel'
+  | 'neon_palm_sign'
+  | 'hotel_reception_desk'
+  | 'cocktail_bar_set';
 
 export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'sofa_luxury',
@@ -76,6 +86,16 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'grandfather_clock',
   'spray_paint',
   'ornate_mirror',
+  'grand_piano',
+  'art_deco_fountain',
+  'dj_booth_rig',
+  'espresso_machine',
+  'pastry_display_case',
+  'neon_sculpture_arch',
+  'artist_easel',
+  'neon_palm_sign',
+  'hotel_reception_desk',
+  'cocktail_bar_set',
 ];
 
 export interface LoadedPbrTextures {

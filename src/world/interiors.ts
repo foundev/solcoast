@@ -295,8 +295,12 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'z', coord: -2, min: -2.8, max: 2.8, height: 3.8, frameColor: 0xd9a84e },
     ],
     colliders: [
-      // Atrium reception desk
+      // Atrium scalloped brass reception desk
       { minX: -8.6, maxX: -3.2, minZ: 1.5, maxZ: 3.3, minY: 0, maxY: 1.5 },
+      // Atrium central 3-tier Art Deco marble & gold fountain
+      { minX: -1.6, maxX: 1.6, minZ: 2.6, maxZ: 5.8, minY: 0, maxY: 2.6 },
+      // Atrium concert grand piano & bench
+      { minX: 4.8, maxX: 7.4, minZ: 0.2, maxZ: 3.0, minY: 0, maxY: 1.8 },
       // Atrium west & east lounge islands
       { minX: -8.1, maxX: -3.5, minZ: 5.9, maxZ: 9.0, minY: 0, maxY: 1.2 },
       { minX: 3.5, maxX: 8.1, minZ: 5.9, maxZ: 9.0, minY: 0, maxY: 1.2 },
@@ -314,7 +318,10 @@ export const INTERIORS: InteriorDef[] = [
       { minX: 5.2, maxX: 8.4, minZ: -12.5, maxZ: -7.5, minY: 0, maxY: 1.2 },
     ],
     props: [
-      // Grand Atrium
+      // Grand Atrium — custom Blender Art Deco hero models + Poly Haven furniture
+      { kind: 'hotel_reception_desk', x: -5.9, z: 2.4, rotY: Math.PI, scale: 1.04 },
+      { kind: 'art_deco_fountain', x: 0, z: 4.2, scale: 1.0 },
+      { kind: 'grand_piano', x: 6.1, z: 1.5, rotY: -Math.PI * 0.35, scale: 1.05 },
       { kind: 'chandelier', x: -3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
       { kind: 'chandelier', x: 3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
       { kind: 'sofa_luxury', x: -6.2, z: 8.1, rotY: Math.PI, scale: 1.05 },
@@ -335,6 +342,9 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'bar_stool', x: 18.8, z: 1.4, scale: 1.1 },
       { kind: 'bar_stool', x: 18.8, z: 3.4, scale: 1.1 },
       { kind: 'bar_stool', x: 18.8, z: 5.4, scale: 1.1 },
+      { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 0.6, scale: 1.15 },
+      { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 4.4, rotY: 1.4, scale: 1.15 },
+      { kind: 'neon_palm_sign', x: 17.0, y: 2.1, z: -3.86, rotY: Math.PI, scale: 1.15 },
       { kind: 'cabinet', x: 23.3, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.15 },
       { kind: 'cabinet', x: 23.3, z: 4.6, rotY: -Math.PI * 0.5, scale: 1.15 },
       { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 0.2, rotY: Math.PI * 0.5, scale: 1.35 },
@@ -526,11 +536,12 @@ export const INTERIORS: InteriorDef[] = [
     props: [
       // Foyer
       { kind: 'cabinet', x: 3.2, z: 13.3, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { kind: 'neon_palm_sign', x: -3.86, y: 1.6, z: 14.8, rotY: -Math.PI * 0.5, scale: 1.05 },
       { kind: 'potted_plant_2', x: -3.1, z: 12.2, scale: 1.1 },
-      // Main Dance Hall & DJ Stage
-      { kind: 'stage_lights', x: -3.5, y: 0.9, z: -10.0, rotY: 0.25, scale: 0.95 },
-      { kind: 'stage_lights', x: 3.5, y: 0.9, z: -10.0, rotY: -0.25, scale: 0.95 },
-      { kind: 'boombox', x: -1.6, y: 1.96, z: -7.5, rotY: 0.15, scale: 1.15 },
+      // Main Dance Hall & DJ Stage — full custom Blender twin-turntable DJ rig & subwoofer stacks!
+      { kind: 'dj_booth_rig', x: 0, y: 0.9, z: -7.8, rotY: Math.PI, scale: 1.22 },
+      { kind: 'stage_lights', x: -4.2, y: 0.9, z: -10.4, rotY: 0.25, scale: 0.9 },
+      { kind: 'stage_lights', x: 4.2, y: 0.9, z: -10.4, rotY: -0.25, scale: 0.9 },
       { kind: 'sofa_club', x: 10.6, z: -3.2, rotY: -Math.PI * 0.5, scale: 1.3 },
       { kind: 'sofa_club', x: 10.6, z: 0.2, rotY: -Math.PI * 0.5, scale: 1.3 },
       { kind: 'sofa_club', x: 10.6, z: 3.6, rotY: -Math.PI * 0.5, scale: 1.3 },
@@ -545,6 +556,9 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'bar_stool', x: -19.6, z: -2.0, scale: 1.1 },
       { kind: 'bar_stool', x: -19.6, z: 0.2, scale: 1.1 },
       { kind: 'bar_stool', x: -19.6, z: 2.4, scale: 1.1 },
+      { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: -3.8, scale: 1.15 },
+      { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: 2.1, rotY: 2.0, scale: 1.15 },
+      { kind: 'neon_palm_sign', x: -17.5, y: 2.1, z: -8.86, rotY: Math.PI, scale: 1.3 },
       { kind: 'metal_shelves', x: -24.3, z: -3.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'metal_shelves', x: -24.3, z: 1.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'wine_bottles', x: -21.2, y: 1.14, z: -2.5, rotY: Math.PI * 0.5, scale: 1.3 },
@@ -720,6 +734,8 @@ export const INTERIORS: InteriorDef[] = [
     colliders: [
       // Espresso & pastry bar counter
       { minX: -6.8, maxX: -1.4, minZ: 2.2, maxZ: 4.2, minY: 0, maxY: 1.4 },
+      // Curved glass bakery pastry display vitrine
+      { minX: -0.9, maxX: 1.3, minZ: 2.3, maxZ: 3.7, minY: 0, maxY: 1.6 },
       // Front bistro table (right of door)
       { minX: 3.2, maxX: 5.4, minZ: 7.4, maxZ: 9.6, minY: 0, maxY: 1.1 },
       // Conservatory dining tables
@@ -733,10 +749,11 @@ export const INTERIORS: InteriorDef[] = [
       { minX: -7.2, maxX: -4.4, minZ: -9.0, maxZ: -6.8, minY: 0, maxY: 1.8 },
     ],
     props: [
-      // Espresso Bar & Bakery
-      { kind: 'coffee_cart', x: -5.4, z: 1.1, rotY: 0, scale: 0.95 },
-      { kind: 'cake_display', x: -2.4, y: 1.14, z: 3.2, scale: 1.65 },
-      { kind: 'cake_display', x: -3.4, y: 1.14, z: 3.2, rotY: 1.2, scale: 1.45 },
+      // Espresso Bar & Bakery — custom Blender 3-group espresso machine & glass pastry vitrine!
+      { kind: 'espresso_machine', x: -5.2, y: 1.17, z: 3.2, rotY: Math.PI, scale: 1.1 },
+      { kind: 'pastry_display_case', x: 0.2, z: 3.0, rotY: Math.PI, scale: 1.05 },
+      { kind: 'coffee_cart', x: -5.6, z: 0.9, rotY: 0, scale: 0.92 },
+      { kind: 'cake_display', x: -2.5, y: 1.17, z: 3.2, scale: 1.65 },
       { kind: 'bar_stool', x: -5.6, z: 4.9, scale: 1.05 },
       { kind: 'bar_stool', x: -4.1, z: 4.9, scale: 1.05 },
       { kind: 'bar_stool', x: -2.6, z: 4.9, scale: 1.05 },
@@ -936,11 +953,14 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'pendant_lamp', x: -5.5, y: 6.2, z: 2.0, scale: 1.35, hangFromCeiling: true },
       { kind: 'pendant_lamp', x: 5.5, y: 6.2, z: 2.0, scale: 1.35, hangFromCeiling: true },
       { kind: 'pendant_lamp', x: 0, y: 6.2, z: 1.1, scale: 1.5, hangFromCeiling: true },
-      // Darkroom Light Installation Wing
+      // Darkroom Light Installation Wing — custom Blender kinetic chrome & neon light sculpture!
+      { kind: 'neon_sculpture_arch', x: -17.5, z: 0, scale: 1.18 },
       { kind: 'gallery_bench', x: -17.5, z: 5.4, rotY: Math.PI, scale: 1.35 },
       { kind: 'gallery_bench', x: -17.5, z: -5.4, rotY: 0, scale: 1.35 },
       { kind: 'stage_lights', x: -21.5, y: 0, z: -5.5, rotY: Math.PI * 0.25, scale: 0.85 },
-      // Artist Studio Loft
+      // Artist Studio Loft — custom Blender hardwood A-frame easels with canvases & brushes!
+      { kind: 'artist_easel', x: -0.6, z: -13.6, rotY: 0.25, scale: 1.15 },
+      { kind: 'artist_easel', x: 2.4, z: -14.8, rotY: -0.35, scale: 1.15 },
       { kind: 'dining_table', x: -5.0, z: -12.6, rotY: 0, scale: 1.15 },
       { kind: 'spray_paint', x: -5.7, y: 1.0, z: -12.6, scale: 1.8 },
       { kind: 'spray_paint', x: -4.8, y: 1.0, z: -12.3, rotY: 1.1, scale: 1.7 },
@@ -1723,16 +1743,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const marbleMat = new THREE.MeshStandardMaterial({ color: 0xf4eee6, roughness: 0.22, metalness: 0.08 });
 
   if (def.id === 'hotel-solaire') {
-    // Atrium Art Deco Brass Reception Desk
-    const desk = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.12, 1.6), darkWoodMat);
-    desk.position.set(-5.9, 0.56, 2.4);
-    const deskTop = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.1, 1.8), marbleMat);
-    deskTop.position.set(-5.9, 1.16, 2.4);
-    const deskTrim = new THREE.Mesh(new THREE.BoxGeometry(5.26, 0.12, 1.66), goldMat);
-    deskTrim.position.set(-5.9, 0.9, 2.4);
-    group.add(desk, deskTop, deskTrim);
-
-    // Ocean Cocktail Lounge Mahogany Bar Counter
+    // Ocean Cocktail Lounge Mahogany Bar Counter (Atrium uses custom Blender hotel_reception_desk.glb!)
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.2), darkWoodMat);
     bar.position.set(20.5, 0.55, 2.9);
     const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.1, 9.4), marbleMat);
@@ -1784,28 +1795,18 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(topRib, lRib, rRib);
     }
 
-    // Elevated DJ Stage + Console + LED Backdrop
+    // Elevated DJ Stage + LED Backdrop (DJ console & speaker stacks come from custom Blender dj_booth_rig.glb!)
     const stage = new THREE.Mesh(
       new THREE.BoxGeometry(11.4, 0.9, 4.4),
       new THREE.MeshStandardMaterial({ color: 0x161426, roughness: 0.4, metalness: 0.4 }),
     );
     stage.position.set(0, 0.45, -9.2);
-    const djDesk = new THREE.Mesh(
-      new THREE.BoxGeometry(4.4, 1.05, 1.15),
-      new THREE.MeshStandardMaterial({
-        color: 0x0e0f1c,
-        emissive: 0xff2e93,
-        emissiveIntensity: 0.55,
-        roughness: 0.22,
-      }),
-    );
-    djDesk.position.set(0, 1.42, -7.5);
     const backdrop = new THREE.Mesh(
       new THREE.PlaneGeometry(10.5, 4.5),
       new THREE.MeshBasicMaterial({ map: createSignTexture('CLUB NEON', 'VICE WAVE 98.5 LIVE', '#0c071a', '#2cf3ff', '#ff2e93') }),
     );
     backdrop.position.set(0, 3.6, -11.88);
-    group.add(stage, djDesk, backdrop);
+    group.add(stage, backdrop);
 
     // Pulsing Color-Cycling LED Dance Floor
     danceFloorMat = new THREE.MeshStandardMaterial({
@@ -1915,14 +1916,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(art);
     });
 
-    // Darkroom Wing: 5 Glowing Animated Neon Light Monoliths + Reflective Floor Rings!
+    // Darkroom Wing: 4 Flanking Animated Neon Light Monoliths around the custom Blender kinetic sculpture!
     monolithMats = [];
     const monoCoords: [number, number, number][] = [
-      [-17.5, 0, 0x2cf3ff],
-      [-15.2, -4.5, 0xff2e93],
-      [-20.5, -4.2, 0xa855f7],
-      [-15.2, 4.5, 0xffcf5c],
-      [-20.5, 4.2, 0x46f7b4],
+      [-14.8, -4.6, 0xff2e93],
+      [-20.8, -4.4, 0xa855f7],
+      [-14.8, 4.6, 0xffcf5c],
+      [-20.8, 4.4, 0x46f7b4],
     ];
     for (const [mx, mz, col] of monoCoords) {
       const mMat = new THREE.MeshStandardMaterial({

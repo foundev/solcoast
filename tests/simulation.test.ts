@@ -747,10 +747,10 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
   });
 
   it('supports multi-room building interiors, valid 3D prop GLBs, doorway traversal, and solid wall/furniture/NPC collisions', () => {
-    // 1. All 30 CC0 interior furniture/prop GLBs exist, are valid binary glTF, and avoid slow transmission passes
+    // 1. All 40 CC0 & custom Blender interior furniture/hero GLBs exist, are valid binary glTF, and avoid slow transmission passes
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
-    expect(INTERIOR_PROP_KINDS.length).toBe(30);
+    expect(INTERIOR_PROP_KINDS.length).toBe(40);
     for (const kind of INTERIOR_PROP_KINDS) {
       const buf = fs.readFileSync(path.resolve(propsDir, `${kind}.glb`));
       expect(buf.byteLength, `${kind}.glb non-empty`).toBeGreaterThan(5_000);
@@ -766,9 +766,9 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(findNearbyBuildingEntrance(hotel.entranceX + 0.5, hotel.entranceZ)?.id).toBe('hotel-solaire');
     expect(findNearbyBuildingEntrance(0, 0)).toBeNull();
 
-    // 3. Multi-room traversal: start in Grand Atrium, walk North through suite archway into Penthouse Suite
+    // 3. Multi-room traversal: start in Grand Atrium, walk North past the Art Deco fountain into Penthouse Suite
     const p = createInitialPlayerState(null);
-    p.x = hotel.spawnX;
+    p.x = 2.1;
     p.y = INTERIOR_ORIGIN_Y;
     p.z = hotel.spawnZ;
     p.yaw = hotel.spawnYaw;
