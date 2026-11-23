@@ -223,6 +223,215 @@ export function createSidewalkPbrSet(): PbrTextureSet {
   return { map, normalMap, roughnessMap };
 }
 
+export type SidewalkDistrictStyle = 'coastal' | 'mediterranean' | 'urban';
+
+/**
+ * High-resolution 512x512 district-specific sidewalk PBR set (2x2 scored slabs = 2.4m x 2.4m repeat).
+ * Produces crisp expansion joints, beveled joint normal grooves, trowel-brushed concrete aggregate,
+ * and slab-to-slab tonal variation.
+ */
+export function createDistrictSidewalkPbr(style: SidewalkDistrictStyle): PbrTextureSet {
+  const size = 512;
+  const dCanvas = document.createElement('canvas');
+  dCanvas.width = size;
+  dCanvas.height = size;
+  const dCtx = dCanvas.getContext('2d')!;
+
+  const rCanvas = document.createElement('canvas');
+  rCanvas.width = size;
+  rCanvas.height = size;
+  const rCtx = rCanvas.getContext('2d')!;
+
+  const height = new Float32Array(size * size);
+  const dImg = dCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+
+  // Base RGB palettes tailored per Miami district
+  const baseRgb =
+    style === 'coastal'
+      ? [230, 220, 204] // Sun-warmed Ocean Drive coral-limestone terrazzo
+      : style === 'mediterranean'
+        ? [214, 178, 148] // Warm Coral Heights travertine & terracotta pavers
+        : [192, 190, 185]; // Brushed architectural urban concrete
+  const jointRgb =
+    style === 'mediterranean' ? [138, 108, 86] : [118, 116, 112];
+  const cell = style === 'mediterranean' ? 128 : 256; // 4x4 pavers for Coral Heights, 2x2 slabs elsewhere
+
+  for (let y = 0; y < size; y++) {
+    const row = Math.floor(y / cell);
+    const ly = y % cell;
+    for (let x = 0; x < size; x++) {
+      // Stagger running-bond pavers in Mediterranean Coral Heights
+      const xShift = style === 'mediterranean' && row % 2 === 1 ? cell / 2 : 0;
+      const sx = (x + xShift) % size;
+      const col = Math.floor(sx / cell);
+      const lx = sx % cell;
+
+      const edgeDist = Math.min(lx, cell - 1 - lx, ly, cell - 1 - ly);
+      const isJoint = edgeDist < 3;
+      const isBevel = !isJoint && edgeDist < 7;
+
+      const micro = hash2(x, y);
+      const medium = hash2(Math.floor(x / 3), Math.floor(y / 3));
+      const brush = hash2(Math.floor(x / 10), Math.floor(y / 2));
+      const slabVar = (hash2(col + 17, row + 31) - 0.5) * 16;
+
+      // Subtle coastal terrazzo coral/quartz aggregate flecks
+      const isFleck = style === 'coastal' && micro > 0.965;
+      const fleckWarm = isFleck ? (hash2(x + 9, y + 5) > 0.5 ? 1 : -1) : 0;
+
+      const grain = (micro * 0.4 + medium * 0.35 + brush * 0.25 - 0.5) * 20;
+      const idx = (y * size + x) * 4;
+
+      if (isJoint) {
+        dImg.data[idx] = Math.max(0, Math.min(255, Math.round(jointRgb[0] + grain * 0.6)));
+        dImg.data[idx + 1] = Math.max(0, Math.min(255, Math.round(jointRgb[1] + grain * 0.6)));
+        dImg.data[idx + 2] = Math.max(0, Math.min(255, Math.round(jointRgb[2] + grain * 0.6)));
+        rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = 245;
+        height[y * size + x] = 0.05;
+      } else {
+        const bevelShade = isBevel ? -9 : 0;
+        let r = baseRgb[0] + slabVar + grain + bevelShade;
+        let g = baseRgb[1] + slabVar + grain + bevelShade;
+        let b = baseRgb[2] + slabVar + grain + bevelShade;
+        if (fleckWarm > 0) {
+          r += 18;
+          g -= 8;
+          b -= 6;
+        } else if (fleckWarm < 0) {
+          r -= 24;
+          g -= 22;
+          b -= 18;
+        }
+        dImg.data[idx] = Math.max(0, Math.min(255, Math.round(r)));
+        dImg.data[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
+        dImg.data[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+        const rough = isBevel ? 0.88 : style === 'coastal' ? 0.7 : 0.78;
+        const rv = Math.round(Math.max(0.45, Math.min(0.96, rough + (medium - 0.5) * 0.14)) * 255);
+        rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = rv;
+        height[y * size + x] = (isBevel ? 0.55 : 0.82) + micro * 0.18;
+      }
+      dImg.data[idx + 3] = 255;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+
+  dCtx.putImageData(dImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(dCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+
+  const roughnessMap = new THREE.CanvasTexture(rCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.anisotropy = 4;
+
+  const normalMap = heightToNormalTexture(height, size, 3.0, 1, 1);
+  return { map, normalMap, roughnessMap };
+}
+
+/**
+ * Weathered granite curbstone PBR texture with vertical block seams and subtle lower gutter weathering.
+ */
+export function createCurbstonePbr(): PbrTextureSet {
+  const size = 256;
+  const dCanvas = document.createElement('canvas');
+  dCanvas.width = size;
+  dCanvas.height = size;
+  const dCtx = dCanvas.getContext('2d')!;
+  const height = new Float32Array(size * size);
+  const dImg = dCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const vNorm = y / size; // 0 = top bevel, 1 = bottom near asphalt
+    const grime = vNorm > 0.65 ? (vNorm - 0.65) * 75 : 0;
+    for (let x = 0; x < size; x++) {
+      const joint = x % 128 < 4;
+      const g = (hash2(x, y) * 0.55 + hash2(Math.floor(x / 3), Math.floor(y / 3)) * 0.45 - 0.5) * 24;
+      const blockVar = (hash2(Math.floor(x / 128), 3) - 0.5) * 14;
+      const lum = (joint ? 110 : 178 + blockVar) + g - grime;
+      const idx = (y * size + x) * 4;
+      dImg.data[idx] = Math.max(0, Math.min(255, Math.round(lum + 3)));
+      dImg.data[idx + 1] = Math.max(0, Math.min(255, Math.round(lum + 1)));
+      dImg.data[idx + 2] = Math.max(0, Math.min(255, Math.round(lum - 4)));
+      dImg.data[idx + 3] = 255;
+      height[y * size + x] = joint ? 0.1 : 0.78 + hash2(x, y) * 0.22;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(dCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+
+  const normalMap = heightToNormalTexture(height, size, 2.6, 1, 1);
+  return { map, normalMap, roughnessMap: map };
+}
+
+/**
+ * Bright safety-yellow ADA tactile detectable warning curb-ramp pad texture with raised domes.
+ */
+export function createTactilePadTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#e5b920';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#9c7b10';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, size - 4, size - 4);
+
+  const step = 16;
+  for (let y = 12; y < size - 6; y += step) {
+    for (let x = 12; x < size - 6; x += step) {
+      ctx.fillStyle = '#8f6f0c';
+      ctx.beginPath();
+      ctx.arc(x + 1, y + 1.5, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffe052';
+      ctx.beginPath();
+      ctx.arc(x, y, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/**
+ * Cast-iron slotted street storm-drain grate texture.
+ */
+export function createStormGrateTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#2d323a';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#0c0e12';
+  for (let x = 14; x < size - 14; x += 14) {
+    ctx.fillRect(x, 12, 7, 46);
+    ctx.fillRect(x, 70, 7, 46);
+  }
+  ctx.strokeStyle = '#474e59';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, size - 6, size - 6);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /**
  * Golden wind-rippled beach sand PBR textures.
  */

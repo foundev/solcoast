@@ -9,6 +9,13 @@ import {
   getGroundHeight,
 } from './cityData';
 import { createLightGlowTexture } from './postfx';
+import {
+  createCurbstonePbr,
+  createDistrictSidewalkPbr,
+  createStormGrateTexture,
+  createTactilePadTexture,
+  type SidewalkDistrictStyle,
+} from './textures';
 import type { CityBlueprint } from './types';
 
 export interface StreetPropsHandles {
@@ -126,7 +133,6 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   const signMaterials: THREE.MeshStandardMaterial[] = [];
   const seagulls: SeagullAgent[] = [];
 
-  const curbMat = new THREE.MeshStandardMaterial({ color: 0xd4d7df, roughness: 0.85 });
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x262d3a, metalness: 0.78, roughness: 0.3 });
   const hydrantMat = new THREE.MeshStandardMaterial({ color: 0xd92b3a, roughness: 0.42, metalness: 0.35 });
   const woodBenchMat = new THREE.MeshStandardMaterial({ color: 0x8a5b38, roughness: 0.75 });
@@ -134,28 +140,263 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   const hedgeMat = new THREE.MeshStandardMaterial({ color: 0x276e3c, roughness: 0.88 });
   const blossomMat = new THREE.MeshStandardMaterial({ color: 0xf2388f, roughness: 0.65 });
 
-  // 1. Raised 3D Concrete Curbs around ALL city blocks batched in 1 InstancedMesh draw call!
+  // 1. Redesigned Architectural Miami Sidewalks:
+  //    - Rounded/chamfered street corners with beveled granite curbstones (zero flat grey boxes!)
+  //    - District-specific high-res 512px PBR sidewalk paving (Coastal Terrazzo, Coral Heights Travertine, Urban Concrete)
+  //    - Concrete street gutter aprons, cast-iron storm drains, ADA yellow tactile curb ramps, & palm tree grates!
   const halfRoad = ROAD_WIDTH * 0.5;
-  const blockCount = (AVENUE_XS.length - 1) * (STREET_ZS.length - 1);
-  const blockSlabGeo = new THREE.BoxGeometry(1, SIDEWALK_HEIGHT, 1);
-  const blockSlabs = new THREE.InstancedMesh(blockSlabGeo, curbMat, blockCount);
-  blockSlabs.receiveShadow = true;
-  const slabDummy = new THREE.Object3D();
-  let slabIdx = 0;
+  const cornerR = 2.4;
+  const bevelSize = 0.04;
+  const bevelThick = 0.035;
+
+  const createRoundedBlockGeometry = (w: number, d: number): THREE.ExtrudeGeometry => {
+    const hw = w * 0.5 - bevelSize;
+    const hd = d * 0.5 - bevelSize;
+    const r = Math.min(cornerR, hw * 0.4, hd * 0.4);
+    const shape = new THREE.Shape();
+    shape.moveTo(-hw + r, -hd);
+    shape.lineTo(hw - r, -hd);
+    shape.absarc(hw - r, -hd + r, r, -Math.PI * 0.5, 0, false);
+    shape.lineTo(hw, hd - r);
+    shape.absarc(hw - r, hd - r, r, 0, Math.PI * 0.5, false);
+    shape.lineTo(-hw + r, hd);
+    shape.absarc(-hw + r, hd - r, r, Math.PI * 0.5, Math.PI, false);
+    shape.lineTo(-hw, -hd + r);
+    shape.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
+
+    const depth = Math.max(0.05, SIDEWALK_HEIGHT - bevelThick * 2);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: true,
+      bevelThickness: bevelThick,
+      bevelSize,
+      bevelSegments: 2,
+      curveSegments: 6,
+    });
+    // Rotate so extrusion rises along +Y with bottom at y = 0 and top cleanly at y = SIDEWALK_HEIGHT
+    geo.rotateX(-Math.PI * 0.5);
+    geo.translate(0, bevelThick, 0);
+
+    // Normalize UVs to exact real-world meters (1 tile = 2.4m x 2.4m slabs, ZERO stretching!)
+    const pos = geo.attributes.position;
+    const norm = geo.attributes.normal;
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      const px = pos.getX(i);
+      const py = pos.getY(i);
+      const pz = pos.getZ(i);
+      const ny = Math.abs(norm.getY(i));
+      if (ny > 0.65) {
+        uv.setXY(i, px / 2.4, pz / 2.4);
+      } else {
+        // Vertical curbstone face: map perimeter length along U, height along V
+        const nx = Math.abs(norm.getX(i));
+        const uCoord = nx > 0.5 ? pz : px;
+        uv.setXY(i, uCoord / 1.4, 1 - py / SIDEWALK_HEIGHT);
+      }
+    }
+    uv.needsUpdate = true;
+    return geo;
+  };
+
+  const coastalPbr = createDistrictSidewalkPbr('coastal');
+  const medPbr = createDistrictSidewalkPbr('mediterranean');
+  const urbanPbr = createDistrictSidewalkPbr('urban');
+  const curbPbr = createCurbstonePbr();
+
+  const sidewalkTopMats: Record<SidewalkDistrictStyle, THREE.MeshStandardMaterial> = {
+    coastal: new THREE.MeshStandardMaterial({
+      map: coastalPbr.map,
+      normalMap: coastalPbr.normalMap,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+      roughnessMap: coastalPbr.roughnessMap,
+      roughness: 1.0,
+    }),
+    mediterranean: new THREE.MeshStandardMaterial({
+      map: medPbr.map,
+      normalMap: medPbr.normalMap,
+      normalScale: new THREE.Vector2(0.85, 0.85),
+      roughnessMap: medPbr.roughnessMap,
+      roughness: 1.0,
+    }),
+    urban: new THREE.MeshStandardMaterial({
+      map: urbanPbr.map,
+      normalMap: urbanPbr.normalMap,
+      normalScale: new THREE.Vector2(0.75, 0.75),
+      roughnessMap: urbanPbr.roughnessMap,
+      roughness: 1.0,
+    }),
+  };
+
+  const curbEdgeMat = new THREE.MeshStandardMaterial({
+    map: curbPbr.map,
+    normalMap: curbPbr.normalMap,
+    normalScale: new THREE.Vector2(0.7, 0.7),
+    roughness: 0.84,
+  });
+
+  const blockGeoCache = new Map<string, THREE.ExtrudeGeometry>();
+  const getBlockGeo = (w: number, d: number) => {
+    const key = `${w.toFixed(1)}x${d.toFixed(1)}`;
+    let g = blockGeoCache.get(key);
+    if (!g) {
+      g = createRoundedBlockGeometry(w, d);
+      blockGeoCache.set(key, g);
+    }
+    return g;
+  };
+
+  // Collect instanced sidewalk street-level details across all 36 blocks
+  const gutterMatrices: THREE.Matrix4[] = [];
+  const tactileMatrices: THREE.Matrix4[] = [];
+  const grateMatrices: THREE.Matrix4[] = [];
+  const bollardMatrices: THREE.Matrix4[] = [];
+  const dummy = new THREE.Object3D();
+
   for (let bx = 0; bx < AVENUE_XS.length - 1; bx++) {
     for (let bz = 0; bz < STREET_ZS.length - 1; bz++) {
       const minX = AVENUE_XS[bx] + halfRoad + 0.4;
       const maxX = AVENUE_XS[bx + 1] - halfRoad - 0.4;
       const minZ = STREET_ZS[bz] + halfRoad + 0.4;
       const maxZ = STREET_ZS[bz + 1] - halfRoad - 0.4;
-      slabDummy.position.set((minX + maxX) * 0.5, SIDEWALK_HEIGHT * 0.5, (minZ + maxZ) * 0.5);
-      slabDummy.scale.set(maxX - minX, 1, maxZ - minZ);
-      slabDummy.updateMatrix();
-      blockSlabs.setMatrixAt(slabIdx++, slabDummy.matrix);
+      const w = maxX - minX;
+      const d = maxZ - minZ;
+      const cx = (minX + maxX) * 0.5;
+      const cz = (minZ + maxZ) * 0.5;
+
+      // Pick district-specific sidewalk paving style
+      const style: SidewalkDistrictStyle =
+        bx >= 5 || (bz <= 1 && bx >= 4)
+          ? 'coastal'
+          : bx <= 1 && bz >= 2
+            ? 'mediterranean'
+            : 'urban';
+
+      const blockMesh = new THREE.Mesh(getBlockGeo(w, d), [sidewalkTopMats[style], curbEdgeMat]);
+      blockMesh.position.set(cx, 0, cz);
+      blockMesh.receiveShadow = true;
+      root.add(blockMesh);
+
+      // Concrete drainage gutter apron strips along all 4 road edges (flush at y = 0.032)
+      const gutterW = 0.62;
+      const edgeLenX = w - cornerR * 2;
+      const edgeLenZ = d - cornerR * 2;
+      for (const side of [-1, 1]) {
+        // North & South gutters
+        dummy.position.set(cx, 0.032, cz + side * (d * 0.5 + gutterW * 0.5 - 0.02));
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(edgeLenX, 1, gutterW);
+        dummy.updateMatrix();
+        gutterMatrices.push(dummy.matrix.clone());
+
+        // East & West gutters
+        dummy.position.set(cx + side * (w * 0.5 + gutterW * 0.5 - 0.02), 0.032, cz);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(gutterW, 1, edgeLenZ);
+        dummy.updateMatrix();
+        gutterMatrices.push(dummy.matrix.clone());
+
+        // Cast-iron storm drain grates nestled into the avenue gutters (2 per block side)
+        for (const zOff of [-0.28, 0.28]) {
+          dummy.position.set(cx + side * (w * 0.5 + 0.28), 0.038, cz + d * zOff);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(0.54, 1, 0.92);
+          dummy.updateMatrix();
+          grateMatrices.push(dummy.matrix.clone());
+        }
+      }
+
+      // Bright safety-yellow ADA tactile curb-ramp warning pads at all 4 crosswalk corners!
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          // Pad facing N/S crosswalk
+          dummy.position.set(cx + sx * (w * 0.5 - 3.0), SIDEWALK_HEIGHT + 0.008, cz + sz * (d * 0.5 - 0.58));
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(2.1, 1, 0.72);
+          dummy.updateMatrix();
+          tactileMatrices.push(dummy.matrix.clone());
+
+          // Pad facing E/W crosswalk
+          dummy.position.set(cx + sx * (w * 0.5 - 0.58), SIDEWALK_HEIGHT + 0.008, cz + sz * (d * 0.5 - 3.0));
+          dummy.rotation.set(0, Math.PI * 0.5, 0);
+          dummy.scale.set(2.1, 1, 0.72);
+          dummy.updateMatrix();
+          tactileMatrices.push(dummy.matrix.clone());
+
+          // Sleek charcoal corner safety bollards guarding the rounded curb corner
+          dummy.position.set(cx + sx * (w * 0.5 - 1.15), SIDEWALK_HEIGHT, cz + sz * (d * 0.5 - 1.15));
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          bollardMatrices.push(dummy.matrix.clone());
+        }
+      }
     }
   }
-  blockSlabs.instanceMatrix.needsUpdate = true;
-  root.add(blockSlabs);
+
+  // Batch gutters, tactile ADA pads, storm drain grates, & corner bollards into 4 single draw calls!
+  const gutterGeo = new THREE.PlaneGeometry(1, 1);
+  gutterGeo.rotateX(-Math.PI * 0.5);
+  const gutterMat = new THREE.MeshStandardMaterial({ color: 0x8e9199, roughness: 0.9 });
+  const gutterInst = new THREE.InstancedMesh(gutterGeo, gutterMat, gutterMatrices.length);
+  gutterInst.receiveShadow = true;
+  gutterMatrices.forEach((m, i) => gutterInst.setMatrixAt(i, m));
+  gutterInst.instanceMatrix.needsUpdate = true;
+  root.add(gutterInst);
+
+  const tactileGeo = new THREE.PlaneGeometry(1, 1);
+  tactileGeo.rotateX(-Math.PI * 0.5);
+  const tactileMat = new THREE.MeshStandardMaterial({ map: createTactilePadTexture(), roughness: 0.65 });
+  const tactileInst = new THREE.InstancedMesh(tactileGeo, tactileMat, tactileMatrices.length);
+  tactileInst.receiveShadow = true;
+  tactileMatrices.forEach((m, i) => tactileInst.setMatrixAt(i, m));
+  tactileInst.instanceMatrix.needsUpdate = true;
+  root.add(tactileInst);
+
+  const grateGeo = new THREE.PlaneGeometry(1, 1);
+  grateGeo.rotateX(-Math.PI * 0.5);
+  const grateMat = new THREE.MeshStandardMaterial({
+    map: createStormGrateTexture(),
+    metalness: 0.75,
+    roughness: 0.45,
+  });
+  const grateInst = new THREE.InstancedMesh(grateGeo, grateMat, grateMatrices.length);
+  grateMatrices.forEach((m, i) => grateInst.setMatrixAt(i, m));
+  grateInst.instanceMatrix.needsUpdate = true;
+  root.add(grateInst);
+
+  const bollardGeo = new THREE.CylinderGeometry(0.085, 0.1, 0.82, 10);
+  bollardGeo.translate(0, 0.41, 0);
+  const bollardInst = new THREE.InstancedMesh(bollardGeo, poleMat, bollardMatrices.length);
+  bollardMatrices.forEach((m, i) => bollardInst.setMatrixAt(i, m));
+  bollardInst.instanceMatrix.needsUpdate = true;
+  root.add(bollardInst);
+
+  // Cast-iron decorative tree grates framing concrete sidewalk palm trees (skip park lawn palms!)
+  const inParkLawn = (x: number, z: number) =>
+    (x > -8 && x < 58 && z > -8 && z < 58) || (x > -368 && x < -302 && z > -8 && z < 58);
+  const sidewalkPalms = blueprint.palms.filter(
+    (p) => Math.abs(p.y - SIDEWALK_HEIGHT) < 0.03 && !inParkLawn(p.x, p.z),
+  );
+  if (sidewalkPalms.length > 0) {
+    const grateRingGeo = new THREE.BoxGeometry(1.55, 0.03, 1.55);
+    const treeGrateMat = new THREE.MeshStandardMaterial({
+      map: createStormGrateTexture(),
+      color: 0x3b404a,
+      metalness: 0.65,
+      roughness: 0.55,
+    });
+    const treeGrateInst = new THREE.InstancedMesh(grateRingGeo, treeGrateMat, sidewalkPalms.length);
+    sidewalkPalms.forEach((p, i) => {
+      dummy.position.set(p.x, SIDEWALK_HEIGHT + 0.012, p.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      treeGrateInst.setMatrixAt(i, dummy.matrix);
+    });
+    treeGrateInst.instanceMatrix.needsUpdate = true;
+    root.add(treeGrateInst);
+  }
 
   // 2. Live Cycling Intersection Traffic Signal Gantries
   const signalBoxMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.5, metalness: 0.4 });
