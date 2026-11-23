@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, createRng, distXZ, lerpAngle, yawFromDir, type AABB } from '../core/math';
+import { clamp, createRng, lerpAngle, resolveCircleAABB, yawFromDir, type AABB } from '../core/math';
 import {
   applyCarHitToHuman,
   computeTumblePivotY,
@@ -345,18 +345,19 @@ export function createPedestrians(count = 144): PedestrianState[] {
     const slotOnRoute = Math.floor(i / routeCount);
     const route = STROLL_ROUTES[routeIdx];
 
-    // Spread walkers evenly across the route's segments with gentle jitter so they don't bunch up
-    const routeFrac = ((slotOnRoute + 0.15 + rng() * 0.65) / perRoute) % 1;
-    const totalSegs = route.length;
+    // Spread walkers evenly across valid consecutive open segments (0..N-2) so nobody spawns on
+    // invalid wrap-around diagonals across buildings or open Marina water!
+    const totalSegs = Math.max(1, route.length - 1);
+    const routeFrac = ((slotOnRoute + 0.12 + rng() * 0.72) / perRoute) % 1;
     const exactSeg = routeFrac * totalSegs;
-    const startIdx = Math.floor(exactSeg) % totalSegs;
-    const nextIdx = (startIdx + 1) % totalSegs;
+    const startIdx = Math.min(totalSegs - 1, Math.floor(exactSeg));
+    const nextIdx = startIdx + 1;
     const t = exactSeg - Math.floor(exactSeg);
 
     const a = route[startIdx];
     const b = route[nextIdx];
-    const x = a.x + (b.x - a.x) * t + (rng() - 0.5) * 1.4;
-    const z = a.z + (b.z - a.z) * t + (rng() - 0.5) * 1.4;
+    const x = a.x + (b.x - a.x) * t + (rng() - 0.5) * 0.8;
+    const z = a.z + (b.z - a.z) * t + (rng() - 0.5) * 0.8;
 
     // Guarantee each slot (0..perRoute-1) on the SAME route gets a DIFFERENT base avatar (0..5)!
     const avatarBase = (slotOnRoute + routeIdx * 5) % BASE_AVATAR_COUNT;
@@ -422,12 +423,12 @@ function recyclePedestrianNearFocus(
   for (let rStep = 0; rStep < rCount; rStep++) {
     const rIdx = (startRoute + rStep) % rCount;
     const route = STROLL_ROUTES[rIdx];
-    const segCount = route.length;
+    const segCount = Math.max(1, route.length - 1);
 
     for (let seg = 0; seg < segCount; seg++) {
       const a = route[seg];
-      const b = route[(seg + 1) % segCount];
-      // Sample 6 evenly distributed candidate points along each sidewalk segment
+      const b = route[seg + 1];
+      // Sample 6 evenly distributed candidate points along each valid sidewalk segment
       for (let s = 0; s < 6; s++) {
         const jitter = ((p.id * 17 + rStep * 11 + s * 7) % 11) * 0.01;
         const t = 0.06 + s * 0.16 + jitter;
@@ -452,7 +453,7 @@ function recyclePedestrianNearFocus(
 
         p.routeIndex = rIdx;
         p.waypoints = route;
-        p.wpIndex = (seg + 1) % segCount;
+        p.wpIndex = seg + 1;
         p.dir = (p.id + rStep) % 2 === 0 ? 1 : -1;
         p.x = sx;
         p.z = sz;
@@ -575,41 +576,70 @@ export function stepPedestrians(
       p.wpIndex = next;
     }
 
-    // Step aside calmly if a slow vehicle creeps near (fast cars connect realistically!)
+    // Step aside calmly around slow/parked cars (player & AI) with tangential passing so nobody oscillates!
     let avoidX = 0;
     let avoidZ = 0;
     let speedBoost = 1.0;
+    const goalDirX = dist > 0.05 ? dx / dist : 0;
+    const goalDirZ = dist > 0.05 ? dz / dist : 0;
     if (isNearFocus) {
+      const steerAroundCar = (cx: number, cz: number, cvx: number, cvz: number, radius: number) => {
+        const carSpd = Math.hypot(cvx, cvz);
+        if (carSpd > 14) return; // Too fast to magically teleport out of the way
+        const ox = p.x - cx;
+        const oz = p.z - cz;
+        const dSq = ox * ox + oz * oz;
+        if (dSq >= radius * radius || dSq <= 0.0001) return;
+        const d = Math.sqrt(dSq);
+        const nx = ox / d;
+        const nz = oz / d;
+        // Blend outward push with tangential sidestep around the car bumper so walkers smoothly walk around it
+        const tx = -nz;
+        const tz = nx;
+        const sideSign = tx * goalDirX + tz * goalDirZ >= 0 ? 1 : -1;
+        const strength = clamp((radius - d) / radius, 0.2, 1.0) * 1.45;
+        avoidX += (nx * 0.65 + tx * sideSign * 0.75) * strength;
+        avoidZ += (nz * 0.65 + tz * sideSign * 0.75) * strength;
+        speedBoost = Math.max(speedBoost, 1.25);
+      };
+
       for (const v of vehicles) {
-        const carSpd = Math.hypot(v.vx, v.vz);
-        if (carSpd > 14) continue; // Too fast to magically teleport out of the way
-        const d = distXZ(p.x, p.z, v.x, v.z);
-        if (d < 5.0 && d > 0.01) {
-          avoidX += ((p.x - v.x) / d) * 2.2;
-          avoidZ += ((p.z - v.z) / d) * 2.2;
-          speedBoost = 1.45;
-        }
+        steerAroundCar(v.x, v.z, v.vx, v.vz, 4.4);
+      }
+      for (const tc of trafficCars) {
+        steerAroundCar(tc.x, tc.z, tc.vx, tc.vz, 3.8);
       }
 
-      // Gentle personal-space separation so pedestrians naturally pass each other instead of clumping
+      // Smooth right-hand passing separation (never reverses walkers head-on or causes jitter-spinning!)
       for (let j = 0; j < peds.length; j++) {
         if (i === j) continue;
         const other = peds[j];
         const ox = p.x - other.x;
         const oz = p.z - other.z;
         const dSq = ox * ox + oz * oz;
-        if (dSq < 2.4 * 2.4 && dSq > 0.0001) {
+        if (dSq < 1.65 * 1.65 && dSq > 0.0001) {
           const d = Math.sqrt(dSq);
-          const push = (2.4 - d) * 0.75;
-          avoidX += (ox / d) * push;
-          avoidZ += (oz / d) * push;
+          const nx = ox / d;
+          const nz = oz / d;
+          const push = (1.65 - d) * 0.42;
+          // Combine soft radial push with polite right-hand pass vector (-nz, nx)
+          avoidX += (nx * 0.65 - nz * 0.45) * push;
+          avoidZ += (nz * 0.65 + nx * 0.45) * push;
         }
       }
     }
 
+    // Clamp avoidance magnitude so walkers stay smoothly forward-moving instead of oscillating in place
+    const avoidMag = Math.hypot(avoidX, avoidZ);
+    if (avoidMag > 0.85) {
+      const sc = 0.85 / avoidMag;
+      avoidX *= sc;
+      avoidZ *= sc;
+    }
+
     if (dist > 0.05) {
-      dx = dx / dist + avoidX;
-      dz = dz / dist + avoidZ;
+      dx = goalDirX + avoidX;
+      dz = goalDirZ + avoidZ;
       const len = Math.hypot(dx, dz) || 1;
       dx /= len;
       dz /= len;
@@ -617,10 +647,35 @@ export function stepPedestrians(
       const curSpeed = p.speed * speedBoost;
       p.vx = dx * curSpeed;
       p.vz = dz * curSpeed;
-      p.x += p.vx * safeDt;
-      p.z += p.vz * safeDt;
+      let nextX = p.x + p.vx * safeDt;
+      let nextZ = p.z + p.vz * safeDt;
+
+      // Keep sidestepping walkers cleanly outside building facades & dry land
+      if (isNearFocus && colliders.length > 0) {
+        for (let cIdx = 0; cIdx < colliders.length; cIdx++) {
+          const box = colliders[cIdx];
+          if (
+            nextX < box.minX - pedRadius ||
+            nextX > box.maxX + pedRadius ||
+            nextZ < box.minZ - pedRadius ||
+            nextZ > box.maxZ + pedRadius
+          ) {
+            continue;
+          }
+          const res = resolveCircleAABB(nextX, nextZ, pedRadius, box);
+          if (res.hit) {
+            nextX += res.dx;
+            nextZ += res.dz;
+          }
+        }
+      }
+
+      if (!isDeepWater(nextX, nextZ)) {
+        p.x = nextX;
+        p.z = nextZ;
+      }
       p.y = getGroundHeight(p.x, p.z);
-      p.yaw = lerpAngle(p.yaw, yawFromDir(dx, dz), clamp(safeDt * 8, 0, 1));
+      p.yaw = lerpAngle(p.yaw, yawFromDir(dx, dz), clamp(safeDt * 6.5, 0, 1));
       p.walkPhase += curSpeed * safeDt * 2.1;
     }
   }

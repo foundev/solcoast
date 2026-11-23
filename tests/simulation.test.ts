@@ -1448,4 +1448,100 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       expect(nearPeds, `${label} should have lively local pedestrian crowds`).toBeGreaterThanOrEqual(60);
     }
   });
+
+  it('prevents traffic velocity spikes, never-ending car ricochet chain reactions, and pedestrian oscillation glitches', () => {
+    const traffic = createTrafficCars(blueprint.trafficNodes, 68);
+    const peds = createPedestrians(144);
+
+    // 1. Run 10 full seconds (600 frames) of dense AI traffic + pedestrians around Ocean Drive
+    let maxTrafficSpeed = 0;
+    let maxSimultaneousStunned = 0;
+    for (let f = 0; f < 600; f++) {
+      stepTraffic(
+        traffic,
+        blueprint.trafficNodes,
+        [],
+        1 / 60,
+        blueprint.colliders,
+        blueprint.propObbs,
+        140,
+        -60,
+        peds,
+      );
+      stepPedestrians(peds, [], 1 / 60, traffic, blueprint.colliders, 140, -60);
+
+      let stunnedNow = 0;
+      for (const c of traffic) {
+        const spd = Math.hypot(c.vx, c.vz);
+        if (spd > maxTrafficSpeed) maxTrafficSpeed = spd;
+        if (c.stunnedTimer > 0) stunnedNow++;
+      }
+      if (stunnedNow > maxSimultaneousStunned) maxSimultaneousStunned = stunnedNow;
+    }
+
+    // No phantom lerp velocity spikes (previously hit 45-400+ m/s on turns & post-crash recovery!)
+    expect(maxTrafficSpeed).toBeLessThan(26);
+    // Normal AI traffic must NOT devolve into a chain-reaction pinball pileup!
+    expect(maxSimultaneousStunned).toBeLessThanOrEqual(2);
+
+    // 2. Even after a hard collision sends a traffic car spinning, it settles smoothly and re-joins traffic
+    //    WITHOUT rocketing back to its old lane or triggering an infinite ricochet chain!
+    const target = traffic[0];
+    target.vx = 18;
+    target.vz = -12;
+    target.yawRate = 2.8;
+    target.stunnedTimer = 1.6;
+    let maxPostCrashSpeed = 0;
+    for (let f = 0; f < 300; f++) {
+      stepTraffic(
+        traffic,
+        blueprint.trafficNodes,
+        [],
+        1 / 60,
+        blueprint.colliders,
+        blueprint.propObbs,
+        target.x,
+        target.z,
+        peds,
+      );
+      const spd = Math.hypot(target.vx, target.vz);
+      if (spd > maxPostCrashSpeed) maxPostCrashSpeed = spd;
+    }
+    expect(maxPostCrashSpeed).toBeLessThan(29);
+    expect(target.stunnedTimer).toBe(0);
+
+    // 3. Two pedestrians walking directly head-on on a sidewalk smoothly pass each other (zero oscillation!)
+    const headOn = createPedestrians(2);
+    headOn[0].waypoints = [
+      { x: 128, z: -20 },
+      { x: 128, z: 20 },
+    ];
+    headOn[0].wpIndex = 1;
+    headOn[0].dir = 1;
+    headOn[0].x = 128;
+    headOn[0].z = -4;
+    headOn[0].speed = 1.6;
+
+    headOn[1].waypoints = [
+      { x: 128, z: -20 },
+      { x: 128, z: 20 },
+    ];
+    headOn[1].wpIndex = 0;
+    headOn[1].dir = -1;
+    headOn[1].x = 128;
+    headOn[1].z = 4;
+    headOn[1].speed = 1.6;
+
+    for (let f = 0; f < 300; f++) {
+      stepPedestrians(headOn, [], 1 / 60, [], blueprint.colliders);
+    }
+    // Both walkers smoothly passed each other and progressed past z=0!
+    expect(headOn[0].z).toBeGreaterThan(2.5);
+    expect(headOn[1].z).toBeLessThan(-2.5);
+
+    // Zero pedestrians ended up in deep water
+    for (const p of peds) {
+      expect(isDeepWater(p.x, p.z)).toBe(false);
+    }
+  });
 });

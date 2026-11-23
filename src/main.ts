@@ -750,7 +750,17 @@ async function bootstrap(): Promise<void> {
 
         // Keep the live outdoor world (sky, sun, ocean waves, traffic cars, pedestrians & cruising boats)
         // stepping and visible right outside every hotel suite, penthouse, café & gallery window!
-        stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs, pWorld.x, pWorld.z);
+        stepTraffic(
+          trafficCars,
+          blueprint.trafficNodes,
+          vehicles,
+          dt,
+          blueprint.colliders,
+          blueprint.propObbs,
+          pWorld.x,
+          pWorld.z,
+          pedestrians,
+        );
         stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders, pWorld.x, pWorld.z);
         focusVec.set(pWorld.x, pWorld.y, pWorld.z);
         const skyRes = sky.update(timeOfDayHours, elapsed, focusVec);
@@ -1129,6 +1139,7 @@ async function bootstrap(): Promise<void> {
       blueprint.propObbs,
       player.x,
       player.z,
+      pedestrians,
     );
 
     // 3. Now step player (using up-to-date car positions so traffic can NEVER move onto/through the player!)

@@ -194,8 +194,8 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
   const lA = hlA * 2;
   const wB = hwB * 2;
   const lB = hlB * 2;
-  const invInertiaA = a.mass > 0 ? 7.5 / (a.mass * (wA * wA + lA * lA)) : 0;
-  const invInertiaB = b.mass > 0 ? 7.5 / (b.mass * (wB * wB + lB * lB)) : 0;
+  const invInertiaA = a.mass > 0 ? 4.6 / (a.mass * (wA * wA + lA * lA)) : 0;
+  const invInertiaB = b.mass > 0 ? 4.6 / (b.mass * (wB * wB + lB * lB)) : 0;
 
   const rAx = contactX - a.x;
   const rAz = contactZ - a.z;
@@ -232,8 +232,8 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
     rACrossN * rACrossN * invInertiaA +
     rBCrossN * rBCrossN * invInertiaB;
 
-  // Automotive inelastic crunch restitution (metallic energy absorption, not rubber superball!)
-  const restitution = closingSpeed < 2.0 ? 0.08 : 0.24;
+  // Automotive inelastic crunch restitution (real sheet-metal energy absorption — never bouncy pinball!)
+  const restitution = closingSpeed < 3.0 ? 0.02 : 0.14;
   const jN = (-(1 + restitution) * velAlongNormal) / Math.max(1e-6, denomN);
 
   // Tangential scraping friction impulse
@@ -246,7 +246,7 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
     totalInvMass +
     rACrossT * rACrossT * invInertiaA +
     rBCrossT * rBCrossT * invInertiaB;
-  const mu = 0.34;
+  const mu = 0.4;
   const jT = clamp(-velAlongT / Math.max(1e-6, denomT), -jN * mu, jN * mu);
 
   const impX = bestAxisX * jN + tx * jT;
@@ -254,11 +254,11 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
 
   a.vx += impX * invMassA;
   a.vz += impZ * invMassA;
-  a.yawRate = clamp(a.yawRate + (rAx * impZ - rAz * impX) * invInertiaA, -5.5, 5.5);
+  a.yawRate = clamp(a.yawRate + (rAx * impZ - rAz * impX) * invInertiaA, -3.8, 3.8);
 
   b.vx -= impX * invMassB;
   b.vz -= impZ * invMassB;
-  b.yawRate = clamp(b.yawRate - (rBx * impZ - rBz * impX) * invInertiaB, -5.5, 5.5);
+  b.yawRate = clamp(b.yawRate - (rBx * impZ - rBz * impX) * invInertiaB, -3.8, 3.8);
 
   return {
     hit: true,

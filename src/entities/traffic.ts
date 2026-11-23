@@ -324,6 +324,59 @@ function recycleTrafficNearFocus(
   }
 }
 
+/**
+ * Projects a recovered traffic car onto the closest road edge & progress t matching its heading,
+ * so post-crash cars resume driving smoothly from where they stopped instead of snapping across lanes!
+ */
+function reattachTrafficToNearestLane(car: TrafficCarState, nodes: TrafficNode[]): void {
+  if (nodes.length === 0) return;
+  const cFx = Math.sin(car.yaw);
+  const cFz = -Math.cos(car.yaw);
+  let bestFrom = car.fromNode;
+  let bestTo = car.toNode;
+  let bestT = 0.25;
+  let bestScore = Infinity;
+
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    if (a.neighbors.length === 0) continue;
+    for (let k = 0; k < a.neighbors.length; k++) {
+      const j = a.neighbors[k];
+      const b = nodes[j];
+      if (!b) continue;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const lenSq = dx * dx + dz * dz;
+      if (lenSq < 1) continue;
+      const len = Math.sqrt(lenSq);
+      // Right-hand lane centerline endpoints
+      const rx = (-dz / len) * 3.8;
+      const rz = (dx / len) * 3.8;
+      const ax = a.x + rx;
+      const az = a.z + rz;
+      const t = clamp(((car.x - ax) * dx + (car.z - az) * dz) / lenSq, 0.05, 0.92);
+      const px = ax + dx * t;
+      const pz = az + dz * t;
+      const dSq = (car.x - px) * (car.x - px) + (car.z - pz) * (car.z - pz);
+      const align = (dx / len) * cFx + (dz / len) * cFz;
+      // Gently prefer the lane aligned with the car's current facing direction
+      const score = dSq + (1 - align) * 28;
+      if (score < bestScore) {
+        bestScore = score;
+        bestFrom = i;
+        bestTo = j;
+        bestT = t;
+      }
+    }
+  }
+
+  car.fromNode = bestFrom;
+  car.toNode = bestTo;
+  car.progress = bestT;
+  car.speed = Math.min(car.speed, 2.5);
+  car.yawRate = 0;
+}
+
 export function stepTraffic(
   cars: TrafficCarState[],
   nodes: TrafficNode[],
@@ -333,6 +386,7 @@ export function stepTraffic(
   propObbs: OBB2D[] = [],
   focusX?: number,
   focusZ?: number,
+  pedestrians?: ReadonlyArray<{ x: number; z: number; ragdollMode: string }>,
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   const recycleSq = TRAFFIC_RECYCLE_DIST * TRAFFIC_RECYCLE_DIST;
@@ -359,14 +413,20 @@ export function stepTraffic(
     }
 
     if (car.stunnedTimer > 0) {
-      // Free-skidding GTA crash physics: car spins & slides freely on its tires after a collision!
+      // Free-skidding GTA crash physics: car spins & slides freely on its tires, then settles cleanly to a stop
       car.stunnedTimer = Math.max(0, car.stunnedTimer - safeDt);
       const prevX = car.x;
       const prevZ = car.z;
 
-      car.vx *= Math.exp(-2.65 * safeDt);
-      car.vz *= Math.exp(-2.65 * safeDt);
-      car.yawRate *= Math.exp(-2.85 * safeDt);
+      car.vx *= Math.exp(-3.2 * safeDt);
+      car.vz *= Math.exp(-3.2 * safeDt);
+      car.yawRate *= Math.exp(-3.6 * safeDt);
+      const spd = Math.hypot(car.vx, car.vz);
+      if (spd > 28) {
+        const s = 28 / spd;
+        car.vx *= s;
+        car.vz *= s;
+      }
       car.x += car.vx * safeDt;
       car.z += car.vz * safeDt;
       car.yaw = wrapAngle(car.yaw + car.yawRate * safeDt);
@@ -407,22 +467,12 @@ export function stepTraffic(
       car.rollTilt = lerp(car.rollTilt, clamp(car.yawRate * 0.04, -0.1, 0.1), clamp(safeDt * 8, 0, 1));
       car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 9, 0, 1));
 
-      // Once stopped & stunned timer completes, re-sync to nearest road node so traffic flows naturally again
-      if (car.stunnedTimer <= 0 && car.speed < 1.2 && nodes.length > 0) {
-        let bestNode = 0;
-        let bestDistSq = Infinity;
-        for (let n = 0; n < nodes.length; n++) {
-          const dSq = (nodes[n].x - car.x) ** 2 + (nodes[n].z - car.z) ** 2;
-          if (dSq < bestDistSq) {
-            bestDistSq = dSq;
-            bestNode = n;
-          }
-        }
-        const from = nodes[bestNode];
-        if (from.neighbors.length > 0) {
-          car.fromNode = bestNode;
-          car.toNode = from.neighbors[car.id % from.neighbors.length];
-          car.progress = 0.05;
+      // Keep car in free-skid damping until nearly stopped, then ALWAYS reattach to nearest road segment!
+      if (car.stunnedTimer <= 0) {
+        if (car.speed > 1.8) {
+          car.stunnedTimer = 0.25;
+        } else {
+          reattachTrafficToNearestLane(car, nodes);
         }
       }
       continue;
@@ -435,18 +485,29 @@ export function stepTraffic(
 
     const fx = Math.sin(car.yaw);
     const fz = -Math.cos(car.yaw);
+    const rx = Math.cos(car.yaw);
+    const rz = Math.sin(car.yaw);
     let targetSpeed = car.cruiseSpeed;
 
+    // 1a. Brake cleanly for player vehicles (parked or moving) ahead in our lane
     for (const pv of playerVehicles) {
       const dx = pv.x - car.x;
       const dz = pv.z - car.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 13 && dx * fx + dz * fz > 0.35 * dist) {
-        targetSpeed = 0;
-        break;
+      const dSq = dx * dx + dz * dz;
+      if (dSq > 17 * 17) continue;
+      const dist = Math.sqrt(dSq) || 0.001;
+      const fwdProj = dx * fx + dz * fz;
+      const latProj = Math.abs(dx * rx + dz * rz);
+      if (fwdProj > 0 && latProj < 3.4) {
+        if (dist < 10.5) {
+          targetSpeed = 0;
+          break;
+        }
+        targetSpeed = Math.min(targetSpeed, car.cruiseSpeed * clamp((dist - 10.5) / 6.5, 0, 1));
       }
     }
 
+    // 1b. Smooth following distance & deadlock-free intersection yielding with other AI traffic
     if (targetSpeed > 0) {
       for (let j = 0; j < cars.length; j++) {
         if (i === j) continue;
@@ -454,22 +515,60 @@ export function stepTraffic(
         const dx = other.x - car.x;
         const dz = other.z - car.z;
         const dSq = dx * dx + dz * dz;
-        if (dSq > 12.5 * 12.5) continue;
+        if (dSq > 18 * 18) continue;
+        const fwdProj = dx * fx + dz * fz;
+        if (fwdProj <= 0.5) continue;
         const dist = Math.sqrt(dSq) || 0.001;
-        const fwdDot = (dx * fx + dz * fz) / dist;
-        if (fwdDot <= 0.52) continue;
-        const headingDot = fx * Math.sin(other.yaw) + fz * -Math.cos(other.yaw);
-        if (headingDot > 0.35) {
-          // Same-lane following: pace cleanly behind the car ahead
-          targetSpeed = Math.min(targetSpeed, other.stunnedTimer > 0 ? 0 : other.speed * 0.85);
-        } else if (dist < 8.5 && fwdDot > 0.72 && (other.speed > car.speed + 0.5 || other.id < car.id)) {
-          // Cross-traffic yield with deterministic tie-breaker so busy intersections never deadlock
+        const latProj = Math.abs(dx * rx + dz * rz);
+        const oFx = Math.sin(other.yaw);
+        const oFz = -Math.cos(other.yaw);
+        const headingDot = fx * oFx + fz * oFz;
+
+        if (headingDot > 0.45 && latProj < 2.8) {
+          // Same-lane following: maintain clean 9.5m center-to-center spacing (~5m bumper gap)
+          if (dist < 9.5 || other.stunnedTimer > 0) {
+            targetSpeed = 0;
+            break;
+          }
+          const followFactor = clamp((dist - 9.5) / 8.5, 0, 1);
+          targetSpeed = Math.min(targetSpeed, other.speed + (car.cruiseSpeed - other.speed) * followFactor * 0.65);
+        } else if (headingDot < -0.65 && latProj < 2.3 && dist < 11) {
+          // Head-on obstacle blocking our lane (e.g. spun-out car)
           targetSpeed = 0;
+          break;
+        } else if (Math.abs(headingDot) <= 0.45 && dist < 16 && fwdProj > dist * 0.52) {
+          // Cross-traffic approaching intersection: yield cleanly if other car is crossing in front of our lane
+          const otherHeadingTowardMe = (car.x - other.x) * oFx + (car.z - other.z) * oFz;
+          const otherAlreadyInPath = latProj < 4.5 && fwdProj < 12;
+          if (otherAlreadyInPath || (otherHeadingTowardMe > -2 && (other.speed > car.speed + 0.5 || other.id < car.id))) {
+            targetSpeed = 0;
+            break;
+          }
         }
       }
     }
 
-    car.speed = lerp(car.speed, targetSpeed, clamp(safeDt * 4.5, 0, 1));
+    // 1c. Yield calmly for pedestrians crossing directly in front of our bumper
+    if (targetSpeed > 0 && pedestrians) {
+      for (let pIdx = 0; pIdx < pedestrians.length; pIdx++) {
+        const ped = pedestrians[pIdx];
+        if (ped.ragdollMode !== 'normal') continue;
+        const dx = ped.x - car.x;
+        const dz = ped.z - car.z;
+        const dSq = dx * dx + dz * dz;
+        if (dSq > 10.5 * 10.5) continue;
+        const fwdProj = dx * fx + dz * fz;
+        const latProj = Math.abs(dx * rx + dz * rz);
+        if (fwdProj > 1.5 && fwdProj < 10.5 && latProj < 2.1) {
+          targetSpeed = 0;
+          break;
+        }
+      }
+    }
+
+    // Crisp braking vs smooth city acceleration so cars stop well before bumpers touch!
+    const accelRate = targetSpeed < car.speed ? 10.5 : 3.4;
+    car.speed = lerp(car.speed, targetSpeed, clamp(safeDt * accelRate, 0, 1));
     car.progress += (car.speed * safeDt) / segLen;
 
     if (car.progress >= 1) {
@@ -485,15 +584,35 @@ export function stepTraffic(
       car.progress -= 1;
     }
 
+    // Physically bounded lane steering (NEVER computes teleport/lerp velocity spikes on turns or recovery!)
     const prevX = car.x;
     const prevZ = car.z;
     const pos = lanePosition(nodes[car.fromNode], nodes[car.toNode], clamp(car.progress, 0, 1));
-    car.x = lerp(car.x, pos.x, clamp(safeDt * 8.5, 0, 1));
-    car.z = lerp(car.z, pos.z, clamp(safeDt * 8.5, 0, 1));
-    car.vx = (car.x - prevX) / safeDt;
-    car.vz = (car.z - prevZ) / safeDt;
+    const errX = pos.x - car.x;
+    const errZ = pos.z - car.z;
+    const errDist = Math.hypot(errX, errZ);
+    const maxStep = Math.max(car.speed, 2.5) * safeDt * 1.25 + 0.02;
+    if (errDist > 1e-4) {
+      const stepDist = Math.min(errDist, maxStep, errDist * clamp(safeDt * 8.5, 0, 1) + car.speed * safeDt * 0.55);
+      car.x += (errX / errDist) * stepDist;
+      car.z += (errZ / errDist) * stepDist;
+    }
+    const rawVx = (car.x - prevX) / safeDt;
+    const rawVz = (car.z - prevZ) / safeDt;
+    const rawSpd = Math.hypot(rawVx, rawVz);
+    const maxPhysSpd = Math.max(car.cruiseSpeed + 2, car.speed + 2);
+    if (rawSpd > maxPhysSpd && rawSpd > 0.01) {
+      const sc = maxPhysSpd / rawSpd;
+      car.vx = rawVx * sc;
+      car.vz = rawVz * sc;
+    } else {
+      car.vx = rawVx;
+      car.vz = rawVz;
+    }
     car.y = getGroundHeight(car.x, car.z);
-    car.yaw = lerpAngle(car.yaw, pos.yaw, clamp(safeDt * 7, 0, 1));
+    // Steer yaw smoothly toward actual travel vector while turning through intersections
+    const desiredYaw = errDist > 1.2 ? yawFromDir(errX, errZ) : pos.yaw;
+    car.yaw = lerpAngle(car.yaw, desiredYaw, clamp(safeDt * 6.5, 0, 1));
     car.yawRate = 0;
     const tFx = Math.sin(car.yaw);
     const tFz = -Math.cos(car.yaw);
@@ -543,8 +662,8 @@ export function stepTraffic(
         const pzf = -Math.cos(pv.yaw);
         pv.speed = pv.vx * pf + pv.vz * pzf;
 
-        if (impact > 1.6) {
-          car.stunnedTimer = Math.max(car.stunnedTimer, clamp(1.25 + impact * 0.095, 1.4, 2.8));
+        if (impact > 2.4) {
+          car.stunnedTimer = Math.max(car.stunnedTimer, clamp(1.1 + impact * 0.075, 1.25, 2.2));
           car.suspOffset = -clamp(impact * 0.012, 0.03, 0.14);
           car.pitchTilt = clamp(impact * 0.012, 0.02, 0.11);
           car.rollTilt = clamp(car.yawRate * 0.035, -0.11, 0.11);
@@ -553,21 +672,40 @@ export function stepTraffic(
           car.lastImpactZ = contact.contactZ;
           car.lastImpactNx = -contact.nx;
           car.lastImpactNz = -contact.nz;
+        } else {
+          car.speed *= 0.2;
         }
       }
     }
   }
 
-  // 3. Chain-reaction pileup SAT collisions between AI traffic cars!
+  // 3. Controlled SAT collisions between AI traffic cars (prevents overlapping without runaway pinball!)
   for (let i = 0; i < cars.length; i++) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i];
       const b = cars[j];
       const contact = resolveCarVsCarSAT(a, b);
-      if (!contact.hit || contact.closingSpeed < 1.2) continue;
+      if (!contact.hit) continue;
+
       const impact = contact.closingSpeed;
+      const eitherStunned = a.stunnedTimer > 0 || b.stunnedTimer > 0;
+      if (impact < 5.5 && !eitherStunned) {
+        // Minor AI-vs-AI brush: separate cleanly and brake smoothly without launching into pinball chaos!
+        a.speed *= 0.2;
+        b.speed *= 0.2;
+        a.vx *= 0.25;
+        a.vz *= 0.25;
+        b.vx *= 0.25;
+        b.vz *= 0.25;
+        a.yawRate = 0;
+        b.yawRate = 0;
+        continue;
+      }
+      if (impact < 2.2) continue;
+
       for (const c of [a, b]) {
-        c.stunnedTimer = Math.max(c.stunnedTimer, clamp(1.1 + impact * 0.08, 1.2, 2.4));
+        // Only propagate crash skids from hard impacts — cap stun duration so pileups settle quickly!
+        c.stunnedTimer = Math.max(c.stunnedTimer, clamp(0.85 + impact * 0.055, 0.9, 1.75));
         c.suspOffset = -clamp(impact * 0.01, 0.03, 0.12);
         c.lastImpactSpeed = Math.max(c.lastImpactSpeed, impact);
         c.lastImpactX = contact.contactX;
