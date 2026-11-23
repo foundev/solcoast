@@ -32,6 +32,7 @@ export interface WorldSaveData {
   completedMissions: string[];
   bestTimes: Record<string, number>;
   discoveredDistricts: DistrictId[];
+  hotelKeycards?: string[];
 }
 
 export interface StorageLike {
@@ -47,6 +48,7 @@ export function serializeWorldState(params: {
   vehicles: VehicleState[];
   missions: MissionManager;
   discoveredDistricts: Set<DistrictId>;
+  hotelKeycards?: Set<string>;
 }): WorldSaveData {
   return {
     version: SAVE_VERSION,
@@ -72,6 +74,7 @@ export function serializeWorldState(params: {
     completedMissions: Array.from(params.missions.completedIds),
     bestTimes: { ...params.missions.bestTimes },
     discoveredDistricts: Array.from(params.discoveredDistricts),
+    hotelKeycards: params.hotelKeycards ? Array.from(params.hotelKeycards) : [],
   };
 }
 

@@ -108,6 +108,8 @@ export class MinimapRenderer {
     traffic: TrafficCarState[],
     missions: MissionManager,
     activeInterior?: InteriorDef | null,
+    openDoorIds?: ReadonlySet<string>,
+    ownedKeycards?: ReadonlySet<string>,
   ): void {
     // Throttle 2D minimap redraws to every 2nd frame (~30 Hz) for near-zero CPU overhead
     this.frameSkip = (this.frameSkip + 1) % 2;
@@ -182,6 +184,21 @@ export class MinimapRenderer {
         const wPx = Math.max(1.8, (wall.maxX - wall.minX) * roomScale);
         const hPx = Math.max(1.8, (wall.maxZ - wall.minZ) * roomScale);
         ctx.fillRect(ix(wall.minX), iz(wall.minZ), wPx, hPx);
+      }
+
+      // 3b. Interactive Hinged Room Doors (green = open, amber = unlocked/closed, crimson = locked!)
+      for (const door of activeInterior.doors ?? []) {
+        if ((door.floor ?? 0) !== floor) continue;
+        const isOpen = openDoorIds?.has(door.id) ?? false;
+        const isLocked = Boolean(
+          door.occupied || (door.requiredKeycard && !ownedKeycards?.has(door.requiredKeycard)),
+        );
+        ctx.fillStyle = isOpen ? '#46f7b4' : isLocked ? '#ff5470' : '#ffcf5c';
+        if (door.axis === 'x') {
+          ctx.fillRect(ix(door.coord) - 1.5, iz(door.min), 3.0, Math.max(3, (door.max - door.min) * roomScale));
+        } else {
+          ctx.fillRect(ix(door.min), iz(door.coord) - 1.5, Math.max(3, (door.max - door.min) * roomScale), 3.0);
+        }
       }
 
       // 4. Subtle room labels

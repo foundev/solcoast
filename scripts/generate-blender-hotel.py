@@ -253,8 +253,234 @@ def build_hotel_vanity_sink():
     export_glb("hotel_vanity_sink.glb")
 
 
+# ─── 4. HOUSEKEEPING MAID'S CLEANING & LINEN TROLLEY ────────────────────────
+# Faces -Y in Blender -> +Z in glTF
+def build_hotel_housekeeping_cart():
+    clear_scene()
+    steel = make_mat("CartSteel", (0.16, 0.17, 0.20), roughness=0.35, metallic=0.82)
+    walnut = make_mat("CartWood", (0.34, 0.20, 0.12), roughness=0.45)
+    towel_w = make_mat("CleanTowel", (0.96, 0.95, 0.93), roughness=0.88)
+    linen_b = make_mat("LaundryBag", (0.14, 0.28, 0.48), roughness=0.82)
+    chrome = make_mat("CartChrome", (0.86, 0.88, 0.92), roughness=0.18, metallic=0.95)
+    spray_blue = make_mat("SprayBlue", (0.15, 0.68, 0.92), roughness=0.25)
+    spray_gold = make_mat("SprayGold", (0.94, 0.72, 0.22), roughness=0.25)
+    rubber = make_mat("WheelRubber", (0.08, 0.08, 0.09), roughness=0.75)
+
+    # Rolling base deck + 4 swivel caster wheels
+    add_box("BaseDeck", (1.28, 0.56, 0.06), (0, 0, 0.14), steel, bevel_width=0.01)
+    for wx in (-0.54, 0.54):
+        for wy in (-0.21, 0.21):
+            add_cyl(f"Wheel_{wx}_{wy}", 0.065, 0.04, (wx, wy, 0.065), rubber, verts=14, rot=(math.pi * 0.5, 0, 0))
+
+    # Main walnut & steel linen cabinet (0.92m wide x 0.52m deep x 0.96m tall)
+    add_box("CabBack", (0.88, 0.04, 0.92), (-0.02, 0.24, 0.62), walnut)
+    add_box("CabSideL", (0.04, 0.52, 0.92), (-0.45, 0, 0.62), walnut)
+    add_box("CabSideR", (0.04, 0.52, 0.92), (0.41, 0, 0.62), walnut)
+    for sz in (0.18, 0.48, 0.78, 1.07):
+        add_box(f"Shelf_{sz}", (0.86, 0.50, 0.035), (-0.02, 0, sz), steel)
+
+    # Top amenity tray rim
+    add_box("TrayBack", (0.88, 0.03, 0.09), (-0.02, 0.23, 1.12), steel)
+    add_box("TrayFront", (0.88, 0.03, 0.07), (-0.02, -0.23, 1.11), steel)
+
+    # Neatly stacked crisp white bath towels & folded bed sheets on the open shelves!
+    for shelf_z in (0.20, 0.50, 0.80):
+        for col_x in (-0.26, 0.0, 0.24):
+            for layer in range(3):
+                add_box(
+                    f"Towel_{shelf_z}_{col_x}_{layer}",
+                    (0.21, 0.38, 0.072),
+                    (col_x, -0.02, shelf_z + 0.04 + layer * 0.078),
+                    towel_w,
+                    bevel_width=0.015,
+                )
+
+    # Blue canvas soiled-linen hamper bag hanging on the left steel hoop
+    add_box("HamperHoop", (0.34, 0.44, 0.03), (-0.62, 0, 1.04), chrome)
+    add_box("LaundryBagMesh", (0.30, 0.40, 0.72), (-0.62, 0, 0.66), linen_b, bevel_width=0.04)
+
+    # Chrome push-handle rail on right side + hanging caddy
+    add_cyl("PushRailL", 0.016, 0.30, (0.52, -0.18, 1.02), chrome, verts=10, rot=(0, math.pi * 0.5, 0))
+    add_cyl("PushRailR", 0.016, 0.30, (0.52, 0.18, 1.02), chrome, verts=10, rot=(0, math.pi * 0.5, 0))
+    add_cyl("PushBar", 0.018, 0.40, (0.64, 0, 1.02), chrome, verts=12, rot=(math.pi * 0.5, 0, 0))
+    add_box("SideTrashBin", (0.22, 0.34, 0.48), (0.54, 0, 0.42), steel, bevel_width=0.02)
+
+    # Cleaning spray bottles, rolled amenities & upright broom clipped on top/back
+    for i, (bx, mat) in enumerate([(-0.30, spray_blue), (-0.16, spray_gold), (0.04, spray_blue), (0.20, towel_w)]):
+        add_cyl(f"Bottle_{i}", 0.042, 0.18, (bx, -0.04, 1.18), mat, verts=12)
+        add_cyl(f"Nozzle_{i}", 0.016, 0.05, (bx, -0.04, 1.29), towel_w, verts=10)
+    add_cyl("BroomHandle", 0.014, 1.22, (0.46, 0.22, 0.74), chrome, verts=10)
+    add_box("BroomHead", (0.22, 0.06, 0.11), (0.46, 0.22, 0.15), walnut, bevel_width=0.01)
+
+    export_glb("hotel_housekeeping_cart.glb")
+
+
+# ─── 5. CLASSIC BRASS BIRDCAGE BELLHOP LUGGAGE CART ─────────────────────────
+def build_hotel_luggage_cart():
+    clear_scene()
+    brass = make_mat("BellBrass", (0.92, 0.74, 0.30), roughness=0.16, metallic=0.96)
+    crimson = make_mat("BellCarpet", (0.52, 0.08, 0.14), roughness=0.90)
+    rubber = make_mat("BellWheel", (0.08, 0.08, 0.09), roughness=0.72)
+    leather = make_mat("SuitcaseTan", (0.48, 0.26, 0.12), roughness=0.42)
+    navy_case = make_mat("SuitcaseNavy", (0.12, 0.20, 0.36), roughness=0.28, coat=0.5)
+    cream_case = make_mat("SuitcaseCream", (0.90, 0.85, 0.76), roughness=0.32, coat=0.4)
+
+    # Carpeted base deck with protective black bumper & 4 wheels
+    add_box("BaseBumper", (1.22, 0.68, 0.09), (0, 0, 0.16), rubber, bevel_width=0.02)
+    add_box("BaseCarpet", (1.16, 0.62, 0.05), (0, 0, 0.21), crimson, bevel_width=0.01)
+    for wx in (-0.46, 0.46):
+        for wy in (-0.24, 0.24):
+            add_cyl(f"Wheel_{wx}_{wy}", 0.075, 0.045, (wx, wy, 0.075), rubber, verts=16, rot=(math.pi * 0.5, 0, 0))
+
+    # Gleaming tubular brass birdcage side uprights + top arches + finial ball!
+    for sx in (-0.54, 0.54):
+        for sy in (-0.27, 0.27):
+            add_cyl(f"Post_{sx}_{sy}", 0.022, 1.32, (sx, sy, 0.88), brass, verts=12)
+        add_cyl(f"EndCross_{sx}", 0.020, 0.56, (sx, 0, 1.15), brass, verts=12, rot=(math.pi * 0.5, 0, 0))
+        add_cyl(f"TopArch_{sx}", 0.022, 0.62, (sx * 0.52, 0, 1.72), brass, verts=12, rot=(0, sx * 0.72, 0))
+
+    # Top garment hanger bar + ornate brass finial crown
+    add_cyl("GarmentBar", 0.022, 1.08, (0, 0, 1.84), brass, verts=14, rot=(0, math.pi * 0.5, 0))
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.075, location=(0, 0, 1.92), segments=16, ring_count=10)
+    fin = bpy.context.active_object
+    fin.name = "BrassFinial"
+    bpy.ops.object.shade_smooth()
+    fin.data.materials.append(brass)
+
+    # Stacked luxury designer suitcases resting on the crimson deck!
+    add_box("CaseNavy", (0.62, 0.44, 0.26), (-0.16, 0.0, 0.36), navy_case, rot=(0, 0, 0.06), bevel_width=0.025)
+    add_box("CaseTan", (0.54, 0.38, 0.22), (-0.14, 0.02, 0.60), leather, rot=(0, 0, -0.08), bevel_width=0.02)
+    add_box("CaseStrapL", (0.04, 0.40, 0.23), (-0.30, 0.02, 0.60), brass)
+    add_box("CaseStrapR", (0.04, 0.40, 0.23), (0.02, 0.02, 0.60), brass)
+    add_box("CaseCream", (0.34, 0.42, 0.54), (0.32, 0.0, 0.50), cream_case, rot=(0, 0, -0.10), bevel_width=0.025)
+    add_box("CaseHandle", (0.14, 0.03, 0.06), (0.32, 0.0, 0.79), brass)
+
+    export_glb("hotel_luggage_cart.glb")
+
+
+# ─── 6. ROOM SERVICE TROLLEY WITH SILVER CLOCHE & CHAMPAGNE ─────────────────
+def build_hotel_room_service_cart():
+    clear_scene()
+    linen = make_mat("TableLinen", (0.97, 0.96, 0.93), roughness=0.84)
+    silver = make_mat("SilverDome", (0.90, 0.92, 0.95), roughness=0.08, metallic=0.98)
+    gold = make_mat("TrayGold", (0.90, 0.72, 0.30), roughness=0.18, metallic=0.95)
+    glass_g = make_mat("ChampagneBottle", (0.08, 0.26, 0.14), roughness=0.10, coat=0.9)
+    flute = make_mat("ChampagneFlute", (0.94, 0.92, 0.76), roughness=0.08, alpha=0.65, coat=1.0)
+    rubber = make_mat("RSWheel", (0.08, 0.08, 0.09), roughness=0.75)
+
+    # 4 wheels + draped crisp white floor-length hotel tablecloth
+    for wx in (-0.36, 0.36):
+        for wy in (-0.28, 0.28):
+            add_cyl(f"Wheel_{wx}_{wy}", 0.045, 0.03, (wx, wy, 0.045), rubber, verts=12, rot=(math.pi * 0.5, 0, 0))
+    add_box("LinenSkirt", (0.96, 0.74, 0.74), (0, 0, 0.47), linen, bevel_width=0.03)
+    add_box("TableTopPad", (0.98, 0.76, 0.04), (0, 0, 0.85), linen, bevel_width=0.015)
+
+    # Silver oval serving tray + gleaming domed food cloche + handle!
+    add_cyl("ServingTray", 0.22, 0.02, (-0.18, 0.02, 0.88), silver, verts=24)
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.18, location=(-0.18, 0.02, 0.89), segments=24, ring_count=12)
+    dome = bpy.context.active_object
+    dome.name = "ClocheDome"
+    dome.scale = (1.0, 1.0, 0.85)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    bpy.ops.object.shade_smooth()
+    dome.data.materials.append(silver)
+    add_torus("ClocheHandle", 0.028, 0.008, (-0.18, 0.02, 1.06), gold, rot=(math.pi * 0.5, 0, 0))
+
+    # Silver champagne ice bucket + bottle + 2 tall flutes
+    add_cyl("IceBucket", 0.095, 0.22, (0.24, -0.06, 0.98), silver, verts=18, r2=0.115)
+    add_cyl("BottleBody", 0.042, 0.24, (0.25, -0.06, 1.12), glass_g, verts=14, rot=(0.15, 0.12, 0))
+    add_cyl("BottleFoil", 0.018, 0.10, (0.27, -0.08, 1.26), gold, verts=12, rot=(0.15, 0.12, 0))
+    for fx, fy in [(0.16, 0.18), (0.30, 0.14)]:
+        add_cyl(f"FluteStem_{fx}", 0.006, 0.10, (fx, fy, 0.92), silver, verts=8)
+        add_cyl(f"FluteCup_{fx}", 0.022, 0.11, (fx, fy, 1.02), flute, verts=12, r2=0.026)
+
+    export_glb("hotel_room_service_cart.glb")
+
+
+# ─── 7. MODERN ONE-PIECE PORCELAIN HOTEL TOILET ─────────────────────────────
+# Faces -Y in Blender -> +Z in glTF
+def build_hotel_toilet_bidet():
+    clear_scene()
+    porcelain = make_mat("ToiletPorcelain", (0.98, 0.98, 0.97), roughness=0.08, coat=1.0)
+    chrome = make_mat("ToiletChrome", (0.90, 0.92, 0.95), roughness=0.14, metallic=0.96)
+    paper = make_mat("ToiletPaper", (0.96, 0.95, 0.92), roughness=0.90)
+
+    # Pedestal base + sculpted oval bowl + lid + sleek rear tank
+    add_cyl("BasePedestal", 0.16, 0.34, (0, -0.06, 0.17), porcelain, verts=20, r2=0.19)
+    bowl = add_cyl("Bowl", 0.20, 0.14, (0, -0.10, 0.38), porcelain, verts=24)
+    bowl.scale = (0.95, 1.24, 1.0)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    lid = add_cyl("SeatLid", 0.195, 0.035, (0, -0.10, 0.46), porcelain, verts=24)
+    lid.scale = (0.95, 1.24, 1.0)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    add_box("TankBody", (0.40, 0.22, 0.56), (0, 0.22, 0.50), porcelain, bevel_width=0.03)
+    add_box("TankLid", (0.42, 0.24, 0.04), (0, 0.22, 0.79), porcelain, bevel_width=0.012)
+    add_box("FlushLever", (0.08, 0.025, 0.025), (-0.18, 0.10, 0.72), chrome)
+
+    # Side freestanding chrome toilet paper stand + roll
+    add_cyl("TPBase", 0.08, 0.02, (0.38, 0.08, 0.01), chrome, verts=14)
+    add_cyl("TPPost", 0.012, 0.56, (0.38, 0.08, 0.29), chrome, verts=10)
+    add_cyl("TPRoll", 0.055, 0.11, (0.34, 0.04, 0.56), paper, verts=16, rot=(0, math.pi * 0.5, 0))
+
+    export_glb("hotel_toilet_bidet.glb")
+
+
+# ─── 8. SUITE 4K TV CREDENZA, ESPRESSO TRAY & STOCKED MINIBAR ───────────────
+# Faces -Y in Blender -> +Z in glTF
+def build_hotel_tv_minibar():
+    clear_scene()
+    walnut = make_mat("CredWalnut", (0.30, 0.18, 0.11), roughness=0.42)
+    marble = make_mat("CredMarble", (0.94, 0.91, 0.87), roughness=0.18, coat=0.6)
+    brass = make_mat("CredBrass", (0.90, 0.72, 0.30), roughness=0.18, metallic=0.95)
+    bezel = make_mat("TvBezel", (0.05, 0.06, 0.08), roughness=0.22, metallic=0.6)
+    screen = make_mat(
+        "TvWelcomeGlow",
+        (0.18, 0.45, 0.62),
+        roughness=0.06,
+        emission=(0.24, 0.68, 0.88),
+        emission_strength=1.6,
+        coat=1.0,
+    )
+    fridge_glass = make_mat("FridgeGlass", (0.14, 0.24, 0.32), roughness=0.08, alpha=0.55, coat=1.0)
+    fridge_glow = make_mat("FridgeLED", (0.92, 0.96, 1.0), roughness=0.2, emission=(0.85, 0.92, 1.0), emission_strength=1.4)
+    bottle_a = make_mat("MiniGreen", (0.12, 0.52, 0.26), roughness=0.2)
+    bottle_b = make_mat("MiniAmber", (0.88, 0.48, 0.14), roughness=0.2)
+
+    # Walnut credenza with marble top + brass legs
+    add_box("CredBody", (2.10, 0.54, 0.62), (0, 0, 0.46), walnut, bevel_width=0.015)
+    add_box("CredTop", (2.16, 0.58, 0.05), (0, 0, 0.79), marble, bevel_width=0.012)
+    for lx in (-0.96, 0.96):
+        for ly in (-0.21, 0.21):
+            add_cyl(f"Leg_{lx}_{ly}", 0.02, 0.16, (lx, ly, 0.08), brass, verts=10)
+
+    # Glass-front illuminated minibar fridge on right bay with mini bottles inside!
+    add_box("FridgeBack", (0.52, 0.04, 0.48), (0.64, 0.14, 0.46), fridge_glow)
+    for i, bx in enumerate((0.48, 0.58, 0.68, 0.78)):
+        add_cyl(f"MiniBot_{i}", 0.024, 0.16, (bx, 0.0, 0.36), bottle_a if i % 2 == 0 else bottle_b, verts=10)
+    add_box("FridgeDoor", (0.56, 0.03, 0.52), (0.64, -0.27, 0.46), fridge_glass)
+    add_box("FridgeHandle", (0.025, 0.04, 0.24), (0.39, -0.30, 0.46), brass)
+
+    # Sleek 55" Hotel 4K TV mounted above the credenza
+    add_box("TvStand", (0.48, 0.22, 0.03), (-0.18, 0.02, 0.83), bezel)
+    add_box("TvNeck", (0.10, 0.06, 0.22), (-0.18, 0.06, 0.94), bezel)
+    add_box("TvFrame", (1.36, 0.05, 0.80), (-0.18, 0.05, 1.38), bezel, bevel_width=0.008)
+    add_box("TvScreen", (1.30, 0.02, 0.74), (-0.18, 0.018, 1.38), screen)
+
+    # In-room pod espresso maker & chrome ice bucket on right side of marble top!
+    add_box("EspressoUnit", (0.18, 0.26, 0.26), (0.74, 0.02, 0.95), bezel, bevel_width=0.01)
+    add_cyl("SuiteIceBucket", 0.08, 0.16, (0.48, -0.02, 0.90), brass, verts=16)
+
+    export_glb("hotel_tv_minibar.glb")
+
+
 if __name__ == "__main__":
     build_hotel_elevator_doors()
     build_hotel_soaking_tub()
     build_hotel_vanity_sink()
-    print("All 3 bespoke Blender Hotel Solaire fixtures exported cleanly!")
+    build_hotel_housekeeping_cart()
+    build_hotel_luggage_cart()
+    build_hotel_room_service_cart()
+    build_hotel_toilet_bidet()
+    build_hotel_tv_minibar()
+    print("All 8 bespoke Blender Hotel Solaire fixtures exported cleanly!")

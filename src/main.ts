@@ -52,6 +52,7 @@ import {
   INTERIOR_ORIGIN_Y,
   createInteriorSystem,
   findNearbyBuildingEntrance,
+  findNearbyInteriorDoor,
   findNearbyInteriorElevator,
   findNearbyInteriorNpc,
   getFloorFromPlayerY,
@@ -104,6 +105,8 @@ function bootstrap(): void {
   let timeOfDayHours = TIME_PRESETS[0].hour;
   let timePresetIdx = 0;
   const discoveredDistricts = new Set<DistrictId>(['ocean-drive']);
+  const ownedKeycards = new Set<string>();
+  const openDoorIds = new Set<string>();
   let player: PlayerState = createInitialPlayerState(vehicles[0]);
 
   const saved = loadWorld();
@@ -133,6 +136,7 @@ function bootstrap(): void {
     saved.completedMissions.forEach((id) => missions.completedIds.add(id));
     Object.assign(missions.bestTimes, saved.bestTimes);
     saved.discoveredDistricts.forEach((d) => discoveredDistricts.add(d));
+    saved.hotelKeycards?.forEach((k) => ownedKeycards.add(k));
   }
 
   const playerMesh = createPlayerMesh(scene);
@@ -183,7 +187,7 @@ function bootstrap(): void {
 
     if (assets.pedestrianGltfs.length > 0) {
       pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
-      interiorSystem.attachGltfNpcs((idx) => assets.clonePedestrian(idx));
+      interiorSystem.attachGltfNpcs((idx, uniform) => assets.clonePedestrian(idx, uniform));
     }
 
     const carCount = Object.keys(assets.carGltfs).length;
@@ -257,6 +261,7 @@ function bootstrap(): void {
       vehicles,
       missions,
       discoveredDistricts,
+      hotelKeycards: ownedKeycards,
     });
     if (saveWorld(payload) && showBadge) {
       hud.flashSaved();
@@ -301,6 +306,7 @@ function bootstrap(): void {
       vehicles,
       missions,
       discoveredDistricts,
+      hotelKeycards: ownedKeycards,
     });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -422,23 +428,85 @@ function bootstrap(): void {
       const currentFloor = getFloorFromPlayerY(player.y);
       const nearExit = currentFloor === 0 && distXZ(player.x, player.z, def.exitX, def.exitZ) <= 2.4;
       const nearbyElevator = nearExit ? null : findNearbyInteriorElevator(def, currentFloor, player.x, player.z);
+      const nearbyDoor =
+        nearExit || nearbyElevator ? null : findNearbyInteriorDoor(def, currentFloor, player.x, player.z);
       const nearbyNpc =
-        nearExit || nearbyElevator ? null : findNearbyInteriorNpc(def, player.x, player.z, 4.2, currentFloor);
+        nearExit || nearbyElevator || nearbyDoor
+          ? null
+          : findNearbyInteriorNpc(def, player.x, player.z, 4.2, currentFloor);
+
+      const accessibleElevators = (def.elevators ?? []).filter(
+        (e) => !e.requiredKeycard || ownedKeycards.has(e.requiredKeycard),
+      );
 
       let promptText: string | null = null;
       if (nearExit) {
         promptText = `Exit to ${def.districtLabel}`;
       } else if (nearbyElevator && def.elevators && def.elevators.length > 1) {
-        const nextIdx = (def.elevators.findIndex((e) => e.floor === currentFloor) + 1) % def.elevators.length;
-        const nextFloor = def.elevators[nextIdx];
-        promptText = `Ride Elevator to ${nextFloor.floorLabel} (or press 1 / 2 / 3)`;
+        const curIdx = accessibleElevators.findIndex((e) => e.floor === currentFloor);
+        const nextFloor =
+          accessibleElevators[(Math.max(0, curIdx) + 1) % Math.max(1, accessibleElevators.length)] ??
+          def.elevators[0];
+        const hasPh = ownedKeycards.has('hotel-penthouse');
+        promptText = hasPh
+          ? `Ride Elevator to ${nextFloor.floorLabel} (or press 1 / 2 / 3)`
+          : `Ride Elevator to ${nextFloor.floorLabel} (1 / 2 · 3 Locked: VIP Keycard)`;
+      } else if (nearbyDoor) {
+        if (nearbyDoor.occupied) {
+          promptText = `Knock on ${nearbyDoor.label}`;
+        } else if (nearbyDoor.requiredKeycard && !ownedKeycards.has(nearbyDoor.requiredKeycard)) {
+          promptText = `Locked — ${nearbyDoor.label} (Keycard Required at 1F Front Desk)`;
+        } else {
+          const verb = openDoorIds.has(nearbyDoor.id) ? 'Close' : 'Open';
+          const badge = nearbyDoor.requiredKeycard ? ' (Keycard)' : '';
+          promptText = `${verb} ${nearbyDoor.label}${badge}`;
+        }
       } else if (nearbyNpc) {
-        promptText = nearbyNpc.actionCost
-          ? `Talk / Order from ${nearbyNpc.name} (${nearbyNpc.role}) — $${nearbyNpc.actionCost}`
-          : `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
+        if (nearbyNpc.id === 'solaire-concierge') {
+          if (!ownedKeycards.has('hotel-suite-201')) {
+            promptText = 'Check In with Elena — Book Suite 201 ($150 · Keycard)';
+          } else if (!ownedKeycards.has('hotel-penthouse')) {
+            promptText = 'Upgrade with Elena — Book 3F Ocean Penthouse ($500 · VIP Keycard)';
+          } else {
+            promptText = `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
+          }
+        } else if (nearbyNpc.id === 'solaire-clerk' && ownedKeycards.size > 0) {
+          promptText = 'Express Check-Out with Claire (Return Room Keycards)';
+        } else {
+          promptText = nearbyNpc.actionCost
+            ? `Talk / Order from ${nearbyNpc.name} (${nearbyNpc.role}) — $${nearbyNpc.actionCost}`
+            : `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
+        }
       }
 
-      // Direct floor selection [1] / [2] / [3] when standing at an elevator!
+      const rideElevatorTo = (dest: NonNullable<InteriorDef['elevators']>[number]) => {
+        if (dest.requiredKeycard && !ownedKeycards.has(dest.requiredKeycard)) {
+          sound.playChime('fail');
+          hud.showToast(
+            dest.lockedToast ?? `${dest.floorLabel} requires a keycard — inquire at the 1F Front Desk!`,
+            'warn',
+          );
+          return;
+        }
+        if (dest.floor === currentFloor) return;
+        interiorTransitionCooldown = 0.35;
+        player.x = dest.spawnX;
+        player.y = INTERIOR_ORIGIN_Y + dest.floor * FLOOR_STRIDE_Y;
+        player.z = dest.spawnZ;
+        player.yaw = dest.spawnYaw;
+        player.vx = 0;
+        player.vy = 0;
+        player.vz = 0;
+        player.speed = 0;
+        player.grounded = true;
+        cameraCtrl.yaw = dest.spawnYaw;
+        cameraCtrl.snap();
+        sound.playChime('enter');
+        hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
+        hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
+      };
+
+      // Direct floor selection [1] / [2] / [3] when standing at an elevator (enforces VIP Keycard on Floor 3!)
       if (
         nearbyElevator &&
         def.elevators &&
@@ -446,22 +514,8 @@ function bootstrap(): void {
         interiorTransitionCooldown <= 0
       ) {
         const dest = def.elevators.find((e) => e.floor === snap.floorDigitPressed - 1);
-        if (dest && dest.floor !== currentFloor) {
-          interiorTransitionCooldown = 0.35;
-          player.x = dest.spawnX;
-          player.y = INTERIOR_ORIGIN_Y + dest.floor * FLOOR_STRIDE_Y;
-          player.z = dest.spawnZ;
-          player.yaw = dest.spawnYaw;
-          player.vx = 0;
-          player.vy = 0;
-          player.vz = 0;
-          player.speed = 0;
-          player.grounded = true;
-          cameraCtrl.yaw = dest.spawnYaw;
-          cameraCtrl.snap();
-          sound.playChime('enter');
-          hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
-          hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
+        if (dest) {
+          rideElevatorTo(dest);
         }
       }
 
@@ -471,6 +525,7 @@ function bootstrap(): void {
           interactConsumed = true;
           interiorTransitionCooldown = 0.4;
           activeInterior = null;
+          openDoorIds.clear();
           interiorSystem.setActiveInterior(null);
           setOutdoorVisible(true);
           sky.setInteriorMode(false);
@@ -490,36 +545,88 @@ function bootstrap(): void {
           sound.playChime('enter');
           hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
           persistNow(false);
-        } else if (nearbyElevator && def.elevators && def.elevators.length > 1) {
+        } else if (nearbyElevator && accessibleElevators.length > 1) {
           interactConsumed = true;
-          interiorTransitionCooldown = 0.35;
-          const nextIdx = (def.elevators.findIndex((e) => e.floor === currentFloor) + 1) % def.elevators.length;
-          const dest = def.elevators[nextIdx];
-          player.x = dest.spawnX;
-          player.y = INTERIOR_ORIGIN_Y + dest.floor * FLOOR_STRIDE_Y;
-          player.z = dest.spawnZ;
-          player.yaw = dest.spawnYaw;
-          player.vx = 0;
-          player.vy = 0;
-          player.vz = 0;
-          player.speed = 0;
-          player.grounded = true;
-          cameraCtrl.yaw = dest.spawnYaw;
-          cameraCtrl.snap();
-          sound.playChime('enter');
-          hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
-          hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
+          const curIdx = accessibleElevators.findIndex((e) => e.floor === currentFloor);
+          const dest = accessibleElevators[(Math.max(0, curIdx) + 1) % accessibleElevators.length];
+          rideElevatorTo(dest);
+        } else if (nearbyDoor) {
+          interactConsumed = true;
+          if (nearbyDoor.occupied) {
+            const count = npcTalkCounts.get(nearbyDoor.id) ?? 0;
+            npcTalkCounts.set(nearbyDoor.id, count + 1);
+            sound.playChime('fail');
+            const lines = nearbyDoor.knockLines ?? [`${nearbyDoor.label} is occupied.`];
+            hud.showToast(lines[count % lines.length], 'info');
+          } else if (nearbyDoor.requiredKeycard && !ownedKeycards.has(nearbyDoor.requiredKeycard)) {
+            sound.playChime('fail');
+            hud.showToast(
+              nearbyDoor.lockedToast ?? `${nearbyDoor.label} is locked — keycard required!`,
+              'warn',
+            );
+          } else {
+            const wasOpen = openDoorIds.has(nearbyDoor.id);
+            if (wasOpen) {
+              openDoorIds.delete(nearbyDoor.id);
+              sound.playChime('checkpoint');
+            } else {
+              openDoorIds.add(nearbyDoor.id);
+              sound.playChime('enter');
+              if (nearbyDoor.requiredKeycard) {
+                hud.showToast(`Keycard accepted — unlocked ${nearbyDoor.label}`, 'success');
+              }
+            }
+          }
         } else if (nearbyNpc) {
           interactConsumed = true;
           const count = npcTalkCounts.get(nearbyNpc.id) ?? 0;
           npcTalkCounts.set(nearbyNpc.id, count + 1);
-          if (nearbyNpc.actionCost && nearbyNpc.actionToast) {
+
+          if (nearbyNpc.id === 'solaire-concierge' && !ownedKeycards.has('hotel-suite-201')) {
+            if (cash >= 150) {
+              cash -= 150;
+              ownedKeycards.add('hotel-suite-201');
+              sound.playChime('paint');
+              hud.showToast(
+                'Checked In (-$150)! Elena issued your Suite 201 Keycard (Floor 2). Visit again to upgrade to the 3F Penthouse ($500)!',
+                'success',
+              );
+              persistNow(false);
+            } else {
+              sound.playChime('fail');
+              hud.showToast('Elena: "Suite 201 is $150 per stay — looks like you need a bit more cash!"', 'warn');
+            }
+          } else if (nearbyNpc.id === 'solaire-concierge' && !ownedKeycards.has('hotel-penthouse')) {
+            if (cash >= 500) {
+              cash -= 500;
+              ownedKeycards.add('hotel-penthouse');
+              sound.playChime('complete');
+              hud.showToast(
+                'VIP Upgrade (-$500)! Elena issued your 3F Ocean Penthouse Keycard — Floor 3 unlocked in the brass elevator!',
+                'success',
+              );
+              persistNow(false);
+            } else {
+              sound.playChime('fail');
+              hud.showToast('Elena: "The 3rd-Floor Ocean Penthouse is $500 — come back when you are ready!"', 'warn');
+            }
+          } else if (nearbyNpc.id === 'solaire-clerk' && ownedKeycards.size > 0) {
+            ownedKeycards.clear();
+            openDoorIds.clear();
+            sound.playChime('checkpoint');
+            hud.showToast(
+              'Claire: "Express Check-Out complete! Your Hotel Solaire keycards have been returned. Safe travels!"',
+              'info',
+            );
+            persistNow(false);
+          } else if (nearbyNpc.actionCost && nearbyNpc.actionToast) {
             if (cash >= nearbyNpc.actionCost) {
               cash -= nearbyNpc.actionCost;
               sound.playChime('paint');
               hud.showToast(nearbyNpc.actionToast, 'success');
               persistNow(false);
             } else {
+              sound.playChime('fail');
               hud.showToast(`${nearbyNpc.name}: "Looks like you're short on cash ($${nearbyNpc.actionCost})."`, 'warn');
             }
           } else {
@@ -542,10 +649,20 @@ function bootstrap(): void {
             cameraYaw: cameraCtrl.yaw,
           },
           dt,
+          openDoorIds,
         );
 
         const updatedFloor = getFloorFromPlayerY(player.y);
-        interiorSystem.update(elapsed, dt, activeInterior.id, player.x, player.z, player.y);
+        interiorSystem.update(
+          elapsed,
+          dt,
+          activeInterior.id,
+          player.x,
+          player.z,
+          player.y,
+          openDoorIds,
+          ownedKeycards,
+        );
         playerMesh.syncFromState(player, elapsed, dt, null, null, false);
         cameraCtrl.update(camera, dt, player, null, activeInterior);
         sound.updateDriving(false, 0, 0, 0, false);
@@ -558,12 +675,21 @@ function bootstrap(): void {
 
         const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
         const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z, updatedFloor);
+        const keyBadges: string[] = [];
+        if (ownedKeycards.has('hotel-suite-201')) keyBadges.push('201');
+        if (ownedKeycards.has('hotel-penthouse')) keyBadges.push('3F PH');
+        const hotelKeyTag =
+          activeInterior.id === 'hotel-solaire'
+            ? keyBadges.length > 0
+              ? `${activeInterior.districtLabel} · KEYCARDS: ${keyBadges.join(' · ')}`
+              : `${activeInterior.districtLabel} · CHECK IN AT 1F FRONT DESK`
+            : activeInterior.districtLabel;
         hud.update({
           timeLabel: formatTimeLabel(timeOfDayHours),
           district: {
             ...outdoorDistrict,
             name: `${activeInterior.name} — ${currentRoom.name}`,
-            tagline: activeInterior.districtLabel,
+            tagline: hotelKeyTag,
           },
           cash,
           discoveredCount: discoveredDistricts.size,
@@ -575,7 +701,16 @@ function bootstrap(): void {
           fps: currentFps,
           drawCalls: lastDrawCalls,
         });
-        minimap.render(blueprint, player, vehicles, trafficCars, missions, activeInterior);
+        minimap.render(
+          blueprint,
+          player,
+          vehicles,
+          trafficCars,
+          missions,
+          activeInterior,
+          openDoorIds,
+          ownedKeycards,
+        );
 
         renderer.render(scene, camera);
         lastDrawCalls = renderer.info.render.calls;

@@ -63,7 +63,14 @@ export type InteriorPropKind =
   | 'building_wynwood_gallery'
   | 'hotel_elevator_doors'
   | 'hotel_soaking_tub'
-  | 'hotel_vanity_sink';
+  | 'hotel_vanity_sink'
+  | 'hotel_housekeeping_cart'
+  | 'hotel_luggage_cart'
+  | 'hotel_room_service_cart'
+  | 'hotel_toilet_bidet'
+  | 'hotel_tv_minibar';
+
+export type NpcUniformKind = 'concierge' | 'bellhop' | 'maid' | 'bartender' | 'waiter' | 'security';
 
 export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'sofa_luxury',
@@ -116,6 +123,11 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'hotel_elevator_doors',
   'hotel_soaking_tub',
   'hotel_vanity_sink',
+  'hotel_housekeeping_cart',
+  'hotel_luggage_cart',
+  'hotel_room_service_cart',
+  'hotel_toilet_bidet',
+  'hotel_tv_minibar',
 ];
 
 export interface LoadedPbrTextures {
@@ -156,7 +168,7 @@ export interface LoadedGameAssets {
     concrete?: LoadedPbrTextures;
   };
   cloneProtagonist: () => ClonedPerson | null;
-  clonePedestrian: (variantIndex?: number) => ClonedPerson | null;
+  clonePedestrian: (variantIndex?: number, uniform?: NpcUniformKind) => ClonedPerson | null;
   cloneFerrari: () => THREE.Group | null;
   cloneCarModel: (kind: CarModelKind) => THREE.Group | null;
   cloneBoatModel: (kind: BoatModelKind) => THREE.Group | null;
@@ -443,6 +455,149 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
 }
 
 /**
+ * Applies authentic 5-star hotel staff uniforms (tailored suit/dress tints + bone-parented
+ * 3D uniform gear: crimson bellhop pillbox cap & brass buttons, maid white apron & headband,
+ * concierge gold nametag, bartender/waiter bowtie, and security badge & dark shades).
+ */
+function styleUniformedStaff(avatarRoot: THREE.Object3D, uniform: NpcUniformKind): void {
+  const palette: Record<NpcUniformKind, { top: number; bottom: number; shoe: number }> = {
+    concierge: { top: 0x1a2844, bottom: 0x191d28, shoe: 0x14151a },
+    bellhop: { top: 0x8f192b, bottom: 0x1a1c24, shoe: 0x141418 },
+    maid: { top: 0x263447, bottom: 0x1f2a38, shoe: 0x16181e },
+    bartender: { top: 0xf4f5f8, bottom: 0x16181f, shoe: 0x14151a },
+    waiter: { top: 0xf6f6f8, bottom: 0x171920, shoe: 0x14151a },
+    security: { top: 0x151820, bottom: 0x12151c, shoe: 0x101116 },
+  };
+  const pal = palette[uniform];
+
+  avatarRoot.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !(obj.material instanceof THREE.MeshStandardMaterial)) return;
+    if (/outfit_top|wolf3d_outfit_top/i.test(obj.name)) {
+      const m = obj.material.clone();
+      m.color.setHex(pal.top);
+      m.roughness = 0.72;
+      obj.material = m;
+    } else if (/outfit_bottom|wolf3d_outfit_bottom/i.test(obj.name)) {
+      const m = obj.material.clone();
+      m.color.setHex(pal.bottom);
+      m.roughness = 0.75;
+      obj.material = m;
+    } else if (/footwear/i.test(obj.name)) {
+      const m = obj.material.clone();
+      m.color.setHex(pal.shoe);
+      m.roughness = 0.35;
+      obj.material = m;
+    }
+  });
+
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xffca4b, metalness: 0.94, roughness: 0.18 });
+  const whiteCloth = new THREE.MeshStandardMaterial({ color: 0xfafaf8, roughness: 0.85 });
+  const crimsonCloth = new THREE.MeshStandardMaterial({ color: 0x92192c, roughness: 0.72 });
+  const blackCloth = new THREE.MeshStandardMaterial({ color: 0x14161d, roughness: 0.55 });
+
+  const headBone = avatarRoot.getObjectByName('Head');
+  const chestBone = avatarRoot.getObjectByName('Spine2');
+  const waistBone = avatarRoot.getObjectByName('Spine') ?? avatarRoot.getObjectByName('Hips');
+
+  if (uniform === 'bellhop') {
+    // Classic Art Deco crimson & gold pillbox bellhop cap on Head!
+    if (headBone) {
+      const cap = new THREE.Group();
+      cap.position.set(0, 0.175, -0.005);
+      cap.rotation.z = -0.14;
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.094, 0.085, 16), crimsonCloth);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.096, 0.096, 0.016, 16), goldMat);
+      band.position.y = -0.032;
+      const topTrim = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.012, 16), goldMat);
+      topTrim.position.y = 0.038;
+      cap.add(crown, band, topTrim);
+      headBone.add(cap);
+    }
+    // Double-breasted gleaming gold brass coat buttons & shoulder epaulettes
+    if (chestBone) {
+      const gear = new THREE.Group();
+      for (const sx of [-0.048, 0.048]) {
+        for (const by of [0.02, 0.08, 0.14]) {
+          const btn = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), goldMat);
+          btn.position.set(sx, by, 0.115);
+          gear.add(btn);
+        }
+        const ep = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.014, 0.045), goldMat);
+        ep.position.set(sx * 3.1, 0.21, 0.0);
+        gear.add(ep);
+      }
+      chestBone.add(gear);
+    }
+  } else if (uniform === 'maid') {
+    // Crisp white hotel housekeeping pleated headband on Head + crisp white apron on waist!
+    if (headBone) {
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.108, 0.016, 8, 18, Math.PI),
+        whiteCloth,
+      );
+      band.position.set(0, 0.135, 0.01);
+      band.rotation.x = -0.3;
+      headBone.add(band);
+    }
+    if (waistBone) {
+      const apron = new THREE.Group();
+      const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.36, 0.025), whiteCloth);
+      skirt.position.set(0, -0.08, 0.13);
+      const bib = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.022), whiteCloth);
+      bib.position.set(0, 0.18, 0.125);
+      const sash = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.035, 0.24), whiteCloth);
+      sash.position.set(0, 0.09, 0.01);
+      apron.add(skirt, bib, sash);
+      waistBone.add(apron);
+    }
+  } else if (uniform === 'concierge') {
+    // Gleaming gold lapel nametag & tie bar
+    if (chestBone) {
+      const tag = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.02, 0.008), goldMat);
+      tag.position.set(-0.075, 0.12, 0.12);
+      const lapelPin = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 6), goldMat);
+      lapelPin.position.set(0.06, 0.14, 0.12);
+      chestBone.add(tag, lapelPin);
+    }
+  } else if (uniform === 'bartender' || uniform === 'waiter') {
+    // Classic black bowtie at collar + dark service apron
+    if (chestBone) {
+      const bow = new THREE.Group();
+      bow.position.set(0, 0.205, 0.095);
+      const wingL = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackCloth);
+      wingL.position.x = -0.024;
+      wingL.rotation.z = 0.18;
+      const wingR = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackCloth);
+      wingR.position.x = 0.024;
+      wingR.rotation.z = -0.18;
+      const knot = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.016), blackCloth);
+      bow.add(wingL, wingR, knot);
+      chestBone.add(bow);
+    }
+    if (waistBone) {
+      const bistroApron = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.42, 0.024), blackCloth);
+      bistroApron.position.set(0, -0.12, 0.13);
+      waistBone.add(bistroApron);
+    }
+  } else if (uniform === 'security') {
+    // Dark security shades + gleaming gold security shield badge
+    if (headBone) {
+      const acc = getSharedPedAccessories();
+      const shades = new THREE.Group();
+      shades.position.set(0, 0.088, 0.104);
+      shades.add(new THREE.Mesh(acc.shadesLensGeo, acc.lensMat));
+      headBone.add(shades);
+    }
+    if (chestBone) {
+      const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.01, 6), goldMat);
+      badge.rotation.x = Math.PI * 0.5;
+      badge.position.set(-0.075, 0.125, 0.122);
+      chestBone.add(badge);
+    }
+  }
+}
+
+/**
  * Loads all artist-authored 3D GLB models:
  * - 8 distinct real 3D car models (Ferrari 458 + 7 CC0 cars: Spyder, GT, EV, SUV, Taxi, Coupe, JDM)
  * - 6 distinct real 3D boat & ship models (Speedboat, Cabin Cruiser, Sailboat, Motorboat, Water Taxi, Cruise Liner)
@@ -595,7 +750,12 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     mocapClips.some((c) => c.name === n),
   );
 
-  const prepareAvatar = (gltf: GLTF, isProtagonist: boolean, variantIndex = 0): ClonedPerson => {
+  const prepareAvatar = (
+    gltf: GLTF,
+    isProtagonist: boolean,
+    variantIndex = 0,
+    uniform?: NpcUniformKind,
+  ): ClonedPerson => {
     const cloned = SkeletonUtils.clone(gltf.scene);
     cloned.rotation.y = Math.PI; // Native +Z -> -Z forward
     cloned.traverse((obj) => {
@@ -610,6 +770,8 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     });
     if (isProtagonist) {
       equipProtagonistStreetGear(cloned);
+    } else if (uniform) {
+      styleUniformedStaff(cloned, uniform);
     } else {
       styleCivilianPedestrian(cloned, variantIndex);
     }
@@ -642,11 +804,11 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
       if (!src || mocapClips.length === 0) return null;
       return prepareAvatar(src, true, 0);
     },
-    clonePedestrian(variantIndex = 0) {
+    clonePedestrian(variantIndex = 0, uniform?: NpcUniformKind) {
       if (pedestrianGltfs.length === 0 || mocapClips.length === 0) return null;
       const idx = Math.abs(variantIndex);
       const gltf = pedestrianGltfs[idx % pedestrianGltfs.length];
-      return prepareAvatar(gltf, false, idx);
+      return prepareAvatar(gltf, false, idx, uniform);
     },
     cloneFerrari() {
       if (!ferrariGltf) return null;

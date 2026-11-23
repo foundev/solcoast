@@ -17,6 +17,7 @@ import type {
   InteriorPropKind,
   InteriorTextureKey,
   InteriorTextureMap,
+  NpcUniformKind,
 } from './assets';
 import { getGroundHeight } from './cityData';
 import { createFountainWaterEffect, type AnimatedFountainWater } from './fountains';
@@ -102,6 +103,34 @@ export interface InteriorNpcDef {
   actionToast?: string;
   dancing?: boolean;
   floor?: number;
+  /** Optional 3D hotel staff uniform (bellhop, maid, concierge, bartender, waiter, security) */
+  uniform?: NpcUniformKind;
+  /** Optional living patrol loop inside the interior (walks between waypoints using mocap Walk) */
+  patrol?: { x: number; z: number }[];
+  patrolIndex?: number;
+  patrolPause?: number;
+}
+
+export interface InteriorDoorDef {
+  id: string;
+  label: string;
+  floor: number;
+  axis: 'x' | 'z';
+  coord: number;
+  min: number;
+  max: number;
+  height: number;
+  /** +1 or -1 swing direction when opening into the room */
+  swingDir: 1 | -1;
+  doubleDoor?: boolean;
+  /** Optional keycard id required to unlock/open this door (e.g. 'hotel-suite-201', 'hotel-penthouse') */
+  requiredKeycard?: string;
+  /** If true, door belongs to an occupied guest room — cannot be unlocked; pressing [E] knocks! */
+  occupied?: boolean;
+  lockedToast?: string;
+  knockLines?: string[];
+  /** Side (+1 or -1 along wall normal) where electronic keycard reader sits (for suite entry doors) */
+  readerSide?: 1 | -1;
 }
 
 export interface InteriorElevatorDef {
@@ -115,6 +144,9 @@ export interface InteriorElevatorDef {
   spawnX: number;
   spawnZ: number;
   spawnYaw: number;
+  /** Optional keycard required to select this floor in the elevator (e.g. 'hotel-penthouse') */
+  requiredKeycard?: string;
+  lockedToast?: string;
 }
 
 export interface StorefrontDef {
@@ -159,6 +191,7 @@ export interface InteriorDef {
   maxZ: number;
   rooms: InteriorRoomDef[];
   doorways: InteriorDoorwayDef[];
+  doors?: InteriorDoorDef[];
   elevators?: InteriorElevatorDef[];
   /** Auto-generated perimeter & interior partition walls (with doorway cutouts) */
   walls: InteriorAABB[];
@@ -202,6 +235,68 @@ export function findNearbyInteriorElevator(
     }
   }
   return null;
+}
+
+export function findNearbyInteriorDoor(
+  def: InteriorDef,
+  floor: number,
+  x: number,
+  z: number,
+  maxRange = 2.1,
+): InteriorDoorDef | null {
+  if (!def.doors) return null;
+  let best: InteriorDoorDef | null = null;
+  let bestDist = maxRange;
+  for (const d of def.doors) {
+    if (d.floor !== floor) continue;
+    const mid = (d.min + d.max) * 0.5;
+    const dx = d.axis === 'x' ? x - d.coord : x - mid;
+    const dz = d.axis === 'x' ? z - mid : z - d.coord;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= bestDist) {
+      bestDist = dist;
+      best = d;
+    }
+  }
+  return best;
+}
+
+/** Steps patrolling hotel staff smoothly along their floor waypoints (stops politely when player approaches). */
+export function stepInteriorPatrols(
+  def: InteriorDef,
+  dt: number,
+  playerX: number,
+  playerZ: number,
+  playerFloor: number,
+): void {
+  const safeDt = clamp(dt, 0.001, 0.05);
+  for (const npc of def.npcs) {
+    if (!npc.patrol || npc.patrol.length < 2) continue;
+    const npcFloor = npc.floor ?? 0;
+    // Pause politely when a guest approaches on the same floor
+    if (npcFloor === playerFloor && distXZ(playerX, playerZ, npc.x, npc.z) < 2.8) {
+      continue;
+    }
+    if ((npc.patrolPause ?? 0) > 0) {
+      npc.patrolPause = Math.max(0, (npc.patrolPause ?? 0) - safeDt);
+      continue;
+    }
+    const idx = npc.patrolIndex ?? 1;
+    const target = npc.patrol[idx % npc.patrol.length];
+    const dx = target.x - npc.x;
+    const dz = target.z - npc.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.22) {
+      npc.patrolIndex = (idx + 1) % npc.patrol.length;
+      npc.patrolPause = 2.4;
+      continue;
+    }
+    const walkSpeed = 1.25;
+    const step = Math.min(dist, walkSpeed * safeDt);
+    npc.x += (dx / dist) * step;
+    npc.z += (dz / dist) * step;
+    npc.yaw = lerpAngle(npc.yaw, yawFromDir(dx, dz), clamp(safeDt * 6.5, 0, 1));
+  }
 }
 
 interface WallSegment {
@@ -314,8 +409,13 @@ const PROP_FOOTPRINTS: Partial<Record<InteriorPropKind, [number, number]>> = {
   grand_piano: [1.44, 2.48],
   grandfather_clock: [0.58, 0.40],
   hotel_elevator_doors: [2.70, 0.42],
+  hotel_housekeeping_cart: [1.40, 0.54],
+  hotel_luggage_cart: [1.18, 0.64],
   hotel_reception_desk: [4.95, 1.48],
+  hotel_room_service_cart: [0.94, 0.72],
   hotel_soaking_tub: [2.00, 0.92],
+  hotel_toilet_bidet: [0.64, 0.66],
+  hotel_tv_minibar: [2.10, 0.58],
   hotel_vanity_sink: [2.10, 0.62],
   lounge_chair: [0.88, 1.02],
   metal_shelves: [2.26, 0.66],
@@ -421,6 +521,8 @@ export const INTERIORS: InteriorDef[] = [
         spawnX: 0,
         spawnZ: 7.4,
         spawnYaw: 0,
+        requiredKeycard: 'hotel-penthouse',
+        lockedToast: 'Floor 3 Penthouse requires a VIP Keycard — check in with Concierge Elena on 1F ($500)!',
       },
     ],
     rooms: [
@@ -733,17 +835,109 @@ export const INTERIORS: InteriorDef[] = [
       },
     ],
     doorways: [
-      // Floor 0: Grand Lobby <-> Ocean Cocktail Lounge
+      // Floor 0: Grand Lobby <-> Ocean Cocktail Lounge (open brass hotel archway)
       { floor: 0, axis: 'x', coord: 10, min: 1.5, max: 6.5, height: 3.8, frameColor: 0xd9a84e },
-      // Floor 1: 2F Corridor <-> Suite 201 & Suite 202, plus Suite <-> En-Suite Baths
-      { floor: 1, axis: 'x', coord: -12, min: 0.1, max: 2.9, height: 2.9, frameColor: 0xd9a84e },
-      { floor: 1, axis: 'x', coord: 12, min: 0.1, max: 2.9, height: 2.9, frameColor: 0xd9a84e },
-      { floor: 1, axis: 'z', coord: -4, min: -20.4, max: -17.8, height: 2.6, frameColor: 0xd9a84e },
-      { floor: 1, axis: 'z', coord: -4, min: 17.8, max: 20.4, height: 2.6, frameColor: 0xd9a84e },
-      // Floor 2: Penthouse Foyer <-> Grand Salon <-> Master Bedroom <-> Spa Bath
-      { floor: 2, axis: 'z', coord: 4, min: -2.8, max: 2.8, height: 3.6, frameColor: 0xe6bd68 },
-      { floor: 2, axis: 'x', coord: -12, min: -4.2, max: -0.6, height: 3.4, frameColor: 0xe6bd68 },
-      { floor: 2, axis: 'z', coord: 4, min: -18.5, max: -15.5, height: 3.0, frameColor: 0xe6bd68 },
+      // Floor 1: 2F Corridor <-> Suite 201 & Suite 202 (fitted with real hinged keycard doors!), plus En-Suite Bath doors
+      { floor: 1, axis: 'x', coord: -12, min: 0.75, max: 2.25, height: 2.6, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'x', coord: 12, min: 0.75, max: 2.25, height: 2.6, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'z', coord: -4, min: -19.8, max: -18.4, height: 2.5, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'z', coord: -4, min: 18.4, max: 19.8, height: 2.5, frameColor: 0xd9a84e },
+      // Floor 2: Penthouse Foyer <-> Grand Salon (double doors), Master Bedroom & Marble Spa (hinged doors)
+      { floor: 2, axis: 'z', coord: 4, min: -1.5, max: 1.5, height: 3.0, frameColor: 0xe6bd68 },
+      { floor: 2, axis: 'x', coord: -12, min: -3.2, max: -1.6, height: 2.7, frameColor: 0xe6bd68 },
+      { floor: 2, axis: 'z', coord: 4, min: -17.8, max: -16.2, height: 2.6, frameColor: 0xe6bd68 },
+    ],
+    doors: [
+      {
+        id: 'door-201',
+        label: 'Suite 201 (Ocean Breeze King)',
+        floor: 1,
+        axis: 'x',
+        coord: -12,
+        min: 0.75,
+        max: 2.25,
+        height: 2.6,
+        swingDir: 1,
+        requiredKeycard: 'hotel-suite-201',
+        readerSide: 1,
+        lockedToast: 'Suite 201 is locked — check in with Concierge Elena at the 1F Front Desk ($150) for your keycard!',
+      },
+      {
+        id: 'door-bath-201',
+        label: 'Suite 201 Bathroom',
+        floor: 1,
+        axis: 'z',
+        coord: -4,
+        min: -19.8,
+        max: -18.4,
+        height: 2.5,
+        swingDir: -1,
+      },
+      {
+        id: 'door-202',
+        label: 'Suite 202 (Occupied)',
+        floor: 1,
+        axis: 'x',
+        coord: 12,
+        min: 0.75,
+        max: 2.25,
+        height: 2.6,
+        swingDir: -1,
+        occupied: true,
+        readerSide: -1,
+        knockLines: [
+          'Camila (from inside Suite 202): "Housekeeping? Could you come back in an hour, please?"',
+          'Camila (from inside Suite 202): "Occupied! Please respect the Privacy sign."',
+        ],
+      },
+      {
+        id: 'door-bath-202',
+        label: 'Suite 202 Bathroom',
+        floor: 1,
+        axis: 'z',
+        coord: -4,
+        min: 18.4,
+        max: 19.8,
+        height: 2.5,
+        swingDir: -1,
+      },
+      {
+        id: 'door-ph-entry',
+        label: 'Ocean Penthouse Double Doors',
+        floor: 2,
+        axis: 'z',
+        coord: 4,
+        min: -1.5,
+        max: 1.5,
+        height: 3.0,
+        swingDir: 1,
+        doubleDoor: true,
+        requiredKeycard: 'hotel-penthouse',
+        readerSide: 1,
+        lockedToast: 'Penthouse doors require a VIP Keycard — rent the 3F Penthouse with Elena on 1F ($500)!',
+      },
+      {
+        id: 'door-ph-master',
+        label: 'Penthouse Master Bedroom',
+        floor: 2,
+        axis: 'x',
+        coord: -12,
+        min: -3.2,
+        max: -1.6,
+        height: 2.7,
+        swingDir: 1,
+      },
+      {
+        id: 'door-ph-spa',
+        label: 'Penthouse Marble Spa',
+        floor: 2,
+        axis: 'z',
+        coord: 4,
+        min: -17.8,
+        max: -16.2,
+        height: 2.6,
+        swingDir: 1,
+      },
     ],
     colliders: [
       // Floor 0: Ocean Cocktail Lounge mahogany bar counter (exact mesh bounds: 1.8x9.2 centered at 19.8, 2.8)
@@ -771,6 +965,8 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 0, kind: 'coffee_table', x: 6.2, z: 6.7, rotY: Math.PI * 0.5, scale: 1.1 },
       { floor: 0, kind: 'armchair', x: 4.1, z: 6.8, rotY: Math.PI * 0.5, scale: 1.0 },
       { floor: 0, kind: 'grandfather_clock', x: -9.3, z: 3.2, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'hotel_luggage_cart', x: -4.8, z: 10.2, rotY: 0.28, scale: 1.0 },
+      { floor: 0, kind: 'hotel_luggage_cart', x: 4.8, z: 10.2, rotY: -0.32, scale: 1.0 },
       { floor: 0, kind: 'potted_plant_1', x: -3.4, z: 10.9, scale: 1.3 },
       { floor: 0, kind: 'potted_plant_1', x: 3.4, z: 10.9, scale: 1.3 },
       { floor: 0, kind: 'potted_plant_2', x: -2.2, z: -3.2, scale: 1.15 },
@@ -801,20 +997,24 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 1.0, scale: 1.1, hangFromCeiling: true },
       { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 5.0, scale: 1.1, hangFromCeiling: true },
 
-      // ── FLOOR 1: 2F GUEST CORRIDOR ──
+      // ── FLOOR 1: 2F GUEST CORRIDOR (HOUSEKEEPING CARTS, ROOM SERVICE & LINENS) ──
       { floor: 1, kind: 'hotel_elevator_doors', x: 0, z: -1.76, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'hotel_housekeeping_cart', x: -5.8, z: -1.35, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'hotel_housekeeping_cart', x: 8.6, z: -1.35, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'hotel_room_service_cart', x: 5.2, z: 3.9, rotY: Math.PI, scale: 1.0 },
       { floor: 1, kind: 'console_table', x: 0, z: 4.42, rotY: Math.PI, scale: 1.1 },
       { floor: 1, kind: 'ornate_mirror', x: 0, y: 1.55, z: 4.86, rotY: Math.PI, scale: 1.5 },
       { floor: 1, kind: 'potted_plant_1', x: -2.2, z: -1.2, scale: 1.1 },
       { floor: 1, kind: 'potted_plant_1', x: 2.2, z: -1.2, scale: 1.1 },
-      { floor: 1, kind: 'potted_plant_2', x: -10.8, z: -1.2, scale: 1.0 },
-      { floor: 1, kind: 'potted_plant_2', x: 10.8, z: -1.2, scale: 1.0 },
+      { floor: 1, kind: 'potted_plant_2', x: -11.2, z: -1.2, scale: 1.0 },
+      { floor: 1, kind: 'potted_plant_2', x: 11.2, z: -1.2, scale: 1.0 },
       { floor: 1, kind: 'pendant_lamp', x: -6.2, y: 3.6, z: 1.5, scale: 1.0, hangFromCeiling: true },
       { floor: 1, kind: 'pendant_lamp', x: 0, y: 3.6, z: 1.5, scale: 1.05, hangFromCeiling: true },
       { floor: 1, kind: 'pendant_lamp', x: 6.2, y: 3.6, z: 1.5, scale: 1.0, hangFromCeiling: true },
 
       // ── FLOOR 1: SUITE 201 — OCEAN BREEZE KING & MARBLE BATH ──
       { floor: 1, kind: 'bed_suite', x: -20.5, z: 0.8, rotY: Math.PI * 0.5, scale: 1.25 },
+      { floor: 1, kind: 'hotel_tv_minibar', x: -12.5, z: 4.1, rotY: -Math.PI * 0.5, scale: 1.0 },
       { floor: 1, kind: 'console_table', x: -15.4, z: 5.2, rotY: Math.PI, scale: 1.1 },
       { floor: 1, kind: 'dining_chair', x: -15.4, z: 4.1, rotY: 0, scale: 1.0 },
       { floor: 1, kind: 'ornate_mirror', x: -15.4, y: 1.55, z: 5.84, rotY: Math.PI, scale: 1.3 },
@@ -823,13 +1023,14 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 1, kind: 'cabinet', x: -13.1, z: -2.2, rotY: -Math.PI * 0.5, scale: 0.95 },
       { floor: 1, kind: 'potted_plant_1', x: -21.0, z: -2.9, scale: 1.05 },
       { floor: 1, kind: 'chandelier', x: -17.0, y: 3.6, z: 1.0, scale: 0.9, hangFromCeiling: true },
-      // Bath 201
+      // Bath 201 (Soaking Tub + Double Vanity + Glass Rain Shower + Modern Toilet!)
       { floor: 1, kind: 'hotel_soaking_tub', x: -19.8, z: -8.6, rotY: 0, scale: 1.0 },
       { floor: 1, kind: 'hotel_vanity_sink', x: -15.45, z: -6.8, rotY: -Math.PI * 0.5, scale: 1.0 },
-      { floor: 1, kind: 'potted_plant_2', x: -21.2, z: -5.2, scale: 0.95 },
+      { floor: 1, kind: 'hotel_toilet_bidet', x: -21.3, z: -5.3, rotY: Math.PI * 0.5, scale: 1.0 },
 
       // ── FLOOR 1: SUITE 202 — ART DECO DELUXE & MARBLE BATH ──
       { floor: 1, kind: 'bed_suite', x: 20.5, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.25 },
+      { floor: 1, kind: 'hotel_tv_minibar', x: 12.5, z: 4.1, rotY: Math.PI * 0.5, scale: 1.0 },
       { floor: 1, kind: 'bistro_table', x: 18.8, z: 4.4, scale: 0.82 },
       { floor: 1, kind: 'armchair', x: 17.0, z: 4.4, rotY: Math.PI * 0.5, scale: 0.95 },
       { floor: 1, kind: 'console_table', x: 14.8, z: 5.2, rotY: Math.PI, scale: 1.05 },
@@ -840,7 +1041,7 @@ export const INTERIORS: InteriorDef[] = [
       // Bath 202
       { floor: 1, kind: 'hotel_soaking_tub', x: 19.8, z: -8.6, rotY: Math.PI, scale: 1.0 },
       { floor: 1, kind: 'hotel_vanity_sink', x: 15.45, z: -6.8, rotY: Math.PI * 0.5, scale: 1.0 },
-      { floor: 1, kind: 'potted_plant_2', x: 21.2, z: -5.2, scale: 0.95 },
+      { floor: 1, kind: 'hotel_toilet_bidet', x: 21.3, z: -5.3, rotY: -Math.PI * 0.5, scale: 1.0 },
 
       // ── FLOOR 2: 3F PENTHOUSE FOYER, GRAND SALON, MASTER & SPA ──
       { floor: 2, kind: 'hotel_elevator_doors', x: 0, z: 9.76, rotY: Math.PI, scale: 1.0 },
@@ -854,6 +1055,7 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 2, kind: 'sofa_luxury', x: 3.6, z: -1.8, rotY: -Math.PI * 0.5, scale: 1.15 },
       { floor: 2, kind: 'coffee_table', x: 0, z: -1.8, rotY: 0, scale: 1.25 },
       { floor: 2, kind: 'armchair', x: 0, z: -4.8, rotY: 0, scale: 1.05 },
+      { floor: 2, kind: 'hotel_room_service_cart', x: -6.4, z: -5.6, rotY: 0.45, scale: 1.05 },
       { floor: 2, kind: 'bar_stool', x: 7.6, z: -4.2, scale: 1.1 },
       { floor: 2, kind: 'bar_stool', x: 7.6, z: -2.0, scale: 1.1 },
       { floor: 2, kind: 'bar_stool', x: 7.6, z: 0.2, scale: 1.1 },
@@ -868,6 +1070,7 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 2, kind: 'chandelier', x: 4.2, y: 4.8, z: -2.0, scale: 1.45, hangFromCeiling: true },
       // Penthouse Master Bedroom
       { floor: 2, kind: 'bed_suite', x: -20.3, z: -1.8, rotY: Math.PI * 0.5, scale: 1.38 },
+      { floor: 2, kind: 'hotel_tv_minibar', x: -12.5, z: -5.2, rotY: -Math.PI * 0.5, scale: 1.02 },
       { floor: 2, kind: 'lounge_chair', x: -16.8, z: -5.8, rotY: Math.PI * 0.2, scale: 1.05 },
       { floor: 2, kind: 'coffee_table', x: -15.3, z: -5.4, rotY: 0, scale: 0.95 },
       { floor: 2, kind: 'console_table', x: -13.1, z: 2.0, rotY: -Math.PI * 0.5, scale: 1.15 },
@@ -878,7 +1081,7 @@ export const INTERIORS: InteriorDef[] = [
       // Penthouse Marble Spa Bath
       { floor: 2, kind: 'hotel_soaking_tub', x: -19.2, z: 8.2, rotY: 0, scale: 1.12 },
       { floor: 2, kind: 'hotel_vanity_sink', x: -12.48, z: 7.0, rotY: -Math.PI * 0.5, scale: 1.08 },
-      { floor: 2, kind: 'potted_plant_1', x: -21.1, z: 5.2, scale: 1.15 },
+      { floor: 2, kind: 'hotel_toilet_bidet', x: -21.2, z: 5.2, rotY: Math.PI * 0.5, scale: 1.05 },
       { floor: 2, kind: 'potted_plant_2', x: -13.2, z: 5.0, scale: 1.0 },
     ],
     npcs: [
@@ -887,13 +1090,28 @@ export const INTERIORS: InteriorDef[] = [
         name: 'Elena',
         role: 'Chief Concierge',
         floor: 0,
-        x: -6.2,
-        z: -2.3,
+        uniform: 'concierge',
+        x: -6.6,
+        z: -2.2,
         yaw: Math.PI,
         variantIndex: 13,
         lines: [
-          'Elena: "Welcome to Hotel Solaire! Take the brass elevator straight ahead to visit Guest Suites on Floor 2 or the Ocean Penthouse on Floor 3."',
-          'Elena: "Our Ocean Cocktail Lounge is open right through the east archway — Mateo mixes the finest mojitos on Ocean Drive."',
+          'Elena: "Welcome to Hotel Solaire! Your keycards are active — enjoy Suite 201 and the 3rd-Floor Ocean Penthouse."',
+          'Elena: "Speak with Claire right beside me anytime you are ready for Express Check-Out."',
+        ],
+      },
+      {
+        id: 'solaire-clerk',
+        name: 'Claire',
+        role: 'Front Desk · Check-Out',
+        floor: 0,
+        uniform: 'concierge',
+        x: -4.7,
+        z: -2.2,
+        yaw: Math.PI,
+        variantIndex: 31,
+        lines: [
+          'Claire: "Welcome! Check in with Chief Concierge Elena beside me to book Suite 201 ($150) or the Penthouse ($500)."',
         ],
       },
       {
@@ -901,13 +1119,50 @@ export const INTERIORS: InteriorDef[] = [
         name: 'Marco',
         role: 'Bell Captain',
         floor: 0,
+        uniform: 'bellhop',
         x: 3.3,
         z: 8.6,
         yaw: -Math.PI * 0.35,
         variantIndex: 22,
         lines: [
-          'Marco: "Right this way! Step up to the brass elevator doors and press [E] or 1 / 2 / 3 to ride between floors."',
-          'Marco: "Suites 201 and 202 are freshly prepared on the 2nd floor, and the 3rd-floor Penthouse has panoramic ocean views."',
+          'Marco: "Welcome to Hotel Solaire! Check in at the reception desk on your left to receive your brass keycard."',
+          'Marco: "Our bellhops will bring your bags right up to Suite 201 as soon as you check in!"',
+        ],
+      },
+      {
+        id: 'solaire-bellhop-2',
+        name: 'Leo',
+        role: 'Bellhop',
+        floor: 0,
+        uniform: 'bellhop',
+        x: -3.4,
+        z: 8.8,
+        yaw: 0,
+        variantIndex: 15,
+        patrol: [
+          { x: -3.4, z: 8.8 },
+          { x: -3.2, z: 2.2 },
+          { x: -2.6, z: -1.4 },
+          { x: -3.2, z: 2.2 },
+        ],
+        lines: [
+          'Leo: "Delivering luggage up to the 2nd floor! Need help with your bags?"',
+          'Leo: "Suite 201 is freshly turned down and ready whenever you check in with Elena."',
+        ],
+      },
+      {
+        id: 'solaire-security',
+        name: 'Marcus',
+        role: 'Hotel Security',
+        floor: 0,
+        uniform: 'security',
+        x: 2.5,
+        z: -2.0,
+        yaw: Math.PI,
+        variantIndex: 28,
+        lines: [
+          'Marcus: "Good evening. Floor 3 Penthouse is private VIP access only — keycard required in the elevator."',
+          'Marcus: "All guest suites on Floor 2 are electronic keycard-locked for resident privacy."',
         ],
       },
       {
@@ -915,6 +1170,7 @@ export const INTERIORS: InteriorDef[] = [
         name: 'Mateo',
         role: 'Master Mixologist',
         floor: 0,
+        uniform: 'bartender',
         x: 21.4,
         z: 2.6,
         yaw: -Math.PI * 0.5,
@@ -937,16 +1193,59 @@ export const INTERIORS: InteriorDef[] = [
       {
         id: 'solaire-housekeeper',
         name: 'Rosa',
-        role: 'Floor 2 Housekeeping',
+        role: 'Senior Housekeeper',
         floor: 1,
+        uniform: 'maid',
         x: -4.2,
-        z: 1.6,
-        yaw: Math.PI * 0.35,
+        z: -0.4,
+        yaw: Math.PI * 0.85,
         variantIndex: 39,
         lines: [
-          'Rosa: "Suites 201 and 202 are both open to tour — each has a full marble soaking tub and rain shower!"',
-          'Rosa: "Suites 203 and 204 have Do Not Disturb signs out right now."',
+          'Rosa: "Just finished turning down Suite 201 with fresh linens and bath towels! Tap your keycard on the door lock."',
+          'Rosa: "Suites 202 through 206 are occupied — please respect the Do Not Disturb signs."',
         ],
+      },
+      {
+        id: 'solaire-maid-2',
+        name: 'Lucia',
+        role: 'Housekeeping Maid',
+        floor: 1,
+        uniform: 'maid',
+        x: -8.6,
+        z: 2.4,
+        yaw: Math.PI * 0.5,
+        variantIndex: 44,
+        patrol: [
+          { x: -8.6, z: 2.4 },
+          { x: -2.0, z: 2.4 },
+          { x: 6.4, z: 2.4 },
+          { x: 9.4, z: 0.6 },
+          { x: -2.0, z: 2.4 },
+        ],
+        lines: [
+          'Lucia: "Restocking fresh towels and toiletries along Floor 2 — let us know if Suite 201 needs anything!"',
+          'Lucia: "Extra bathrobes and minibar refills are on our housekeeping trolley anytime."',
+        ],
+      },
+      {
+        id: 'solaire-room-service',
+        name: 'Javier',
+        role: 'Room Service',
+        floor: 1,
+        uniform: 'waiter',
+        x: 3.4,
+        z: 0.8,
+        yaw: Math.PI * 0.5,
+        variantIndex: 20,
+        actionCost: 30,
+        actionToast: 'Javier served you a fresh Hotel Solaire Cuban Sandwich & Espresso from the silver cloche (-$30)!',
+        patrol: [
+          { x: 3.4, z: 0.8 },
+          { x: 8.4, z: 0.8 },
+          { x: 8.4, z: 3.2 },
+          { x: 3.4, z: 3.2 },
+        ],
+        lines: ['Javier: "Room service! Hot silver-cloche lunch & champagne straight to your suite for $30."'],
       },
       {
         id: 'solaire-guest-1',
@@ -960,9 +1259,23 @@ export const INTERIORS: InteriorDef[] = [
         lines: ['Camila: "Love this Art Deco Deluxe suite! The freestanding soaking tub in the marble bath is heaven."'],
       },
       {
+        id: 'solaire-ph-butler',
+        name: 'Henri',
+        role: 'Penthouse Butler',
+        floor: 2,
+        uniform: 'waiter',
+        x: 10.6,
+        z: -2.0,
+        yaw: -Math.PI * 0.5,
+        variantIndex: 47,
+        actionCost: 45,
+        actionToast: 'Butler Henri uncorked a chilled bottle of Vintage Rosé Champagne at the Penthouse Wet Bar (-$45)!',
+        lines: ['Henri: "Good evening. Vintage champagne at your private Penthouse wet bar?"'],
+      },
+      {
         id: 'solaire-suite-vip',
         name: 'Valery',
-        role: 'Penthouse VIP',
+        role: 'Penthouse Guest',
         floor: 2,
         x: 4.2,
         z: -4.8,
@@ -970,7 +1283,7 @@ export const INTERIORS: InteriorDef[] = [
         variantIndex: 41,
         lines: [
           'Valery: "Look at that sunset over the Atlantic from the 3rd-floor Penthouse — worth every penny."',
-          'Valery: "Help yourself to the wet bar or check out the master bedroom and marble spa through the west arch."',
+          'Valery: "Butler Henri keeps the champagne chilled and the marble spa is right through the master suite."',
         ],
       },
     ],
@@ -1732,13 +2045,14 @@ function resolveCircleOBB(
 }
 
 /**
- * Steps player walking, sprinting, jumping & solid multi-room wall/furniture/NPC collisions.
+ * Steps player walking, sprinting, jumping & solid multi-room wall/door/furniture/NPC collisions.
  */
 export function stepPlayerInInterior(
   p: PlayerState,
   def: InteriorDef,
   input: FootMoveInput,
   dt: number,
+  openDoorIds?: ReadonlySet<string>,
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   const camFwd = forwardFromYaw(input.cameraYaw);
@@ -1776,6 +2090,20 @@ export function stepPlayerInInterior(
     for (const wall of def.walls) {
       if ((wall.floor ?? 0) !== floor) continue;
       const res = resolveCircleAABB(nextX, nextZ, radius, wall);
+      if (res.hit) {
+        nextX += res.dx;
+        nextZ += res.dz;
+      }
+    }
+    // Closed hinged room doors are 100% solid — players cannot walk into locked suites or penthouses!
+    for (const door of def.doors ?? []) {
+      if (door.floor !== floor) continue;
+      if (openDoorIds?.has(door.id)) continue;
+      const doorBox: AABB =
+        door.axis === 'x'
+          ? { minX: door.coord - 0.14, maxX: door.coord + 0.14, minZ: door.min, maxZ: door.max, minY: 0, maxY: door.height }
+          : { minX: door.min, maxX: door.max, minZ: door.coord - 0.14, maxZ: door.coord + 0.14, minY: 0, maxY: door.height };
+      const res = resolveCircleAABB(nextX, nextZ, radius, doorBox);
       if (res.hit) {
         nextX += res.dx;
         nextZ += res.dz;
@@ -2087,6 +2415,14 @@ interface BuiltNpcHandle {
   rig: HumanRigController | null;
 }
 
+interface BuiltDoorHandle {
+  def: InteriorDoorDef;
+  pivotA: THREE.Group;
+  pivotB?: THREE.Group;
+  openProgress: number;
+  readerLedMat?: THREE.MeshBasicMaterial;
+}
+
 interface PbrSurfaceBinding {
   mat: THREE.MeshStandardMaterial;
   key: InteriorTextureKey;
@@ -2102,6 +2438,7 @@ interface BuiltVenue {
   pbrBindings: PbrSurfaceBinding[];
   fountainEffects: AnimatedFountainWater[];
   npcs: BuiltNpcHandle[];
+  doors: BuiltDoorHandle[];
   danceFloorMat?: THREE.MeshStandardMaterial;
   lasers?: THREE.Mesh[];
   monolithMats?: THREE.MeshStandardMaterial[];
@@ -2111,7 +2448,9 @@ interface BuiltVenue {
 
 export interface InteriorSystemHandles {
   outdoorMarkersRoot: THREE.Group;
-  attachGltfNpcs: (clonePedestrian: (variantIndex: number) => ClonedPerson | null) => void;
+  attachGltfNpcs: (
+    clonePedestrian: (variantIndex: number, uniform?: NpcUniformKind) => ClonedPerson | null,
+  ) => void;
   attachGltfProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   applyPbrTextures: (texMap: InteriorTextureMap) => void;
   setActiveInterior: (id: InteriorId | null) => void;
@@ -2122,6 +2461,8 @@ export interface InteriorSystemHandles {
     playerX: number,
     playerZ: number,
     playerY?: number,
+    openDoorIds?: ReadonlySet<string>,
+    ownedKeycards?: ReadonlySet<string>,
   ) => void;
 }
 
@@ -2580,6 +2921,150 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     }
   }
 
+  // 3b. Build real 3D Animated Hinged Room Doors & Electronic Keycard Readers!
+  const doors: BuiltDoorHandle[] = [];
+  const doorWoodMat = new THREE.MeshStandardMaterial({ color: 0x452516, roughness: 0.4, metalness: 0.12 });
+  const doorBrassMat = new THREE.MeshStandardMaterial({ color: 0xe0b452, roughness: 0.2, metalness: 0.92 });
+  const readerBodyMat = new THREE.MeshStandardMaterial({ color: 0x161922, roughness: 0.3, metalness: 0.7 });
+
+  const createDoorLeaf = (
+    axis: 'x' | 'z',
+    leafWidth: number,
+    leafHeight: number,
+    dirSign: 1 | -1,
+    hasPeephole: boolean,
+  ): THREE.Group => {
+    const pivot = new THREE.Group();
+    const w = Math.max(0.4, leafWidth - 0.04);
+    const slab = new THREE.Mesh(
+      axis === 'x'
+        ? new THREE.BoxGeometry(0.09, leafHeight - 0.04, w)
+        : new THREE.BoxGeometry(w, leafHeight - 0.04, 0.09),
+      doorWoodMat,
+    );
+    if (axis === 'x') {
+      slab.position.set(0, leafHeight * 0.5, dirSign * (leafWidth * 0.5));
+    } else {
+      slab.position.set(dirSign * (leafWidth * 0.5), leafHeight * 0.5, 0);
+    }
+    pivot.add(slab);
+
+    // Art Deco raised brass trim border + kickplate + brass lever handles on both sides
+    const kick = new THREE.Mesh(
+      axis === 'x' ? new THREE.BoxGeometry(0.105, 0.22, w - 0.06) : new THREE.BoxGeometry(w - 0.06, 0.22, 0.105),
+      doorBrassMat,
+    );
+    kick.position.set(
+      axis === 'z' ? dirSign * (leafWidth * 0.5) : 0,
+      0.13,
+      axis === 'x' ? dirSign * (leafWidth * 0.5) : 0,
+    );
+    pivot.add(kick);
+
+    const panelTrim = new THREE.Mesh(
+      axis === 'x'
+        ? new THREE.BoxGeometry(0.102, leafHeight * 0.58, w * 0.68)
+        : new THREE.BoxGeometry(w * 0.68, leafHeight * 0.58, 0.102),
+      doorBrassMat,
+    );
+    panelTrim.position.set(
+      axis === 'z' ? dirSign * (leafWidth * 0.5) : 0,
+      leafHeight * 0.56,
+      axis === 'x' ? dirSign * (leafWidth * 0.5) : 0,
+    );
+    const panelInset = new THREE.Mesh(
+      axis === 'x'
+        ? new THREE.BoxGeometry(0.11, leafHeight * 0.54, w * 0.62)
+        : new THREE.BoxGeometry(w * 0.62, leafHeight * 0.54, 0.11),
+      doorWoodMat,
+    );
+    panelInset.position.copy(panelTrim.position);
+    pivot.add(panelTrim, panelInset);
+
+    // Brass door lever handles on both faces near latch edge
+    const latchDist = dirSign * (leafWidth - 0.16);
+    for (const faceSign of [-1, 1]) {
+      const handle = new THREE.Mesh(
+        axis === 'x' ? new THREE.BoxGeometry(0.06, 0.035, 0.14) : new THREE.BoxGeometry(0.14, 0.035, 0.06),
+        doorBrassMat,
+      );
+      if (axis === 'x') {
+        handle.position.set(faceSign * 0.075, 1.05, latchDist);
+      } else {
+        handle.position.set(latchDist, 1.05, faceSign * 0.075);
+      }
+      pivot.add(handle);
+    }
+
+    if (hasPeephole) {
+      const peep = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.115, 10), doorBrassMat);
+      if (axis === 'x') {
+        peep.rotation.z = Math.PI * 0.5;
+        peep.position.set(0, 1.56, dirSign * (leafWidth * 0.5));
+      } else {
+        peep.rotation.x = Math.PI * 0.5;
+        peep.position.set(dirSign * (leafWidth * 0.5), 1.56, 0);
+      }
+      pivot.add(peep);
+    }
+
+    return pivot;
+  };
+
+  for (const d of def.doors ?? []) {
+    const baseY = d.floor * FLOOR_STRIDE_Y;
+    const span = d.max - d.min;
+    const isSuiteEntry = Boolean(d.requiredKeycard || d.occupied);
+
+    let pivotA: THREE.Group;
+    let pivotB: THREE.Group | undefined;
+
+    if (d.doubleDoor) {
+      const halfW = span * 0.5;
+      pivotA = createDoorLeaf(d.axis, halfW, d.height, 1, false);
+      pivotB = createDoorLeaf(d.axis, halfW, d.height, -1, false);
+      if (d.axis === 'x') {
+        pivotA.position.set(d.coord, baseY, d.min);
+        pivotB.position.set(d.coord, baseY, d.max);
+      } else {
+        pivotA.position.set(d.min, baseY, d.coord);
+        pivotB.position.set(d.max, baseY, d.coord);
+      }
+      group.add(pivotA, pivotB);
+    } else {
+      pivotA = createDoorLeaf(d.axis, span, d.height, 1, isSuiteEntry);
+      if (d.axis === 'x') {
+        pivotA.position.set(d.coord, baseY, d.min);
+      } else {
+        pivotA.position.set(d.min, baseY, d.coord);
+      }
+      group.add(pivotA);
+    }
+
+    // Electronic keycard scanner box with red/green status LED mounted next to keycard/occupied doors!
+    let readerLedMat: THREE.MeshBasicMaterial | undefined;
+    if (d.readerSide !== undefined) {
+      const rGroup = new THREE.Group();
+      if (d.axis === 'x') {
+        rGroup.position.set(d.coord + d.readerSide * 0.13, baseY + 1.24, d.max + 0.16);
+        rGroup.rotation.y = d.readerSide > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+      } else {
+        rGroup.position.set(d.max + 0.16, baseY + 1.24, d.coord + d.readerSide * 0.13);
+        rGroup.rotation.y = d.readerSide > 0 ? 0 : Math.PI;
+      }
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.22, 0.045), readerBodyMat);
+      readerLedMat = new THREE.MeshBasicMaterial({ color: 0xff3b5c });
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.026, 0.02), readerLedMat);
+      led.position.set(0, 0.055, 0.02);
+      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.08, 0.015), doorBrassMat);
+      slot.position.set(0, -0.025, 0.02);
+      rGroup.add(box, led, slot);
+      group.add(rGroup);
+    }
+
+    doors.push({ def: d, pivotA, pivotB, openProgress: 0, readerLedMat });
+  }
+
   // 4. Illuminated Front Exit Double Doors + Glowing Green Exit Threshold Ring (Floor 0)
   const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ, 0);
   const exitWallZ = exitRoom.maxZ;
@@ -2729,20 +3214,40 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     addAreaRug(group, -18.5, 0.8, 4.8, 4.4, 0xdccbb4, 0x9e7d4b, f1Y); // Suite 201 bedroom rug
     addAreaRug(group, 18.5, 0.8, 4.8, 4.4, 0x2a5458, 0xd9a84e, f1Y); // Suite 202 bedroom rug
 
-    // Elevator Floor 2 Directory Plaque + Numbered Suite Plaques + Closed Doors 203 & 204!
+    // Elevator Floor 2 Directory Plaque + Numbered Suite Plaques (201–206) + Ice Machine Alcove!
     const dir2 = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.6, 0.72),
+      new THREE.PlaneGeometry(1.8, 0.76),
       new THREE.MeshBasicMaterial({
-        map: createSignTexture('FLOOR 2', '← 201 · SUITES 201–204 · 202 →', '#171110', '#ffe6b0', '#2cf3ff'),
+        map: createSignTexture('FLOOR 2', '← 201 · SUITES 201–206 · 202 →', '#171110', '#ffe6b0', '#2cf3ff'),
       }),
     );
     dir2.position.set(2.35, f1Y + 1.95, -1.88);
     group.add(dir2);
 
-    addRoomNumberPlaque(group, -11.9, f1Y + 2.0, -0.35, Math.PI * 0.5, '201', 'OCEAN KING');
-    addRoomNumberPlaque(group, 11.9, f1Y + 2.0, -0.35, -Math.PI * 0.5, '202', 'DECO DELUXE');
-    addClosedHotelDoor(group, -6.2, f1Y, 4.92, Math.PI, '203');
-    addClosedHotelDoor(group, 6.2, f1Y, 4.92, Math.PI, '204');
+    addRoomNumberPlaque(group, -11.9, f1Y + 1.95, 0.15, Math.PI * 0.5, '201', 'KEYCARD SUITE');
+    addRoomNumberPlaque(group, 11.9, f1Y + 1.95, 0.15, -Math.PI * 0.5, '202', 'OCCUPIED');
+    addClosedHotelDoor(group, -8.2, f1Y, 4.92, Math.PI, '203');
+    addClosedHotelDoor(group, -3.2, f1Y, 4.92, Math.PI, '204');
+    addClosedHotelDoor(group, 3.2, f1Y, 4.92, Math.PI, '205');
+    addClosedHotelDoor(group, 8.2, f1Y, 4.92, Math.PI, '206');
+
+    // 2F Corridor Commercial Hotel Ice Machine & Service Sign on North-West Wall!
+    const steelIceMat = new THREE.MeshStandardMaterial({ color: 0xc8d0da, metalness: 0.88, roughness: 0.24 });
+    const iceBody = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.72, 0.68), steelIceMat);
+    iceBody.position.set(-9.6, f1Y + 0.86, -1.62);
+    const iceChute = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.38, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x151922, roughness: 0.4 }),
+    );
+    iceChute.position.set(-9.6, f1Y + 1.04, -1.27);
+    const iceSign = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.84, 0.28),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('ICE', 'COMPLIMENTARY · 2F', '#141a24', '#9ceeff', '#2cf3ff'),
+      }),
+    );
+    iceSign.position.set(-9.6, f1Y + 1.54, -1.26);
+    group.add(iceBody, iceChute, iceSign);
 
     // Framed coastal hotel art along 2F Corridor North Wall
     for (const [ax, seed] of [
@@ -3092,6 +3597,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     pbrBindings,
     fountainEffects,
     npcs,
+    doors,
     danceFloorMat,
     lasers,
     monolithMats,
@@ -3134,7 +3640,7 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
       for (const venue of venues.values()) {
         for (let i = 0; i < venue.npcs.length; i++) {
           const handle = venue.npcs[i];
-          const cloned = clonePedestrian(handle.def.variantIndex);
+          const cloned = clonePedestrian(handle.def.variantIndex, handle.def.uniform);
           if (!cloned) continue;
           cloned.scene.traverse((obj) => {
             if (obj instanceof THREE.Mesh) {
@@ -3220,6 +3726,8 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
       playerX: number,
       playerZ: number,
       playerY = INTERIOR_ORIGIN_Y,
+      openDoorIds?: ReadonlySet<string>,
+      ownedKeycards?: ReadonlySet<string>,
     ) {
       if (activeId === null) {
         for (const sf of storefronts) {
@@ -3236,6 +3744,23 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
       venue.exitRing.scale.set(exitPulse, exitPulse, 1);
       for (const eRing of venue.elevatorRings) {
         eRing.scale.set(exitPulse, exitPulse, 1);
+      }
+
+      // Smoothly swing real 3D hinged doors open/closed & update electronic keycard reader LEDs!
+      for (const dh of venue.doors) {
+        const wantOpen = openDoorIds?.has(dh.def.id) ? 1 : 0;
+        dh.openProgress = lerp(dh.openProgress, wantOpen, clamp(dt * 7.5, 0, 1));
+        const angle = dh.openProgress * Math.PI * 0.52 * dh.def.swingDir;
+        dh.pivotA.rotation.y = angle;
+        if (dh.pivotB) {
+          dh.pivotB.rotation.y = -angle;
+        }
+        if (dh.readerLedMat) {
+          const unlocked =
+            !dh.def.occupied &&
+            (!dh.def.requiredKeycard || Boolean(ownedKeycards?.has(dh.def.requiredKeycard)));
+          dh.readerLedMat.color.setHex(unlocked ? 0x46f7b4 : 0xff3b5c);
+        }
       }
 
       // Animate Club Neon pulsing LED floor & sweeping lasers
@@ -3265,17 +3790,34 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
         fx.update(elapsed);
       }
 
-      // Animate indoor NPCs & subtly turn them toward you when you approach on the SAME floor!
+      // Step living hotel staff patrols (bellhops, maids, room service) & drive real mocap Walk/Idle!
       const playerFloor = getFloorFromPlayerY(playerY);
+      const prevCoords = venue.npcs.map((h) => ({ x: h.def.x, z: h.def.z }));
+      stepInteriorPatrols(venue.def, dt, playerX, playerZ, playerFloor);
+
       for (let i = 0; i < venue.npcs.length; i++) {
         const handle = venue.npcs[i];
+        const npcFloor = handle.def.floor ?? 0;
+        const moved = Math.hypot(handle.def.x - prevCoords[i].x, handle.def.z - prevCoords[i].z);
+        const speedMps = dt > 0.001 ? moved / dt : 0;
+
+        handle.root.position.x = handle.def.x;
+        handle.root.position.z = handle.def.z;
+        if (!handle.def.dancing) {
+          handle.root.position.y = npcFloor * FLOOR_STRIDE_Y;
+        }
+
         if (!handle.rig) continue;
 
-        const npcFloor = handle.def.floor ?? 0;
         const dx = playerX - handle.def.x;
         const dz = playerZ - handle.def.z;
         const d = Math.hypot(dx, dz);
-        const targetYaw = npcFloor === playerFloor && d < 4.5 ? yawFromDir(dx, dz) : handle.def.yaw;
+        const targetYaw =
+          speedMps > 0.2
+            ? handle.def.yaw
+            : npcFloor === playerFloor && d < 4.2
+              ? yawFromDir(dx, dz)
+              : handle.def.yaw;
         const curYaw = -handle.root.rotation.y;
         const nextYaw = lerpAngle(curYaw, targetYaw, clamp(dt * 5.0, 0, 1));
         handle.root.rotation.y = -nextYaw;
@@ -3285,7 +3827,7 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
           handle.root.rotation.z = Math.sin(elapsed * 2.7 + i * 0.9) * 0.055;
           handle.rig.update(dt, 0.1, false, true, elapsed + i);
         } else {
-          handle.rig.update(dt, 0, false, true, elapsed + i);
+          handle.rig.update(dt, speedMps > 0.15 ? 2.4 : 0, false, true, elapsed + i);
         }
       }
     },
