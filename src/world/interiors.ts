@@ -3046,24 +3046,31 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     floor.position.set(cx, baseY - 0.06, cz);
     group.add(floor);
 
-    // Exterior foundation plinth / inter-floor structural slab & upper roof slab
-    // Staggered by 2.5mm per room & kept strictly below upper-story finished floors so slabs NEVER Z-fight or flash!
-    const basePlinth = new THREE.Mesh(
-      new THREE.BoxGeometry(rw + 0.56, 0.14, rd + 0.56),
-      extStoneMat,
-    );
-    basePlinth.position.set(cx, baseY - 0.13 - slabStagger, cz);
-    const roofCap = new THREE.Mesh(
-      new THREE.BoxGeometry(rw + 0.62, 0.2, rd + 0.62),
-      extStoneMat,
-    );
-    const isTopStory = rFloor >= maxVenueFloor;
-    roofCap.position.set(
-      cx,
-      isTopStory ? baseY + storyExtH + 0.1 + slabStagger : baseY + storyExtH - 0.19 - slabStagger,
-      cz,
-    );
-    group.add(basePlinth, roofCap);
+    // Exterior foundation plinth (Floor 0), clean inter-floor exterior belt course (upper floors), & top roof cap
+    // Staggered by 3mm per room & kept strictly outside interior floor/ceiling planes so slabs NEVER Z-fight or flash!
+    if (rFloor === 0) {
+      const basePlinth = new THREE.Mesh(
+        new THREE.BoxGeometry(rw + 0.56, 0.14, rd + 0.56),
+        extStoneMat,
+      );
+      basePlinth.position.set(cx, baseY - 0.14 - slabStagger, cz);
+      group.add(basePlinth);
+    } else {
+      const beltSlab = new THREE.Mesh(
+        new THREE.BoxGeometry(rw + 0.58, 0.14, rd + 0.58),
+        extStoneMat,
+      );
+      beltSlab.position.set(cx, baseY - 0.18 - slabStagger, cz);
+      group.add(beltSlab);
+    }
+    if (rFloor >= maxVenueFloor) {
+      const roofCap = new THREE.Mesh(
+        new THREE.BoxGeometry(rw + 0.62, 0.2, rd + 0.62),
+        extStoneMat,
+      );
+      roofCap.position.set(cx, baseY + storyExtH + 0.12 + slabStagger, cz);
+      group.add(roofCap);
+    }
 
     const ceil = new THREE.Mesh(
       new THREE.PlaneGeometry(rw, rd),
@@ -3202,7 +3209,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const wallMat = new THREE.MeshStandardMaterial({
       color: seg.wallColor,
       roughness: 0.82,
-      side: seg.isExterior ? THREE.FrontSide : THREE.DoubleSide,
+      side: THREE.FrontSide,
     });
     pbrBindings.push({
       mat: wallMat,
@@ -3221,15 +3228,29 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       segGroup.rotation.y = seg.outwardSign > 0 ? Math.PI : 0;
     }
 
-    // Main PBR textured interior wall plane (faces local +Z inward into room)
+    // Offset shared interior partition walls +1.5cm inward into their own room (3cm solid partition thickness!)
+    // so adjacent rooms' opposite wall faces NEVER occupy the same plane or Z-fight!
+    const inZ = seg.isExterior ? 0 : 0.015;
+    const axisYStagger = seg.axis === 'x' ? 0.002 : 0;
+    const axisZStagger = seg.axis === 'x' ? -0.002 : 0;
+
+    // Main PBR textured interior wall plane (strictly FrontSide facing local +Z inward into room)
     const wallMesh = new THREE.Mesh(new THREE.PlaneGeometry(len, seg.height), wallMat);
-    wallMesh.position.set(0, seg.height * 0.5, 0);
+    wallMesh.position.set(0, seg.height * 0.5, inZ);
     segGroup.add(wallMesh);
 
     // Exterior architectural building facade skin (at z = -0.26, facing local -Z outward to the street!)
     if (seg.isExterior) {
       const extCfg = getRoomExteriorConfig(room);
-      const extLen = len + 0.26;
+      // Extend Z-axis exterior cladding by 0.26m ONLY at actual room outer corners (never at window/door cuts)
+      // so 90-degree exterior corners close seamlessly with ZERO slits and ZERO coplanar overlap!
+      const extStart = seg.axis === 'z' && Math.abs(seg.start - room.minX) < 0.05 ? 0.26 : 0;
+      const extEnd = seg.axis === 'z' && Math.abs(seg.end - room.maxX) < 0.05 ? 0.26 : 0;
+      const extLen = len + extStart + extEnd;
+      // Local +X runs along +worldX when outwardSign < 0 (rotY=0) and along -worldX when outwardSign > 0 (rotY=PI)
+      const extShiftX =
+        seg.axis === 'z' ? (seg.outwardSign > 0 ? (extStart - extEnd) * 0.5 : (extEnd - extStart) * 0.5) : 0;
+      const extZ = EXT_Z + (seg.axis === 'x' ? -0.004 : 0);
       const extMat = new THREE.MeshStandardMaterial({
         color: extCfg.tint,
         roughness: 0.72,
@@ -3244,21 +3265,21 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       });
       const extFace = new THREE.Mesh(new THREE.PlaneGeometry(extLen, storyExtH), extMat);
       extFace.rotation.y = Math.PI;
-      extFace.position.set(0, storyExtH * 0.5, EXT_Z);
+      extFace.position.set(extShiftX, storyExtH * 0.5, extZ);
       segGroup.add(extFace);
 
       const trimMat = new THREE.MeshStandardMaterial({ color: extCfg.trimHex, roughness: 0.45, metalness: 0.25 });
       const plinthMat = new THREE.MeshStandardMaterial({ color: extCfg.plinthHex, roughness: 0.35, metalness: 0.45 });
 
-      const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(extLen + 0.04, 0.22, 0.08), trimMat);
-      topFrieze.position.set(0, storyExtH - 0.14, EXT_Z - 0.04);
-      const botDado = new THREE.Mesh(new THREE.BoxGeometry(extLen + 0.04, 0.32, 0.07), plinthMat);
-      botDado.position.set(0, 0.18, EXT_Z - 0.035);
+      const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(extLen, 0.22, 0.08), trimMat);
+      topFrieze.position.set(extShiftX, storyExtH - 0.14 + axisYStagger, extZ - 0.04);
+      const botDado = new THREE.Mesh(new THREE.BoxGeometry(extLen, 0.32, 0.07), plinthMat);
+      botDado.position.set(extShiftX, 0.18 + axisYStagger, extZ - 0.035);
       segGroup.add(topFrieze, botDado);
 
       if (def.id === 'hotel-solaire' && len >= 2.8) {
         const pilaster = new THREE.Mesh(new THREE.BoxGeometry(0.32, storyExtH, 0.12), trimMat);
-        pilaster.position.set(0, storyExtH * 0.5, EXT_Z - 0.06);
+        pilaster.position.set(0, storyExtH * 0.5, extZ - 0.06);
         segGroup.add(pilaster);
       } else if (def.id === 'club-neon' && len >= 3.2) {
         const neonCol = extWallIdx % 2 === 0 ? 0xff2e93 : 0x2cf3ff;
@@ -3266,7 +3287,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
           new THREE.BoxGeometry(0.1, storyExtH - 0.8, 0.1),
           new THREE.MeshBasicMaterial({ color: neonCol }),
         );
-        tube.position.set(0, storyExtH * 0.5, EXT_Z - 0.06);
+        tube.position.set(0, storyExtH * 0.5, extZ - 0.06);
         segGroup.add(tube);
       } else if (def.id === 'wynwood-gallery' && len >= 5.2) {
         const muralW = Math.min(6.4, len - 1.2);
@@ -3275,44 +3296,44 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
           new THREE.BoxGeometry(muralW + 0.24, muralH + 0.24, 0.06),
           plinthMat,
         );
-        muralFrame.position.set(0, storyExtH * 0.52, EXT_Z - 0.03);
+        muralFrame.position.set(0, storyExtH * 0.52, extZ - 0.03);
         const muralArt = new THREE.Mesh(
           new THREE.PlaneGeometry(muralW, muralH),
           new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(extWallIdx) }),
         );
         muralArt.rotation.y = Math.PI;
-        muralArt.position.set(0, storyExtH * 0.52, EXT_Z - 0.07);
+        muralArt.position.set(0, storyExtH * 0.52, extZ - 0.07);
         segGroup.add(muralFrame, muralArt);
       }
       extWallIdx++;
     }
 
-    // Inset X-axis trim ends so 90-degree room corners butt cleanly without overlapping Z-fighting!
-    const trimLen = Math.max(0.05, len - (seg.axis === 'x' ? 0.26 : 0.02));
+    // Inset trim ends cleanly + stagger X-axis vs Z-axis trim by 2mm so 90-degree room corners NEVER Z-fight!
+    const trimLen = Math.max(0.05, len - (seg.axis === 'x' ? 0.26 : 0.04));
 
-    // Baseboard trim (proud of wall & wainscoting, clear of floor plane)
-    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.18, 0.05), baseboardMat);
-    baseboard.position.set(0, 0.1, 0.05);
+    // Baseboard trim (y: 0.01..0.19, proud of wall & clear of floor plane and wainscoting)
+    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.175, 0.046), baseboardMat);
+    baseboard.position.set(0, 0.098 + axisYStagger, inZ + 0.048 + axisZStagger);
     segGroup.add(baseboard);
 
-    // Architectural Wainscoting + Chair Rail (on Hotel, Café, VIP Bar walls!)
+    // Architectural Wainscoting (y: 0.20..1.06) + Chair Rail (y: 1.07..1.15) with clean vertical separation!
     if (room.wainscotColor !== undefined) {
       const wainMat = new THREE.MeshStandardMaterial({
         color: room.wainscotColor,
         roughness: 0.55,
         metalness: 0.1,
       });
-      const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.88, 0.03), wainMat);
-      wainPanel.position.set(0, 0.63, 0.035);
+      const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.85, 0.028), wainMat);
+      wainPanel.position.set(0, 0.625 + axisYStagger, inZ + 0.032 + axisZStagger);
       const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(trimLen, 0.08, 0.07),
+        new THREE.BoxGeometry(trimLen, 0.075, 0.066),
         new THREE.MeshStandardMaterial({
           color: room.crownColor ?? room.wainscotColor,
           roughness: 0.32,
           metalness: 0.45,
         }),
       );
-      rail.position.set(0, 1.11, 0.055);
+      rail.position.set(0, 1.11 + axisYStagger, inZ + 0.054 + axisZStagger);
       segGroup.add(wainPanel, rail);
     }
 
@@ -3323,8 +3344,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         roughness: 0.35,
         metalness: 0.3,
       });
-      const crown = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.14, 0.1), crownMat);
-      crown.position.set(0, seg.height - 0.1, 0.08);
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.135, 0.095), crownMat);
+      crown.position.set(0, seg.height - 0.105 - axisYStagger, inZ + 0.078 + axisZStagger);
       segGroup.add(crown);
     }
 
@@ -3335,9 +3356,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       for (let si = 0; si < sconceCount; si++) {
         const sx = -len * 0.5 + ((si + 0.5) / sconceCount) * len;
         const backplate = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.36, 0.06), sconceMetalMat);
-        backplate.position.set(sx, 2.35, 0.04);
+        backplate.position.set(sx, 2.35, inZ + 0.042);
         const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.24, 10), glowMat);
-        shade.position.set(sx, 2.42, 0.13);
+        shade.position.set(sx, 2.42, inZ + 0.13);
         segGroup.add(backplate, shade);
       }
     }
@@ -3390,6 +3411,10 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     }
 
     // Lower wall apron below the window sill (0 .. win.sillY): interior face at z=0, exterior face at z=-0.26!
+    const winTrimLen = Math.max(0.05, span - 0.06);
+    const winAxisY = win.axis === 'x' ? 0.002 : 0;
+    const winAxisZ = win.axis === 'x' ? -0.002 : 0;
+    const winExtZ = EXT_Z + (win.axis === 'x' ? -0.004 : 0);
     if (win.sillY > 0.05) {
       const lowMat = new THREE.MeshStandardMaterial({
         color: ownerRoom.wallColor,
@@ -3405,8 +3430,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       });
       const lowWall = new THREE.Mesh(new THREE.PlaneGeometry(span, win.sillY), lowMat);
       lowWall.position.set(0, win.sillY * 0.5, 0);
-      const base = new THREE.Mesh(new THREE.BoxGeometry(span, 0.18, 0.05), baseboardMat);
-      base.position.set(0, 0.1, 0.05);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, 0.175, 0.046), baseboardMat);
+      base.position.set(0, 0.098 + winAxisY, 0.048 + winAxisZ);
 
       const extLowMat = new THREE.MeshStandardMaterial({
         color: extCfg.tint,
@@ -3422,20 +3447,20 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       });
       const extLowWall = new THREE.Mesh(new THREE.PlaneGeometry(span, win.sillY), extLowMat);
       extLowWall.rotation.y = Math.PI;
-      extLowWall.position.set(0, win.sillY * 0.5, EXT_Z);
-      const botDado = new THREE.Mesh(new THREE.BoxGeometry(span, Math.min(0.32, win.sillY), 0.07), extPlinthMat);
-      botDado.position.set(0, Math.min(0.18, win.sillY * 0.5), EXT_Z - 0.035);
+      extLowWall.position.set(0, win.sillY * 0.5, winExtZ);
+      const botDado = new THREE.Mesh(new THREE.BoxGeometry(span - 0.02, Math.min(0.32, win.sillY), 0.07), extPlinthMat);
+      botDado.position.set(0, Math.min(0.18, win.sillY * 0.5) + winAxisY, winExtZ - 0.035);
       winSlotGroup.add(lowWall, base, extLowWall, botDado);
 
       if (ownerRoom.wainscotColor !== undefined && win.sillY >= 0.45) {
-        const wH = Math.min(0.88, win.sillY - 0.18);
+        const wH = Math.min(0.85, win.sillY - 0.21);
         const wainMat = new THREE.MeshStandardMaterial({
           color: ownerRoom.wainscotColor,
           roughness: 0.55,
           metalness: 0.1,
         });
-        const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(span, wH, 0.03), wainMat);
-        wainPanel.position.set(0, 0.19 + wH * 0.5, 0.035);
+        const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, wH, 0.028), wainMat);
+        wainPanel.position.set(0, 0.2 + wH * 0.5 + winAxisY, 0.032 + winAxisZ);
         winSlotGroup.add(wainPanel);
       }
     }
@@ -3465,8 +3490,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
           roughness: 0.35,
           metalness: 0.3,
         });
-        const crown = new THREE.Mesh(new THREE.BoxGeometry(span, 0.14, 0.1), crownMat);
-        crown.position.set(0, ownerRoom.height - 0.1, 0.08);
+        const crown = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, 0.135, 0.095), crownMat);
+        crown.position.set(0, ownerRoom.height - 0.105 - winAxisY, 0.078 + winAxisZ);
         winSlotGroup.add(crown);
       }
     }
@@ -3487,9 +3512,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       });
       const extTopWall = new THREE.Mesh(new THREE.PlaneGeometry(span, extTopH), extTopMat);
       extTopWall.rotation.y = Math.PI;
-      extTopWall.position.set(0, win.topY + extTopH * 0.5, EXT_Z);
-      const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(span, 0.22, 0.08), extTrimMat);
-      topFrieze.position.set(0, storyExtH - 0.14, EXT_Z - 0.04);
+      extTopWall.position.set(0, win.topY + extTopH * 0.5, winExtZ);
+      const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(span - 0.02, 0.22, 0.08), extTrimMat);
+      topFrieze.position.set(0, storyExtH - 0.14 + winAxisY, winExtZ - 0.04);
       winSlotGroup.add(extTopWall, topFrieze);
     }
 
@@ -3647,20 +3672,21 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       frameMat,
     );
 
+    const jambH = dw.height - 0.012;
     if (dw.axis === 'x') {
       header.position.set(dw.coord, baseY + dw.height + headerH * 0.5, mid);
       lintel.position.set(dw.coord, baseY + dw.height, mid);
       for (const edgeZ of [dw.min, dw.max]) {
-        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.42, dw.height, 0.22), frameMat);
-        jamb.position.set(dw.coord, baseY + dw.height * 0.5, edgeZ);
+        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.26, jambH, 0.18), frameMat);
+        jamb.position.set(dw.coord, baseY + 0.008 + jambH * 0.5, edgeZ);
         group.add(jamb);
       }
     } else {
       header.position.set(mid, baseY + dw.height + headerH * 0.5, dw.coord);
       lintel.position.set(mid, baseY + dw.height, dw.coord);
       for (const edgeX of [dw.min, dw.max]) {
-        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.22, dw.height, 0.42), frameMat);
-        jamb.position.set(edgeX, baseY + dw.height * 0.5, dw.coord);
+        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.18, jambH, 0.26), frameMat);
+        jamb.position.set(edgeX, baseY + 0.008 + jambH * 0.5, dw.coord);
         group.add(jamb);
       }
     }
@@ -3869,7 +3895,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     group.add(exitDoorMesh);
   }
   for (const dx of [-1.6, 0, 1.6]) {
-    const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.84, 0.36), doorFrameMat);
+    const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.82, 0.36), doorFrameMat);
     stile.position.set(def.exitX + dx, 1.42, exitWallZ + 0.13);
     group.add(stile);
   }
@@ -3977,13 +4003,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     // ── EXTERIOR ART DECO GROUNDING PODIUMS, COLONNADE PILLARS & WEDDING-CAKE PENTHOUSE CROWN ──
     const extDecoStucco = new THREE.MeshStandardMaterial({ color: 0xfbf0e4, roughness: 0.7 });
     const extCoralTrim = new THREE.MeshStandardMaterial({ color: 0xf59eb2, roughness: 0.5 });
-    // Ground-floor podium under Suite 201 wing (x: -22..-10, z: -4..4.8) & Bath 201/202 wings (z: -10..-4)
-    const podSouth = new THREE.Mesh(new THREE.BoxGeometry(12.26, REAL_STORY_HEIGHT, 9.06), extDecoStucco);
-    podSouth.position.set(-16.13, REAL_STORY_HEIGHT * 0.5, 0.4);
-    const podBathS = new THREE.Mesh(new THREE.BoxGeometry(7.26, REAL_STORY_HEIGHT, 6.26), extDecoStucco);
-    podBathS.position.set(-18.63, REAL_STORY_HEIGHT * 0.5, -7.13);
-    const podBathN = new THREE.Mesh(new THREE.BoxGeometry(7.26, REAL_STORY_HEIGHT, 6.26), extDecoStucco);
-    podBathN.position.set(18.63, REAL_STORY_HEIGHT * 0.5, -7.13);
+    // Ground-floor podiums under Suite 201 wing & Bath 201/202 wings — inset cleanly below Floor 2 (4.80m)
+    // and pulled back 0.30m from 1F Lobby/Lounge interior walls so ZERO faces are coplanar with any room wall or floor!
+    const podH = REAL_STORY_HEIGHT - 0.26;
+    const podSouth = new THREE.Mesh(new THREE.BoxGeometry(11.94, podH, 8.72), extDecoStucco);
+    podSouth.position.set(-16.27, podH * 0.5, 0.4);
+    const podBathS = new THREE.Mesh(new THREE.BoxGeometry(7.2, podH, 5.9), extDecoStucco);
+    podBathS.position.set(-18.64, podH * 0.5, -7.29);
+    const podBathN = new THREE.Mesh(new THREE.BoxGeometry(7.2, podH, 5.9), extDecoStucco);
+    podBathN.position.set(18.64, podH * 0.5, -7.29);
     group.add(podSouth, podBathS, podBathN);
 
     // Fluted Art Deco colonnade pillars supporting 3F Penthouse front & rear terraces
@@ -4072,17 +4100,17 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(shelf);
     }
 
-    // Art Deco Marble Columns in Grand Lobby
+    // Art Deco Marble Columns in Grand Lobby (cleanly clear of floor & ceiling planes)
     for (const [px, pz] of [
       [-9.2, -3.2],
       [9.2, -3.2],
       [-9.2, 11.2],
       [9.2, 11.2],
     ]) {
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 4.65, 14), marbleMat);
-      col.position.set(px, 2.325, pz);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.36, 0.28, 14), goldMat);
-      cap.position.set(px, 4.51, pz);
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 4.4, 14), marbleMat);
+      col.position.set(px, 2.21, pz);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.36, 0.2, 14), goldMat);
+      cap.position.set(px, 4.5, pz);
       group.add(col, cap);
     }
 
