@@ -893,7 +893,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   for (let i = 0; i < mlPos.count; i++) {
     const wx = mlPos.getX(i) + mlCX;
     const wz = mlPos.getZ(i) + mlCZ;
-    mlPos.setY(i, getTerrainHeight(wx, wz) - 0.03);
+    mlPos.setY(i, getTerrainHeight(wx, wz) - 0.09);
   }
   mainlandGeo.computeVertexNormals();
   const mainland = new THREE.Mesh(mainlandGeo, mainlandMat);
@@ -1161,8 +1161,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roadMaterials.push({ mat: roadMat, repeatY: rep });
 
     const isHoriz = Math.abs(dx) > Math.abs(dz);
-    const segs = isKeySol ? 2 : Math.max(16, Math.round(len / 8));
-    const geo = new THREE.PlaneGeometry(road.width, len, 2, segs);
+    const segs = isKeySol ? 2 : Math.max(24, Math.round(len / 4));
+    const widthSegs = isKeySol ? 2 : 4;
+    const geo = new THREE.PlaneGeometry(road.width, len, widthSegs, segs);
     geo.rotateX(-Math.PI * 0.5);
     if (isHoriz) geo.rotateY(Math.PI * 0.5);
     drapeRibbonOnTerrain(geo, xm, zm, isKeySol ? 0.03 : 0.032, isKeySol);
@@ -1196,7 +1197,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
   root.add(roadMarkingsGroup);
 
-  // Terrain-aligned instanced intersection pads & crosswalk stripes (2 draw calls across all 81 intersections!)
+  // Terrain-draped 4x4 subdivided intersection pads (1 merged draw call — hugs curved hills with zero flat ledges!)
+  // & slope-aligned instanced crosswalk stripes (1 draw call across all 81 intersections!)
   const stripeMat = new THREE.MeshStandardMaterial({
     color: 0xe6ecf5,
     roughness: 0.65,
@@ -1205,10 +1207,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     polygonOffsetUnits: -3,
   });
   const totalIntersections = blueprint.avenueXs.length * blueprint.streetZs.length;
-  const padGeo = new THREE.PlaneGeometry(blueprint.roadWidth + 0.6, blueprint.roadWidth + 0.6);
-  padGeo.rotateX(-Math.PI * 0.5);
-  const padInst = new THREE.InstancedMesh(padGeo, intersectionMat, totalIntersections);
-  padInst.receiveShadow = true;
+  const intersectionPadGeos: THREE.BufferGeometry[] = [];
 
   const barGeo = new THREE.PlaneGeometry(1.05, 2.8);
   barGeo.rotateX(-Math.PI * 0.5);
@@ -1231,21 +1230,21 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     return slopeQuat;
   };
 
-  let padIdx = 0;
   let barIdx = 0;
   for (const ax of blueprint.avenueXs) {
     for (const sz of blueprint.streetZs) {
-      tmpObj.position.set(ax, getTerrainHeight(ax, sz) + 0.045, sz);
-      tmpObj.quaternion.copy(sampleSlopeQuat(ax, sz, 0));
-      tmpObj.scale.set(1, 1, 1);
-      tmpObj.updateMatrix();
-      padInst.setMatrixAt(padIdx++, tmpObj.matrix);
+      const pGeo = new THREE.PlaneGeometry(blueprint.roadWidth + 0.6, blueprint.roadWidth + 0.6, 4, 4);
+      pGeo.rotateX(-Math.PI * 0.5);
+      drapeRibbonOnTerrain(pGeo, ax, sz, 0.038, false);
+      pGeo.translate(ax, 0, sz);
+      intersectionPadGeos.push(pGeo);
 
       for (let s = -5; s <= 5; s += 2.5) {
         const bx1 = ax + s;
         const bz1 = sz - 9.4;
         tmpObj.position.set(bx1, getTerrainHeight(bx1, bz1) + 0.056, bz1);
         tmpObj.quaternion.copy(sampleSlopeQuat(bx1, bz1, 0));
+        tmpObj.scale.set(1, 1, 1);
         tmpObj.updateMatrix();
         barInst.setMatrixAt(barIdx++, tmpObj.matrix);
 
@@ -1253,14 +1252,15 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
         const bz2 = sz + s;
         tmpObj.position.set(bx2, getTerrainHeight(bx2, bz2) + 0.056, bz2);
         tmpObj.quaternion.copy(sampleSlopeQuat(bx2, bz2, Math.PI * 0.5));
+        tmpObj.scale.set(1, 1, 1);
         tmpObj.updateMatrix();
         barInst.setMatrixAt(barIdx++, tmpObj.matrix);
       }
     }
   }
-  padInst.instanceMatrix.needsUpdate = true;
+  addMergedGroup(root, intersectionPadGeos, intersectionMat, false, true);
   barInst.instanceMatrix.needsUpdate = true;
-  root.add(padInst, barInst);
+  root.add(barInst);
 
   // 7. Key Sol Causeway Arch Bridge
   root.add(buildArchedCauseway(asphaltPbr, neonMaterials));

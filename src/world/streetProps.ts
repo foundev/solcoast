@@ -175,7 +175,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     d: number,
     style: SidewalkDistrictStyle,
   ): void => {
-    const segs = 8;
+    const segs = 12;
 
     // Top paved sidewalk surface conforming vertex-by-vertex to rolling terrain (pre-baked into world space)
     const topGeo = new THREE.PlaneGeometry(w, d, segs, segs);

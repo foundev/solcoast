@@ -20,6 +20,7 @@ import { createTrafficCars, findNearestTrafficCar, relocateTrafficCarAway, stepT
 import {
   DEFAULT_VEHICLES,
   computeGear,
+  computeGroundSlopeTilt,
   createVehicleConfigForModel,
   createVehicleState,
   getModelDisplayName,
@@ -29,7 +30,7 @@ import {
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
 import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS, INTERIOR_TEXTURE_KEYS } from '../src/world/assets';
-import { createCityBlueprint } from '../src/world/cityData';
+import { createCityBlueprint, getGroundHeight } from '../src/world/cityData';
 import {
   FLOOR_STRIDE_Y,
   INTERIOR_ORIGIN_Y,
@@ -1149,6 +1150,33 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       );
       expect(v.config.customColorHex).toBe(pc.paintHex);
       expect(Number.isFinite(v.y)).toBe(true);
+    }
+  });
+
+  it('aligns all 4 vehicle wheels flush with hillside road inclines at every heading (never inverted)', () => {
+    // Pick a steep hillside avenue point in Sunset Hills (-380, -340) where terrain rises to the west (-X)
+    const sx = -380;
+    const sz = -340;
+    const centerY = getGroundHeight(sx, sz);
+
+    for (const yaw of [0, Math.PI * 0.5, Math.PI, -Math.PI * 0.5]) {
+      const { pitch, roll } = computeGroundSlopeTilt(sx, sz, yaw);
+      const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -yaw);
+      const qTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, 0, roll, 'YXZ'));
+      const qFull = qYaw.clone().multiply(qTilt);
+
+      // Verify all 4 tire contact points (FL, FR, RL, RR) match the actual terrain height within 3cm!
+      for (const [lx, lz] of [
+        [-0.9, -1.8],
+        [0.9, -1.8],
+        [-0.9, 1.8],
+        [0.9, 1.8],
+      ]) {
+        const localPt = new THREE.Vector3(lx, 0, lz).applyQuaternion(qFull);
+        const wheelWorldY = centerY + localPt.y;
+        const groundY = getGroundHeight(sx + localPt.x, sz + localPt.z);
+        expect(Math.abs(wheelWorldY - groundY)).toBeLessThan(0.035);
+      }
     }
   });
 });

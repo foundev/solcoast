@@ -344,17 +344,17 @@ export function stepTraffic(
           getGroundHeight(car.x - tFx * 1.8, car.z - tFz * 1.8),
         3.6,
       ),
-      -0.2,
-      0.2,
+      -0.24,
+      0.24,
     );
     const tRoll = clamp(
       Math.atan2(
-        getGroundHeight(car.x - tRx * 0.9, car.z - tRz * 0.9) -
-          getGroundHeight(car.x + tRx * 0.9, car.z + tRz * 0.9),
+        getGroundHeight(car.x + tRx * 0.9, car.z + tRz * 0.9) -
+          getGroundHeight(car.x - tRx * 0.9, car.z - tRz * 0.9),
         1.8,
       ),
-      -0.14,
-      0.14,
+      -0.2,
+      0.2,
     );
     car.pitchTilt = lerp(car.pitchTilt, tPitch, clamp(safeDt * 8, 0, 1));
     car.rollTilt = lerp(car.rollTilt, tRoll, clamp(safeDt * 8, 0, 1));
@@ -525,7 +525,8 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     headGlows.push(hGlow);
 
     g.position.set(c.x, c.y, c.z);
-    g.rotation.y = -c.yaw;
+    g.rotation.order = 'YXZ';
+    g.rotation.set(c.pitchTilt, -c.yaw, c.rollTilt);
     root.add(g);
     groups.push(g);
   }

@@ -267,6 +267,26 @@ export interface VehicleState {
   config: VehicleConfig;
 }
 
+export function computeGroundSlopeTilt(
+  x: number,
+  z: number,
+  yaw: number,
+): { pitch: number; roll: number } {
+  const fwd = forwardFromYaw(yaw);
+  const right = rightFromYaw(yaw);
+  const yFwd = getGroundHeight(x + fwd.x * 1.8, z + fwd.z * 1.8);
+  const yBack = getGroundHeight(x - fwd.x * 1.8, z - fwd.z * 1.8);
+  const yRight = getGroundHeight(x + right.x * 0.9, z + right.z * 0.9);
+  const yLeft = getGroundHeight(x - right.x * 0.9, z - right.z * 0.9);
+  // Right-hand rule in local car frame (-Z forward, +X right, +Y up):
+  //  - +pitch (rotation.x > 0) lifts nose (-Z -> +Y): positive when uphill (yFwd > yBack)
+  //  - +roll  (rotation.z > 0) lifts right side (+X -> +Y): positive when right is higher (yRight > yLeft)
+  return {
+    pitch: clamp(Math.atan2(yFwd - yBack, 3.6), -0.26, 0.26),
+    roll: clamp(Math.atan2(yRight - yLeft, 1.8), -0.22, 0.22),
+  };
+}
+
 export function createVehicleState(cfg: VehicleConfig): VehicleState {
   const mass =
     cfg.modelKind === 'suv'
@@ -276,6 +296,7 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
         : cfg.modelKind === 'ferrari'
           ? 1450
           : 1540;
+  const initSlope = computeGroundSlopeTilt(cfg.spawnX, cfg.spawnZ, cfg.spawnYaw);
   return {
     id: cfg.id,
     name: cfg.name,
@@ -292,9 +313,9 @@ export function createVehicleState(cfg: VehicleConfig): VehicleState {
     wheelSpin: 0,
     suspOffset: 0,
     suspVel: 0,
-    pitchTilt: 0,
+    pitchTilt: initSlope.pitch,
     pitchVel: 0,
-    rollTilt: 0,
+    rollTilt: initSlope.roll,
     rollVel: 0,
     grounded: true,
     speed: 0,
@@ -532,8 +553,13 @@ export function stepVehiclePhysics(
       }
 
       const curbDelta = groundY - v.y;
-      v.y = lerp(v.y, groundY, clamp(safeDt * 24, 0, 1));
-      if (Math.abs(v.y - groundY) < 0.01) v.y = groundY;
+      if (Math.abs(curbDelta) < 0.08) {
+        // Track continuous rolling hill elevation immediately with zero vertical lag into or above the asphalt
+        v.y = groundY;
+      } else {
+        v.y = lerp(v.y, groundY, clamp(safeDt * 24, 0, 1));
+        if (Math.abs(v.y - groundY) < 0.01) v.y = groundY;
+      }
 
       // Curb / dune bump compresses chassis suspension spring realistically!
       if (Math.abs(curbDelta) > 0.05 && horizMoved > 0.04) {
@@ -575,35 +601,32 @@ export function stepVehiclePhysics(
   // Soft suspension cars (SUV/Taxi/Sedan) roll & squat more than stiff supercars!
   const softness = v.style === 'sedan' ? 1.45 : v.style === 'spyder' ? 1.15 : 0.95;
 
-  // Sample rolling road slope under front/rear axles & left/right track so vehicles tilt naturally over hills!
+  // Sample rolling road slope under front/rear axles & left/right track so all 4 tires rest flush on hills!
   let groundPitch = 0;
   let groundRoll = 0;
   if (v.grounded) {
-    const yFwd = getGroundHeight(v.x + curFwd.x * 1.8, v.z + curFwd.z * 1.8);
-    const yBack = getGroundHeight(v.x - curFwd.x * 1.8, v.z - curFwd.z * 1.8);
-    const yRight = getGroundHeight(v.x + curRight.x * 0.9, v.z + curRight.z * 0.9);
-    const yLeft = getGroundHeight(v.x - curRight.x * 0.9, v.z - curRight.z * 0.9);
-    groundPitch = clamp(Math.atan2(yFwd - yBack, 3.6), -0.22, 0.22);
-    groundRoll = clamp(Math.atan2(yLeft - yRight, 1.8), -0.16, 0.16);
+    const slope = computeGroundSlopeTilt(v.x, v.z, v.yaw);
+    groundPitch = slope.pitch;
+    groundRoll = slope.roll;
   }
 
   // Right-hand rule around +X with nose at -Z: +pitch lifts nose (uphill + rear squat), -pitch dips nose (downhill + brake dive)
   const targetPitch = v.grounded
-    ? clamp(groundPitch + accelInstant * 0.0034 * softness, -0.26, 0.26)
+    ? clamp(groundPitch + accelInstant * 0.0034 * softness, -0.28, 0.28)
     : clamp(v.vy * 0.024, -0.22, 0.22);
-  // Right-hand rule around +Z: turning right (+yawRate) shifts weight left (-X down, +X up -> +rollTilt)
+  // Right-hand rule around +Z: +roll lifts +X (right side) & lowers -X (left side); turning right (+yawRate) leans left (-X down -> +rollTilt)
   const lateralG = v.grounded ? v.yawRate * v.speed * 0.012 + v.lateralSpeed * 0.008 : 0;
-  const targetRoll = clamp(groundRoll + lateralG * 0.38 * softness, -0.22, 0.22);
+  const targetRoll = clamp(groundRoll + lateralG * 0.38 * softness, -0.26, 0.26);
 
   const pitchK = 54;
   const pitchDamp = 8.2;
   v.pitchVel += (pitchK * (targetPitch - v.pitchTilt) - pitchDamp * v.pitchVel) * safeDt;
-  v.pitchTilt = clamp(v.pitchTilt + v.pitchVel * safeDt, -0.28, 0.28);
+  v.pitchTilt = clamp(v.pitchTilt + v.pitchVel * safeDt, -0.3, 0.3);
 
   const rollK = 50;
   const rollDamp = 7.8;
   v.rollVel += (rollK * (targetRoll - v.rollTilt) - rollDamp * v.rollVel) * safeDt;
-  v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.22, 0.22);
+  v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.28, 0.28);
 }
 
 /**
@@ -840,7 +863,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
   );
   shadowPlane.rotation.x = -Math.PI * 0.5;
   shadowPlane.position.y = 0.045;
-  root.add(shadowPlane);
+  bodyGroup.add(shadowPlane);
 
   // 1. TRUE 3D MULTI-STATION LOFTED CURVED AUTOMOTIVE SHELL!
   const bodyMesh = new THREE.Mesh(createSculptedCarBodyGeometry(state.style), paintMaterial);
