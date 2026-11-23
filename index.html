@@ -9,7 +9,32 @@
   <body>
     <canvas id="game-canvas"></canvas>
 
-    <div id="hud">
+    <!-- Full-screen Sol Coast Loading Screen (paints immediately on frame 0 — zero black flash or fallback pop-in!) -->
+    <div id="loading-screen" class="loading-screen" role="status" aria-live="polite">
+      <div class="loading-backdrop">
+        <div class="loading-sun"></div>
+        <div class="loading-horizon"></div>
+        <div class="loading-grid"></div>
+      </div>
+      <div class="loading-card">
+        <div class="loading-kicker">PERSISTENT OPEN-WORLD MIAMI SANDBOX</div>
+        <h1 class="loading-title">SOL COAST</h1>
+        <div class="loading-bar-wrap">
+          <div class="loading-bar-track">
+            <div id="loading-bar-fill" class="loading-bar-fill"></div>
+          </div>
+          <div class="loading-meta">
+            <span id="loading-status">Initializing coastal metropolis…</span>
+            <span id="loading-pct">0%</span>
+          </div>
+        </div>
+        <div id="loading-tip" class="loading-tip">
+          Tip: Press [E] at Hotel Solaire, Club Neon, Café Habana, or Wynwood Gallery to step inside.
+        </div>
+      </div>
+    </div>
+
+    <div id="hud" class="hud-loading">
       <!-- Top Left: Location, Cash, Rank, Clock -->
       <div class="hud-panel top-left">
         <div class="brand-row">

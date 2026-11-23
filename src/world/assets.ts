@@ -765,7 +765,12 @@ function styleUniformedStaff(
  */
 export const DRACO_DECODER_PATH = '/draco/';
 
-export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<LoadedGameAssets> {
+export type AssetProgressCallback = (label?: string) => void;
+
+export async function loadGameAssets(
+  renderer: THREE.WebGLRenderer,
+  onItemLoaded?: AssetProgressCallback,
+): Promise<LoadedGameAssets> {
   const gltfLoader = new GLTFLoader();
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
@@ -777,18 +782,27 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
 
   const texLoader = new THREE.TextureLoader();
 
-  const loadGltfSafe = (url: string): Promise<GLTF | null> =>
-    new Promise((resolve) => {
-      gltfLoader.load(
-        url,
-        (gltf) => resolve(gltf),
-        undefined,
-        (err) => {
-          console.warn(`[SolCoast] Could not load GLB ${url}, using fallback.`, err);
-          resolve(null);
-        },
-      );
+  const track = <T>(p: Promise<T>, label: string): Promise<T> =>
+    p.then((val) => {
+      onItemLoaded?.(label);
+      return val;
     });
+
+  const loadGltfSafe = (url: string, label: string): Promise<GLTF | null> =>
+    track(
+      new Promise((resolve) => {
+        gltfLoader.load(
+          url,
+          (gltf) => resolve(gltf),
+          undefined,
+          (err) => {
+            console.warn(`[SolCoast] Could not load GLB ${url}, using fallback.`, err);
+            resolve(null);
+          },
+        );
+      }),
+      label,
+    );
 
   const [
     ferrariGltf,
@@ -833,47 +847,47 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     wood,
     concrete,
   ] = await Promise.all([
-    loadGltfSafe('/assets/models/ferrari.glb'),
-    loadGltfSafe('/assets/models/car_spyder.glb'),
-    loadGltfSafe('/assets/models/car_gt.glb'),
-    loadGltfSafe('/assets/models/car_ev.glb'),
-    loadGltfSafe('/assets/models/car_suv.glb'),
-    loadGltfSafe('/assets/models/car_taxi.glb'),
-    loadGltfSafe('/assets/models/car_coupe.glb'),
-    loadGltfSafe('/assets/models/car_jdm.glb'),
-    loadGltfSafe('/assets/models/boat_speedboat.glb'),
-    loadGltfSafe('/assets/models/boat_cruiser.glb'),
-    loadGltfSafe('/assets/models/boat_sailboat.glb'),
-    loadGltfSafe('/assets/models/boat_motorboat.glb'),
-    loadGltfSafe('/assets/models/boat_watertaxi.glb'),
-    loadGltfSafe('/assets/models/boat_cruiseship.glb'),
-    loadGltfSafe('/assets/models/avatar_5.glb'), // Exclusive street-tough protagonist!
-    loadGltfSafe('/assets/models/avatar_1.glb'),
-    loadGltfSafe('/assets/models/avatar_2.glb'),
-    loadGltfSafe('/assets/models/avatar_3.glb'),
-    loadGltfSafe('/assets/models/avatar_4.glb'),
-    loadGltfSafe('/assets/models/avatar_6.glb'),
-    loadGltfSafe('/assets/models/avatar_7.glb'),
-    loadGltfSafe('/assets/models/staff_concierge_f.glb'),
-    loadGltfSafe('/assets/models/staff_security_m.glb'),
-    loadGltfSafe('/assets/models/staff_bartender_m.glb'),
-    loadGltfSafe('/assets/models/staff_waiter_m.glb'),
-    loadGltfSafe('/assets/models/staff_bellhop_m.glb'),
-    loadGltfSafe('/assets/models/staff_maid_f.glb'),
-    loadGltfSafe('/assets/animations/anim_idle.glb'),
-    loadGltfSafe('/assets/animations/anim_walk.glb'),
-    loadGltfSafe('/assets/animations/anim_walk2.glb'),
-    loadGltfSafe('/assets/animations/anim_walk_f.glb'),
-    loadGltfSafe('/assets/animations/anim_walk_f2.glb'),
-    loadGltfSafe('/assets/animations/anim_run.glb'),
-    loadGltfSafe('/assets/animations/anim_jump.glb'),
-    loadHdri(rgbeLoader, pmrem, '/assets/hdri/sunset.hdr'),
-    loadHdri(rgbeLoader, pmrem, '/assets/hdri/midday.hdr'),
-    loadHdri(rgbeLoader, pmrem, '/assets/hdri/night.hdr'),
-    loadPbrSet(texLoader, 'asphalt', 1, 1),
-    loadPbrSet(texLoader, 'sand', 10, 48),
-    loadPbrSet(texLoader, 'wood', 14, 2),
-    loadPbrSet(texLoader, 'concrete', 42, 42),
+    loadGltfSafe('/assets/models/ferrari.glb', 'Loading exotic vehicles…'),
+    loadGltfSafe('/assets/models/car_spyder.glb', 'Loading exotic vehicles…'),
+    loadGltfSafe('/assets/models/car_gt.glb', 'Loading exotic vehicles…'),
+    loadGltfSafe('/assets/models/car_ev.glb', 'Loading exotic vehicles…'),
+    loadGltfSafe('/assets/models/car_suv.glb', 'Loading city traffic fleet…'),
+    loadGltfSafe('/assets/models/car_taxi.glb', 'Loading city traffic fleet…'),
+    loadGltfSafe('/assets/models/car_coupe.glb', 'Loading city traffic fleet…'),
+    loadGltfSafe('/assets/models/car_jdm.glb', 'Loading city traffic fleet…'),
+    loadGltfSafe('/assets/models/boat_speedboat.glb', 'Launching Marina Cove boats…'),
+    loadGltfSafe('/assets/models/boat_cruiser.glb', 'Launching Marina Cove boats…'),
+    loadGltfSafe('/assets/models/boat_sailboat.glb', 'Launching Marina Cove boats…'),
+    loadGltfSafe('/assets/models/boat_motorboat.glb', 'Launching Marina Cove boats…'),
+    loadGltfSafe('/assets/models/boat_watertaxi.glb', 'Launching Marina Cove boats…'),
+    loadGltfSafe('/assets/models/boat_cruiseship.glb', 'Launching coastal liner…'),
+    loadGltfSafe('/assets/models/avatar_5.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_1.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_2.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_3.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_4.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_6.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/avatar_7.glb', 'Loading citizens & hotel staff…'),
+    loadGltfSafe('/assets/models/staff_concierge_f.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/models/staff_security_m.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/models/staff_bartender_m.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/models/staff_waiter_m.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/models/staff_bellhop_m.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/models/staff_maid_f.glb', 'Tailoring hotel staff uniforms…'),
+    loadGltfSafe('/assets/animations/anim_idle.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_walk.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_walk2.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_walk_f.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_walk_f2.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_run.glb', 'Loading motion-capture animations…'),
+    loadGltfSafe('/assets/animations/anim_jump.glb', 'Loading motion-capture animations…'),
+    track(loadHdri(rgbeLoader, pmrem, '/assets/hdri/sunset.hdr'), 'Generating Miami sky reflections…'),
+    track(loadHdri(rgbeLoader, pmrem, '/assets/hdri/midday.hdr'), 'Generating Miami sky reflections…'),
+    track(loadHdri(rgbeLoader, pmrem, '/assets/hdri/night.hdr'), 'Generating Miami sky reflections…'),
+    track(loadPbrSet(texLoader, 'asphalt', 1, 1), 'Streaming photographic PBR textures…'),
+    track(loadPbrSet(texLoader, 'sand', 10, 48), 'Streaming photographic PBR textures…'),
+    track(loadPbrSet(texLoader, 'wood', 14, 2), 'Streaming photographic PBR textures…'),
+    track(loadPbrSet(texLoader, 'concrete', 42, 42), 'Streaming photographic PBR textures…'),
   ]);
 
   pmrem.dispose();
@@ -1055,11 +1069,14 @@ export type InteriorTextureMap = Partial<Record<InteriorTextureKey, LoadedPbrTex
  * Loads all 8 photographic Poly Haven CC0 interior PBR texture sets (diffuse + normal + roughness)
  * so every room's floors and walls have realistic brick, marble, parquet, plaster, concrete, & tile detail.
  */
-export async function loadInteriorTextures(): Promise<InteriorTextureMap> {
+export async function loadInteriorTextures(
+  onItemLoaded?: AssetProgressCallback,
+): Promise<InteriorTextureMap> {
   const loader = new THREE.TextureLoader();
   const entries = await Promise.all(
     INTERIOR_TEXTURE_KEYS.map(async (key): Promise<[InteriorTextureKey, LoadedPbrTextures | undefined]> => {
       const set = await loadPbrSet(loader, `int_${key}`, 1, 1);
+      onItemLoaded?.('Applying architectural interior textures…');
       return [key, set];
     }),
   );
@@ -1071,10 +1088,11 @@ export async function loadInteriorTextures(): Promise<InteriorTextureMap> {
 }
 
 /**
- * Loads all 40 CC0 & custom Blender PBR interior furniture & prop GLBs in parallel
- * without blocking initial outdoor world rendering.
+ * Loads all 68 CC0 & custom Blender PBR interior furniture & world prop GLBs in parallel.
  */
-export async function loadInteriorPropAssets(): Promise<Map<InteriorPropKind, THREE.Group>> {
+export async function loadInteriorPropAssets(
+  onItemLoaded?: AssetProgressCallback,
+): Promise<Map<InteriorPropKind, THREE.Group>> {
   const gltfLoader = new GLTFLoader();
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
@@ -1091,11 +1109,13 @@ export async function loadInteriorPropAssets(): Promise<Map<InteriorPropKind, TH
               obj.receiveShadow = false;
             }
           });
+          onItemLoaded?.('Furnishing hotels, clubs & beachfront props…');
           resolve([kind, gltf.scene]);
         },
         undefined,
         (err) => {
           console.warn(`[SolCoast] Could not load interior prop ${kind}.glb:`, err);
+          onItemLoaded?.('Furnishing hotels, clubs & beachfront props…');
           resolve([kind, null]);
         },
       );

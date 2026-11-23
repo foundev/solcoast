@@ -40,7 +40,13 @@ import {
 import { RagdollPhysicsWorld } from './systems/ragdollWorld';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
-import { loadGameAssets, loadInteriorPropAssets, loadInteriorTextures } from './world/assets';
+import {
+  INTERIOR_PROP_KINDS,
+  INTERIOR_TEXTURE_KEYS,
+  loadGameAssets,
+  loadInteriorPropAssets,
+  loadInteriorTextures,
+} from './world/assets';
 import { buildCityScene } from './world/cityBuilder';
 import {
   createCityBlueprint,
@@ -65,9 +71,42 @@ import { SkySystem, TIME_PRESETS, formatTimeLabel } from './world/sky';
 import { buildStreetProps } from './world/streetProps';
 import type { DistrictId } from './world/types';
 
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   const minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+  const loadingScreen = document.getElementById('loading-screen');
+  const loadingBarFill = document.getElementById('loading-bar-fill');
+  const loadingStatus = document.getElementById('loading-status');
+  const loadingPct = document.getElementById('loading-pct');
+  const loadingTip = document.getElementById('loading-tip');
+  const hudEl = document.getElementById('hud');
+
+  const tips = [
+    'Tip: Press [E] at Hotel Solaire, Club Neon, Café Habana, or Wynwood Gallery to step inside.',
+    'Tip: Pull straight into Club Neon’s rear VIP Parking Lot off the east avenue or north street.',
+    'Tip: Check in with Concierge Elena at Hotel Solaire’s 1F front desk to unlock Suite 201 & the 3F Penthouse.',
+    'Tip: Press [T] anytime to cycle between Sunset Golden Hour, Midday, and Neon Midnight.',
+  ];
+  if (loadingTip) {
+    loadingTip.textContent = tips[Math.floor(Math.random() * tips.length)];
+  }
+
+  // Total real tracked asset items: 41 core game assets + 68 Blender/CC0 props + 8 interior PBR sets + Rapier WASM + world build + GPU warm-up
+  const totalSteps = 41 + INTERIOR_PROP_KINDS.length + INTERIOR_TEXTURE_KEYS.length + 3;
+  let completedSteps = 0;
+  const advanceLoading = (label?: string, count = 1) => {
+    completedSteps = Math.min(totalSteps, completedSteps + count);
+    const pct = Math.round((completedSteps / totalSteps) * 100);
+    if (loadingBarFill) loadingBarFill.style.width = `${Math.max(2, pct)}%`;
+    if (loadingPct) loadingPct.textContent = `${pct}%`;
+    if (label && loadingStatus) loadingStatus.textContent = label;
+  };
+
+  // Yield 2 animation frames so the browser immediately paints the loading screen on frame 0 (zero black screen!)
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
+  advanceLoading('Building Sol Coast metropolis…', 1);
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -150,72 +189,61 @@ function bootstrap(): void {
   const coastalBoats = createCoastalBoatFleet();
   const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
 
-  // Initialize real WASM 3D rigid-body physics engine (Rapier3D) for 11-limb articulated ragdolls & sloped car hoods!
-  let ragdollWorld: RagdollPhysicsWorld | null = null;
-  void RagdollPhysicsWorld.create(blueprint)
-    .then((rw) => {
-      ragdollWorld = rw;
-      const pAvatar = playerMesh.getAvatarRoot();
-      if (pAvatar) rw.registerAvatarRestPose('player', pAvatar);
-    })
-    .catch((err) => {
-      console.warn('[SolCoast] Rapier3D physics init failed, keeping kinematic fallback.', err);
-    });
+  // Wait for ALL real 3D GLB models, Blender props, HDRI skies, PBR textures & Rapier3D physics behind the
+  // loading screen so the player NEVER sees low-poly fallback models pop in on startup!
+  const [assets, propsMap, interiorTexMap, ragdollWorld] = await Promise.all([
+    loadGameAssets(renderer, (label) => advanceLoading(label)),
+    loadInteriorPropAssets((label) => advanceLoading(label)),
+    loadInteriorTextures((label) => advanceLoading(label)),
+    RagdollPhysicsWorld.create(blueprint)
+      .then((rw) => {
+        advanceLoading('Initializing Rapier3D physics…');
+        return rw;
+      })
+      .catch((err) => {
+        console.warn('[SolCoast] Rapier3D physics init failed, keeping kinematic fallback.', err);
+        advanceLoading('Initializing physics…');
+        return null;
+      }),
+  ]);
 
-  // Stream all local 3D GLB cars, boats, street-tough protagonist, 52 styled citizens,
-  // studio optical mocap clips, Poly Haven Pure Sky HDRIs & photographic PBR textures asynchronously!
-  void loadGameAssets(renderer).then((assets) => {
-    sky.setHdriSet(assets.hdris);
-    cityHandles.applyPhotoTextures(assets.textures);
+  // Attach every HD 3D model, uniform, HDRI reflection & photographic PBR texture BEFORE rendering the first frame!
+  sky.setHdriSet(assets.hdris);
+  cityHandles.applyPhotoTextures(assets.textures);
 
-    for (const v of vehicles) {
-      const carModel = assets.cloneCarModel(v.config.modelKind);
-      if (carModel) {
-        vehicleMeshes.get(v.id)?.attachGltfCar(carModel, v.config.modelKind === 'ferrari');
-      }
+  for (const v of vehicles) {
+    const carModel = assets.cloneCarModel(v.config.modelKind);
+    if (carModel) {
+      vehicleMeshes.get(v.id)?.attachGltfCar(carModel, v.config.modelKind === 'ferrari');
     }
+  }
 
-    trafficMeshes.attachGltfCars((kind) => assets.cloneCarModel(kind));
-    cityHandles.attachParkedLotCars((kind) => assets.cloneCarModel(kind));
-    boatMeshes.attachGltfBoats((kind) => assets.cloneBoatModel(kind));
+  trafficMeshes.attachGltfCars((kind) => assets.cloneCarModel(kind));
+  cityHandles.attachParkedLotCars((kind) => assets.cloneCarModel(kind));
+  boatMeshes.attachGltfBoats((kind) => assets.cloneBoatModel(kind));
 
-    const playerPerson = assets.cloneProtagonist();
-    if (playerPerson) {
-      playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
-      if (ragdollWorld) {
-        ragdollWorld.registerAvatarRestPose('player', playerPerson.scene);
-      }
+  const playerPerson = assets.cloneProtagonist();
+  if (playerPerson) {
+    playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
+    if (ragdollWorld) {
+      ragdollWorld.registerAvatarRestPose('player', playerPerson.scene);
     }
+  }
 
-    if (assets.pedestrianGltfs.length > 0) {
-      pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
-      interiorSystem.attachGltfNpcs((idx, uniform) => assets.clonePedestrian(idx, uniform));
-    }
+  if (assets.pedestrianGltfs.length > 0) {
+    pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
+    interiorSystem.attachGltfNpcs((idx, uniform) => assets.clonePedestrian(idx, uniform));
+  }
 
-    const carCount = Object.keys(assets.carGltfs).length;
-    const boatCount = Object.keys(assets.boatGltfs).length;
-    if (carCount > 0 || boatCount > 0 || assets.protagonistGltf) {
-      hud.showToast(
-        `HD Assets Ready: ${carCount} car models, ${boatCount} boat & ship models, & 72 locals across 11 districts!`,
-        'success',
-      );
-    }
-  });
-
-  // Load all CC0 & custom Blender interior/fountain/showcase-building/world-prop GLBs + 8 PBR texture sets!
-  void loadInteriorPropAssets().then((propsMap) => {
-    if (propsMap.size > 0) {
-      interiorSystem.attachGltfProps(propsMap);
-      cityHandles.attachGltfFountains(propsMap);
-      cityHandles.attachShowcaseBuildings(propsMap);
-      cityHandles.attachWorldProps(propsMap);
-      streetProps.attachGltfProps(propsMap);
-    }
-  });
-  void loadInteriorTextures().then((texMap) => {
-    interiorSystem.applyPbrTextures(texMap);
-    cityHandles.applyShowcaseTextures(texMap);
-  });
+  if (propsMap.size > 0) {
+    interiorSystem.attachGltfProps(propsMap);
+    cityHandles.attachGltfFountains(propsMap);
+    cityHandles.attachShowcaseBuildings(propsMap);
+    cityHandles.attachWorldProps(propsMap);
+    streetProps.attachGltfProps(propsMap);
+  }
+  interiorSystem.applyPbrTextures(interiorTexMap);
+  cityHandles.applyShowcaseTextures(interiorTexMap);
 
   const input = new InputManager(canvas);
   const cameraCtrl = new CameraController();
@@ -1147,7 +1175,39 @@ function bootstrap(): void {
     lastDrawCalls = renderer.info.render.calls;
   };
 
+  // Render the initial fully-loaded HD frame behind the loading screen so GPU shaders compile & textures upload
+  // before the curtain lifts (zero black screen, zero procedural fallback pop-in!)
+  advanceLoading('Compiling shaders & preparing first frame…', 0);
+  const initVehicle = getActiveVehicle();
+  focusVec.set(player.x, player.y, player.z);
+  const initSky = sky.update(timeOfDayHours, 0, focusVec);
+  cityHandles.updateAnimation(0, initSky.nightFactor, initSky.sunDirection, initSky.sunColor, initSky.fogColor);
+  streetProps.update(0, initSky.nightFactor);
+  for (const v of vehicles) {
+    vehicleMeshes.get(v.id)?.syncFromState(v, initSky.nightFactor, 0.016, initVehicle !== null && initVehicle.id === v.id);
+  }
+  const initBodyGroup = initVehicle ? (vehicleMeshes.get(initVehicle.id)?.bodyGroup ?? null) : null;
+  playerMesh.syncFromState(player, 0, 0.016, initVehicle, initBodyGroup, false);
+  trafficMeshes.syncFromState(trafficCars, initSky.nightFactor, player.x, player.z);
+  pedestrianMeshes.syncFromState(pedestrians, 0.016, player.x, player.z, ragdollWorld);
+  boatMeshes.update(0, 0.016, initSky.nightFactor);
+  beaconRenderer.update(0, missions);
+  interiorSystem.update(0, 0.016, null, player.x, player.z);
+  cameraCtrl.snap();
+  cameraCtrl.update(camera, 0.016, player, initVehicle);
+  minimap.render(blueprint, player, vehicles, trafficCars, missions);
+  renderer.render(scene, camera);
+  lastDrawCalls = renderer.info.render.calls;
+
+  advanceLoading('Welcome to Sol Coast!', totalSteps - completedSteps);
+  if (hudEl) hudEl.classList.remove('hud-loading');
+  if (loadingScreen) {
+    loadingScreen.classList.add('fade-out');
+    window.setTimeout(() => loadingScreen.classList.add('hidden'), 520);
+  }
+
+  lastTime = performance.now();
   requestAnimationFrame(tick);
 }
 
-bootstrap();
+void bootstrap();
