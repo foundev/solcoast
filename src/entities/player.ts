@@ -538,13 +538,17 @@ const SEATED_BONES = [
   'LeftShoulder',
   'LeftArm',
   'LeftForeArm',
+  'LeftHand',
   'RightShoulder',
   'RightArm',
   'RightForeArm',
+  'RightHand',
   'LeftUpLeg',
   'LeftLeg',
+  'LeftFoot',
   'RightUpLeg',
   'RightLeg',
+  'RightFoot',
 ] as const;
 
 const _seatPos = new THREE.Vector3();
@@ -631,26 +635,27 @@ export function applySeatedDrivingPose(
     head.quaternion.multiply(_seatHeadTurnQ);
   }
 
-  avatarRoot.updateMatrixWorld(true);
+  // Update ancestor chain (entity root + tumblePivot) AND descendants so bone aiming uses current-frame car orientation
+  avatarRoot.updateWorldMatrix(true, true);
 
   if (lUpLeg && lLeg && lFoot) {
-    aimBoneInAvatarSpace(avatarRoot, lUpLeg, lLeg, _seatPos.set(-0.08, -0.15, -0.98));
-    aimBoneInAvatarSpace(avatarRoot, lLeg, lFoot, _seatPos.set(0, -0.85, -0.52));
+    aimBoneInAvatarSpace(avatarRoot, lUpLeg, lLeg, _seatPos.set(-0.06, -0.02, -0.998));
+    aimBoneInAvatarSpace(avatarRoot, lLeg, lFoot, _seatPos.set(0, -0.68, -0.73));
   }
   if (rUpLeg && rLeg && rFoot) {
-    aimBoneInAvatarSpace(avatarRoot, rUpLeg, rLeg, _seatPos.set(0.08, -0.15, -0.98));
-    aimBoneInAvatarSpace(avatarRoot, rLeg, rFoot, _seatPos.set(0, -0.85, -0.52));
+    aimBoneInAvatarSpace(avatarRoot, rUpLeg, rLeg, _seatPos.set(0.06, -0.02, -0.998));
+    aimBoneInAvatarSpace(avatarRoot, rLeg, rFoot, _seatPos.set(0, -0.68, -0.73));
   }
 
-  // Dynamic steering wheel hand motion: turning right lifts left hand & dips right hand along the rim!
+  // Dynamic steering wheel hand motion: elbows tucked inside cabin bolsters while hands grip wheel at 10-and-2
   const steerShift = clamp(steerAngle * 0.48, -0.22, 0.22);
   if (lArm && lFore && lHand) {
-    aimBoneInAvatarSpace(avatarRoot, lArm, lFore, _seatPos.set(-0.18, -0.45 + steerShift * 0.4, -0.88));
-    aimBoneInAvatarSpace(avatarRoot, lFore, lHand, _seatPos.set(0.22, 0.25 + steerShift, -0.94));
+    aimBoneInAvatarSpace(avatarRoot, lArm, lFore, _seatPos.set(-0.1, -0.46 + steerShift * 0.35, -0.88));
+    aimBoneInAvatarSpace(avatarRoot, lFore, lHand, _seatPos.set(0.14, 0.26 + steerShift, -0.95));
   }
   if (rArm && rFore && rHand) {
-    aimBoneInAvatarSpace(avatarRoot, rArm, rFore, _seatPos.set(0.18, -0.45 - steerShift * 0.4, -0.88));
-    aimBoneInAvatarSpace(avatarRoot, rFore, rHand, _seatPos.set(-0.22, 0.25 - steerShift, -0.94));
+    aimBoneInAvatarSpace(avatarRoot, rArm, rFore, _seatPos.set(0.1, -0.46 - steerShift * 0.35, -0.88));
+    aimBoneInAvatarSpace(avatarRoot, rFore, rHand, _seatPos.set(-0.14, 0.26 - steerShift, -0.95));
   }
 }
 
@@ -966,7 +971,9 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
       }
       root.visible = true;
       contactShadow.visible = false;
-      activeVehicleBodyGroup.updateMatrixWorld(true);
+      // CRITICAL: updateWorldMatrix(true, false) updates ancestor vehicleMesh.root as well as bodyGroup!
+      // updateMatrixWorld(true) alone leaves vehicleMesh.root 1 frame stale, making the driver stick out on turns.
+      activeVehicleBodyGroup.updateWorldMatrix(true, false);
 
       const seat = DRIVER_SEAT_OFFSETS[activeVehicle.config.modelKind] ?? DRIVER_SEAT_OFFSETS.ferrari;
       _seatPos.set(seat.x, seat.y, seat.z).applyMatrix4(activeVehicleBodyGroup.matrixWorld);
@@ -978,6 +985,7 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
       tumblePivot.position.set(0, 0, 0);
       tumblePivot.rotation.set(0, 0, 0);
       gltfAvatarRoot.position.y = 0;
+      root.updateWorldMatrix(true, true);
 
       applySeatedDrivingPose(gltfAvatarRoot, restBoneQuats, activeVehicle.steerAngle);
       wasSeated = true;

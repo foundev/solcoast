@@ -36,14 +36,14 @@ export const PAINT_FINISHES: PaintFinish[] = [
 
 /** Exact measured cockpit driver-seat Hips anchor (local to vehicle bodyGroup) for every 3D car model */
 export const DRIVER_SEAT_OFFSETS: Record<CarModelKind, { x: number; y: number; z: number }> = {
-  ferrari: { x: -0.36, y: 0.36, z: 0.14 },
-  spyder: { x: -0.38, y: 0.48, z: 0.08 },
-  gt: { x: -0.38, y: 0.41, z: -0.06 },
-  coupe: { x: -0.38, y: 0.44, z: -0.02 },
-  jdm: { x: -0.35, y: 0.44, z: 0.18 },
-  ev: { x: -0.38, y: 0.56, z: 0.04 },
-  taxi: { x: -0.38, y: 0.58, z: 0.02 },
-  suv: { x: -0.4, y: 0.64, z: 0.04 },
+  ferrari: { x: -0.34, y: 0.32, z: 0.14 },
+  spyder: { x: -0.35, y: 0.42, z: 0.08 },
+  gt: { x: -0.35, y: 0.36, z: -0.04 },
+  coupe: { x: -0.35, y: 0.4, z: -0.02 },
+  jdm: { x: -0.32, y: 0.41, z: 0.16 },
+  ev: { x: -0.35, y: 0.54, z: 0.04 },
+  taxi: { x: -0.35, y: 0.56, z: 0.02 },
+  suv: { x: -0.37, y: 0.62, z: 0.04 },
 };
 
 export type VehicleBodyStyle = 'supercar' | 'sedan' | 'spyder' | 'coupe';

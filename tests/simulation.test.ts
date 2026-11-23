@@ -19,12 +19,14 @@ import {
   computeCharacterPose,
   computeSafeExitPosition,
   createInitialPlayerState,
+  createPlayerMesh,
   findNearestVehicle,
   stepPlayerOnFoot,
 } from '../src/entities/player';
 import { createTrafficCars, findNearestTrafficCar, relocateTrafficCarAway, stepTraffic } from '../src/entities/traffic';
 import {
   DEFAULT_VEHICLES,
+  DRIVER_SEAT_OFFSETS,
   MODEL_SPEC_TABLE,
   computeGear,
   computeGroundSlopeTilt,
@@ -1260,5 +1262,140 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(evShifts).toBe(0);
     expect(formatVehicleGear(ev)).toBe('D');
+  });
+
+  it('keeps the seated driver locked inside the cabin with zero 1-frame lag during high-speed turns across all 8 car models', async () => {
+    (globalThis as unknown as { self: unknown; createImageBitmap: unknown }).self = globalThis;
+    (globalThis as unknown as { createImageBitmap: unknown }).createImageBitmap = async () => ({
+      width: 1,
+      height: 1,
+      close() {},
+    });
+
+    const prevDoc = (globalThis as unknown as { document?: unknown }).document;
+    (globalThis as unknown as { document: unknown }).document = {
+      createElement: () => ({
+        width: 128,
+        height: 128,
+        getContext: () => ({
+          createRadialGradient: () => ({ addColorStop: () => {} }),
+          fillRect: () => {},
+          fillStyle: '',
+        }),
+      }),
+    };
+
+    try {
+      const loader = new GLTFLoader();
+      const buf = fs.readFileSync(path.resolve(__dirname, '../public/assets/models/avatar_5.glb'));
+      const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => loader.parse(ab, '', resolve, reject));
+      gltf.scene.rotation.y = Math.PI;
+
+      const scene = new THREE.Scene();
+      const playerMesh = createPlayerMesh(scene);
+      playerMesh.attachGltfCharacter(gltf.scene, []);
+
+      // Vehicle hierarchy matching createVehicleMesh: scene -> vehicleRoot -> bodyGroup
+      const vehicleRoot = new THREE.Group();
+      const bodyGroup = new THREE.Group();
+      vehicleRoot.add(bodyGroup);
+      scene.add(vehicleRoot);
+
+      const car = createVehicleState(DEFAULT_VEHICLES[0]); // Ferrari
+      const player = createInitialPlayerState(car);
+      player.vehicleId = car.id;
+
+      // Frame 0: vehicle at origin, matrices flushed (simulates previous rendered frame)
+      vehicleRoot.position.set(0, 0, 0);
+      vehicleRoot.rotation.set(0, 0, 0);
+      bodyGroup.position.set(0, 0, 0);
+      bodyGroup.rotation.set(0, 0, 0);
+      scene.updateMatrixWorld(true);
+      playerMesh.syncFromState(player, 0, 1 / 60, car, bodyGroup, false);
+
+      // Frame 1: vehicle moves 1.4m & turns sharply with roll/pitch — WITHOUT flushing scene matrices first!
+      car.x = 1.1;
+      car.y = 0.25;
+      car.z = -0.9;
+      car.yaw = 0.85;
+      car.rollTilt = 0.08;
+      car.pitchTilt = -0.04;
+      car.suspOffset = 0.02;
+      car.steerAngle = 0.45;
+
+      vehicleRoot.position.set(car.x, car.y, car.z);
+      vehicleRoot.rotation.y = -car.yaw;
+      bodyGroup.position.y = car.suspOffset;
+      bodyGroup.rotation.x = car.pitchTilt;
+      bodyGroup.rotation.z = car.rollTilt;
+
+      playerMesh.syncFromState(player, 1 / 60, 1 / 60, car, bodyGroup, false);
+
+      // Compute exact ground-truth current-frame world seat position & quaternion
+      const refRoot = vehicleRoot.clone(true);
+      refRoot.updateMatrixWorld(true);
+      const refBody = refRoot.children[0];
+      const seat = DRIVER_SEAT_OFFSETS[car.config.modelKind];
+      const expectedPos = new THREE.Vector3(seat.x, seat.y, seat.z).applyMatrix4(refBody.matrixWorld);
+      const expectedQuat = refBody.getWorldQuaternion(new THREE.Quaternion());
+
+      // Zero 1-frame lag: driver root matches current-frame car transform to sub-millimeter precision!
+      expect(playerMesh.root.position.distanceTo(expectedPos)).toBeLessThan(1e-4);
+      expect(playerMesh.root.quaternion.angleTo(expectedQuat)).toBeLessThan(1e-4);
+
+      // Verify every upper-body & leg bone stays cleanly inside the cabin envelope at full left & right lock
+      // across all 8 car models!
+      const roofHeights: Record<keyof typeof DRIVER_SEAT_OFFSETS, number> = {
+        ferrari: 1.24,
+        spyder: 1.3,
+        gt: 1.29,
+        coupe: 1.36,
+        jdm: 1.42,
+        ev: 1.56,
+        taxi: 1.8,
+        suv: 1.82,
+      };
+      const invBody = new THREE.Matrix4();
+      const localBone = new THREE.Vector3();
+      for (const modelKind of Object.keys(DRIVER_SEAT_OFFSETS) as Array<keyof typeof DRIVER_SEAT_OFFSETS>) {
+        car.config = createVehicleConfigForModel(`test-${modelKind}`, modelKind, 0, 0, 0);
+        for (const steer of [-0.45, 0, 0.45]) {
+          car.steerAngle = steer;
+          playerMesh.syncFromState(player, 0.1, 1 / 60, car, bodyGroup, false);
+          bodyGroup.updateWorldMatrix(true, false);
+          playerMesh.root.updateWorldMatrix(true, true);
+          invBody.copy(bodyGroup.matrixWorld).invert();
+
+          for (const boneName of [
+            'Head',
+            'HeadTop_End',
+            'LeftArm',
+            'LeftForeArm',
+            'LeftHand',
+            'RightArm',
+            'RightForeArm',
+            'RightHand',
+          ]) {
+            const b = gltf.scene.getObjectByName(boneName)!;
+            b.getWorldPosition(localBone).applyMatrix4(invBody);
+            // Never protrudes laterally outside the narrowest car cabin door (-0.86..+0.86)
+            expect(localBone.x, `${modelKind} steer=${steer} ${boneName}.x`).toBeGreaterThan(-0.65);
+            expect(localBone.x, `${modelKind} steer=${steer} ${boneName}.x`).toBeLessThan(0.25);
+            // Never pokes above the car's roof / windshield top!
+            expect(localBone.y, `${modelKind} steer=${steer} ${boneName}.y`).toBeLessThan(roofHeights[modelKind] - 0.02);
+          }
+
+          // Feet stay tucked above the asphalt (never dangling beneath the car's floorpan)
+          for (const footName of ['LeftFoot', 'RightFoot']) {
+            const f = gltf.scene.getObjectByName(footName)!;
+            f.getWorldPosition(localBone).applyMatrix4(invBody);
+            expect(localBone.y, `${modelKind} steer=${steer} ${footName}.y`).toBeGreaterThan(-0.02);
+          }
+        }
+      }
+    } finally {
+      (globalThis as unknown as { document?: unknown }).document = prevDoc;
+    }
   });
 });
