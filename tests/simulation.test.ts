@@ -798,7 +798,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     const w1F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y, 12, 0);
     expect(w1F.x).toBeCloseTo(124.0, 2);
     expect(w1F.z).toBeCloseTo(-48.4, 2);
-    expect(w1F.y).toBeCloseTo(0.22, 2);
+    expect(w1F.y).toBeCloseTo(0.36, 2);
     const w2F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y, 12, 1);
     const w3F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y * 2, 12, 2);
     expect(w2F.y - w1F.y).toBeCloseTo(4.8, 2);

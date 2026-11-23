@@ -317,6 +317,15 @@ def build_hotel_solaire():
     add_box("LobbyInteriorFloor", (2.4, 16.2, 0.16), (front_x - 2.35, 0, 0.08), marble)
     # Recessed grand transparent glass lobby curtain wall across Ocean Drive (+X) facade
     add_box("LobbyGlassWall", (0.12, 16.5, 3.8), (front_x - 1.45, 0, 2.1), lobby_glass)
+    # Matching 1F side windows on South (-Y: Grand Lobby) & North (+Y: Ocean Cocktail Lounge) walls + 1F West lounge window!
+    for sy_sign in (-1, 1):
+        sy = sy_sign * (d * 0.5 - 0.45)
+        add_box(f"GroundSideWinBack_{sy_sign}", (4.2, 0.16, 2.8), (1.8, sy - sy_sign * 0.06, 2.35), interior_glow)
+        add_box(f"GroundSideWinGlass_{sy_sign}", (4.4, 0.08, 3.0), (1.8, sy + sy_sign * 0.06, 2.35), lobby_glass)
+        for mx in (-2.2, -0.73, 0.73, 2.2):
+            add_box(f"GroundSideMull_{sy_sign}_{mx}", (0.10, 0.22, 3.1), (1.8 + mx, sy + sy_sign * 0.04, 2.35), brass)
+    add_box("GroundWestWinBack", (0.16, 3.4, 2.5), (-front_x + 0.08, 5.8, 2.25), interior_glow)
+    add_box("GroundWestWinGlass", (0.08, 3.6, 2.6), (-front_x - 0.06, 5.8, 2.25), warm_glass)
     # Double brass-framed grand hotel entrance doors right at center (y=0)
     add_box("DoorFrameOuter", (0.4, 3.6, 3.2), (front_x - 1.25, 0, 1.6), brass, bevel_width=0.03)
     add_box("DoorGlass", (0.45, 3.1, 2.85), (front_x - 1.22, 0, 1.48), lobby_glass)
@@ -359,15 +368,22 @@ def build_hotel_solaire():
                 add_box("BalcSlab", (1.0, 2.7, 0.18), (front_x + 0.45, wy, fz - 1.15), stucco_cream, bevel_width=0.03)
                 add_box("BalcGlass", (0.06, 2.55, 0.95), (front_x + 0.90, wy, fz - 0.62), balcony_glass)
                 add_box("BalcRail", (0.08, 2.65, 0.06), (front_x + 0.90, wy, fz - 0.14), brass)
-            # Rear (-X) suite windows
-            add_box("RearWinBack", (0.16, 2.0, 1.76), (-front_x + 0.06, wy, fz), interior_glow)
-            add_box("RearWin", (0.08, 2.1, 1.85), (-front_x - 0.06, wy, fz), warm_glass)
+            # Rear (-X) suite windows on 2F; on 3F (fz=12.75) we build the continuous Penthouse panoramic glass wall below!
+            if fz < 12.0:
+                add_box("RearWinBack", (0.16, 2.0, 1.76), (-front_x + 0.06, wy, fz), interior_glow)
+                add_box("RearWin", (0.08, 2.1, 1.85), (-front_x - 0.06, wy, fz), warm_glass)
         # Side North/South windows
         for side_y in (-d * 0.5, d * 0.5):
             sy_out = 0.08 if side_y > 0 else -0.08
             for wx in (-4.0, 0.0, 4.0):
                 add_box("SideWinBack", (2.0, 0.16, 1.76), (wx, side_y - sy_out * 0.5, fz), interior_glow)
                 add_box("SideWin", (2.1, 0.08, 1.85), (wx, side_y + sy_out, fz), warm_glass)
+
+    # 3F Penthouse Rear (-X, West Sunset) Floor-to-Ceiling Panoramic Glass Curtain Wall (matching ph-salon & ph-master!)
+    add_box("PhPanoBack", (0.18, d - 2.6, 2.85), (-front_x + 0.08, 0.0, 12.65), interior_glow)
+    add_box("PhPanoGlass", (0.08, d - 2.4, 2.95), (-front_x - 0.06, 0.0, 12.65), lobby_glass)
+    for py_mull in range(-9, 10, 3):
+        add_box(f"PhPanoMull_{py_mull}", (0.24, 0.12, 3.05), (-front_x - 0.04, py_mull, 12.65), dark_bronze)
 
     # 3. Iconic Stepped Art Deco Wedding-Cake Crown Tower & Neon Vertical Fins (z = 14.5 .. 19.2m)!
     add_rounded_slab("CrownTier1", 7.8, 9.6, 2.4, (2.2, 0, 15.8), 0.9, stucco_cream)
@@ -436,10 +452,14 @@ def build_club_neon():
         for sy in (-span_y * 0.5, span_y * 0.5):
             add_box(f"PortalLeg_{idx}_{sy}", (0.28, 0.22, h), (ox, sy, h * 0.5), mat)
 
-    # Recessed glowing magenta/purple tinted club double doors
+    # Recessed glowing magenta/purple tinted club double doors + matching VIP Bar 3-pane streetfront window!
     add_box("ClubDoorFrame", (0.35, 3.4, 3.1), (front_x + 0.3, 0, 1.55), steel)
     add_box("ClubDoorGlass", (0.40, 3.0, 2.8), (front_x + 0.26, 0, 1.45), club_glass)
     add_box("ClubDoorBar", (0.45, 0.12, 2.85), (front_x + 0.22, 0, 1.45), steel)
+    add_box("VipWinFrame", (0.32, 5.6, 2.6), (front_x + 0.28, 7.6, 2.15), neon_cyan)
+    add_box("VipWinGlass", (0.12, 5.4, 2.4), (front_x + 0.18, 7.6, 2.15), sky_glass)
+    for vmy in (5.8, 7.6, 9.4):
+        add_box(f"VipWinMull_{vmy}", (0.36, 0.10, 2.5), (front_x + 0.22, vmy, 2.15), steel)
 
     # VIP Velvet Rope Stanchion Entry Lane right on the front threshold!
     for sy in (-1.85, 1.85):
@@ -648,13 +668,19 @@ def build_wynwood_gallery():
     add_box("FrontArtStripe1", (0.22, 4.1, 0.62), (front_x - 0.10, -8.4, 2.55), mural_magenta)
     add_box("FrontArtStripe2", (0.22, 3.6, 0.52), (front_x - 0.10, -8.4, 1.85), mural_cyan)
 
-    # Large geometric sculptural mural relief panels on North & South exterior gallery walls
+    # Large geometric sculptural mural relief panels on West half + matching 4-pane Industrial Steel-Grid Artist Studio Loft Windows on East half of North & South gallery walls!
     for sy_sign in (-1, 1):
         sy = sy_sign * (d * 0.5 - 0.25)
-        for mx, col_a, col_b in [(-4.2, mural_magenta, mural_cyan), (4.6, mural_cyan, mural_gold)]:
-            add_box("SideMuralFrame", (6.8, 0.35, 5.2), (mx, sy, 4.4), black_steel, bevel_width=0.03)
-            add_box("SideMuralBg", (6.3, 0.42, 4.7), (mx, sy, 4.4), col_a)
-            add_box("SideMuralAccent", (2.8, 0.48, 2.8), (mx + 1.1, sy, 4.6), col_b, rot=(0, 0.35, 0))
+        add_box("SideMuralFrame", (6.8, 0.35, 5.2), (-4.2, sy, 4.4), black_steel, bevel_width=0.03)
+        add_box("SideMuralBg", (6.3, 0.42, 4.7), (-4.2, sy, 4.4), mural_magenta)
+        add_box("SideMuralAccent", (2.8, 0.48, 2.8), (-3.1, sy, 4.6), mural_cyan, rot=(0, 0.35, 0))
+        # Matching 4-pane industrial steel-grid Artist Studio Loft window (x_local = ±10, z_local = -14.2..-8.8)
+        add_box(f"StudioLoftBack_{sy_sign}", (5.3, 0.18, 2.9), (4.6, sy - sy_sign * 0.08, 2.4), gallery_interior)
+        add_box(f"StudioLoftFrame_{sy_sign}", (5.6, 0.32, 3.16), (4.6, sy, 2.4), black_steel)
+        add_box(f"StudioLoftGlass_{sy_sign}", (5.4, 0.10, 2.96), (4.6, sy + sy_sign * 0.08, 2.4), gallery_glass)
+        for smx in (-2.7, -1.35, 0.0, 1.35, 2.7):
+            add_box(f"StudioLoftMull_{sy_sign}_{smx}", (0.10, 0.36, 3.05), (4.6 + smx, sy + sy_sign * 0.04, 2.4), black_steel)
+        add_box(f"StudioLoftTransom_{sy_sign}", (5.4, 0.36, 0.09), (4.6, sy + sy_sign * 0.04, 2.85), black_steel)
 
     export_building_glb("building_wynwood_gallery.glb")
 
