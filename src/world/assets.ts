@@ -645,6 +645,48 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
   };
 }
 
+export type InteriorTextureKey =
+  | 'marble'
+  | 'parquet'
+  | 'brick'
+  | 'plaster'
+  | 'terracotta'
+  | 'tile_white'
+  | 'concrete'
+  | 'wood_panel';
+
+export const INTERIOR_TEXTURE_KEYS: InteriorTextureKey[] = [
+  'marble',
+  'parquet',
+  'brick',
+  'plaster',
+  'terracotta',
+  'tile_white',
+  'concrete',
+  'wood_panel',
+];
+
+export type InteriorTextureMap = Partial<Record<InteriorTextureKey, LoadedPbrTextures>>;
+
+/**
+ * Loads all 8 photographic Poly Haven CC0 interior PBR texture sets (diffuse + normal + roughness)
+ * so every room's floors and walls have realistic brick, marble, parquet, plaster, concrete, & tile detail.
+ */
+export async function loadInteriorTextures(): Promise<InteriorTextureMap> {
+  const loader = new THREE.TextureLoader();
+  const entries = await Promise.all(
+    INTERIOR_TEXTURE_KEYS.map(async (key): Promise<[InteriorTextureKey, LoadedPbrTextures | undefined]> => {
+      const set = await loadPbrSet(loader, `int_${key}`, 1, 1);
+      return [key, set];
+    }),
+  );
+  const out: InteriorTextureMap = {};
+  for (const [k, v] of entries) {
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * Loads all 40 CC0 & custom Blender PBR interior furniture & prop GLBs in parallel
  * without blocking initial outdoor world rendering.

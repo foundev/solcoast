@@ -242,7 +242,7 @@ export class SkySystem {
       this.hemiLight.visible = false;
       this.scene.fog = null;
       this.scene.background = new THREE.Color(0x090c14);
-      this.scene.environmentIntensity = 0.25;
+      this.scene.environmentIntensity = 0.42;
     } else {
       this.sunLight.visible = true;
       this.hemiLight.visible = true;

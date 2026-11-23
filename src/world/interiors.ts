@@ -12,11 +12,24 @@ import {
 } from '../core/math';
 import { createHumanRigController, type HumanRigController } from '../entities/humanRig';
 import type { FootMoveInput, PlayerState } from '../entities/player';
-import type { ClonedPerson, InteriorPropKind } from './assets';
+import type {
+  ClonedPerson,
+  InteriorPropKind,
+  InteriorTextureKey,
+  InteriorTextureMap,
+} from './assets';
 import { getGroundHeight } from './cityData';
 import { createContactShadowTexture } from './textures';
 
 export type InteriorId = 'hotel-solaire' | 'club-neon' | 'cafe-habana' | 'wynwood-gallery';
+
+export type CeilingStyle =
+  | 'coffered'
+  | 'rafters'
+  | 'trusses'
+  | 'skylight'
+  | 'gallery-track'
+  | 'neon-cove';
 
 export interface InteriorRoomDef {
   id: string;
@@ -37,6 +50,16 @@ export interface InteriorRoomDef {
   ambientIntensity: number;
   floorRoughness?: number;
   floorMetalness?: number;
+  /** Photographic Poly Haven PBR texture set for floor & walls */
+  floorPbr: InteriorTextureKey;
+  floorTint?: number;
+  wallPbr: InteriorTextureKey;
+  wallTint?: number;
+  /** Architectural wainscoting lower wall + chair rail + crown molding */
+  wainscotColor?: number;
+  crownColor?: number;
+  ceilingStyle: CeilingStyle;
+  sconceColor?: number;
 }
 
 export interface InteriorDoorwayDef {
@@ -126,6 +149,7 @@ interface WallSegment {
   outwardSign: 1 | -1;
   height: number;
   wallColor: number;
+  room: InteriorRoomDef;
 }
 
 function subtractIntervals(
@@ -164,7 +188,16 @@ function computeRoomWallSegments(rooms: InteriorRoomDef[], doorways: InteriorDoo
         .map((d) => ({ min: Math.max(start, d.min), max: Math.min(end, d.max) }))
         .filter((c) => c.max > c.min + 0.05);
       for (const s of subtractIntervals(start, end, cuts)) {
-        segs.push({ axis, coord, start: s.start, end: s.end, outwardSign, height: r.height, wallColor: r.wallColor });
+        segs.push({
+          axis,
+          coord,
+          start: s.start,
+          end: s.end,
+          outwardSign,
+          height: r.height,
+          wallColor: r.wallColor,
+          room: r,
+        });
       }
     };
     addEdge('x', r.minX, r.minZ, r.maxZ, -1);
@@ -250,6 +283,14 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.5,
         ambientIntensity: 0.9,
         floorRoughness: 0.25,
+        floorPbr: 'marble',
+        floorTint: 0xfff8ee,
+        wallPbr: 'plaster',
+        wallTint: 0xfaeae0,
+        wainscotColor: 0x3b2418,
+        crownColor: 0xe6bd68,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffd28a,
       },
       {
         id: 'lounge',
@@ -269,6 +310,14 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.35,
         ambientIntensity: 0.65,
         floorRoughness: 0.35,
+        floorPbr: 'parquet',
+        floorTint: 0xc29874,
+        wallPbr: 'plaster',
+        wallTint: 0x2b5059,
+        wainscotColor: 0x361e12,
+        crownColor: 0xd4a44a,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffb866,
       },
       {
         id: 'suite',
@@ -287,7 +336,15 @@ export const INTERIORS: InteriorDef[] = [
         lightColor: 0xffd5a0,
         lightIntensity: 1.35,
         ambientIntensity: 0.85,
-        floorRoughness: 0.82,
+        floorRoughness: 0.65,
+        floorPbr: 'parquet',
+        floorTint: 0xe5d3bc,
+        wallPbr: 'plaster',
+        wallTint: 0xf6efe6,
+        wainscotColor: 0xd6c7b4,
+        crownColor: 0xe6bd68,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffe0ad,
       },
     ],
     doorways: [
@@ -318,10 +375,10 @@ export const INTERIORS: InteriorDef[] = [
       { minX: 5.2, maxX: 8.4, minZ: -12.5, maxZ: -7.5, minY: 0, maxY: 1.2 },
     ],
     props: [
-      // Grand Atrium — custom Blender Art Deco hero models + Poly Haven furniture
-      { kind: 'hotel_reception_desk', x: -5.9, z: 2.4, rotY: Math.PI, scale: 1.04 },
+      // Grand Atrium — custom Blender Art Deco hero models (rotY=0 faces +Z lobby!) + Poly Haven furniture
+      { kind: 'hotel_reception_desk', x: -5.9, z: 2.4, rotY: 0, scale: 1.04 },
       { kind: 'art_deco_fountain', x: 0, z: 4.2, scale: 1.0 },
-      { kind: 'grand_piano', x: 6.1, z: 1.5, rotY: -Math.PI * 0.35, scale: 1.05 },
+      { kind: 'grand_piano', x: 6.1, z: 1.5, rotY: -Math.PI * 0.25, scale: 1.05 },
       { kind: 'chandelier', x: -3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
       { kind: 'chandelier', x: 3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
       { kind: 'sofa_luxury', x: -6.2, z: 8.1, rotY: Math.PI, scale: 1.05 },
@@ -344,7 +401,7 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'bar_stool', x: 18.8, z: 5.4, scale: 1.1 },
       { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 0.6, scale: 1.15 },
       { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 4.4, rotY: 1.4, scale: 1.15 },
-      { kind: 'neon_palm_sign', x: 17.0, y: 2.1, z: -3.86, rotY: Math.PI, scale: 1.15 },
+      { kind: 'neon_palm_sign', x: 17.0, y: 2.1, z: -3.86, rotY: 0, scale: 1.15 },
       { kind: 'cabinet', x: 23.3, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.15 },
       { kind: 'cabinet', x: 23.3, z: 4.6, rotY: -Math.PI * 0.5, scale: 1.15 },
       { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 0.2, rotY: Math.PI * 0.5, scale: 1.35 },
@@ -475,6 +532,13 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.2,
         ambientIntensity: 0.45,
         floorRoughness: 0.22,
+        floorPbr: 'concrete',
+        floorTint: 0x261d38,
+        wallPbr: 'concrete',
+        wallTint: 0x261a3d,
+        crownColor: 0xff2e93,
+        ceilingStyle: 'neon-cove',
+        sconceColor: 0xff2e93,
       },
       {
         id: 'main-floor',
@@ -495,6 +559,13 @@ export const INTERIORS: InteriorDef[] = [
         ambientIntensity: 0.5,
         floorRoughness: 0.16,
         floorMetalness: 0.25,
+        floorPbr: 'concrete',
+        floorTint: 0x1d1a2e,
+        wallPbr: 'concrete',
+        wallTint: 0x1f1c33,
+        crownColor: 0x2cf3ff,
+        ceilingStyle: 'trusses',
+        sconceColor: 0x2cf3ff,
       },
       {
         id: 'vip-bar',
@@ -514,6 +585,14 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.35,
         ambientIntensity: 0.55,
         floorRoughness: 0.2,
+        floorPbr: 'parquet',
+        floorTint: 0x452b4f,
+        wallPbr: 'brick',
+        wallTint: 0x3b224a,
+        wainscotColor: 0x140c1f,
+        crownColor: 0xff46b8,
+        ceilingStyle: 'neon-cove',
+        sconceColor: 0xff46b8,
       },
     ],
     doorways: [
@@ -536,10 +615,10 @@ export const INTERIORS: InteriorDef[] = [
     props: [
       // Foyer
       { kind: 'cabinet', x: 3.2, z: 13.3, rotY: -Math.PI * 0.5, scale: 1.15 },
-      { kind: 'neon_palm_sign', x: -3.86, y: 1.6, z: 14.8, rotY: -Math.PI * 0.5, scale: 1.05 },
+      { kind: 'neon_palm_sign', x: -3.86, y: 1.6, z: 14.8, rotY: Math.PI * 0.5, scale: 1.05 },
       { kind: 'potted_plant_2', x: -3.1, z: 12.2, scale: 1.1 },
-      // Main Dance Hall & DJ Stage — full custom Blender twin-turntable DJ rig & subwoofer stacks!
-      { kind: 'dj_booth_rig', x: 0, y: 0.9, z: -7.8, rotY: Math.PI, scale: 1.22 },
+      // Main Dance Hall & DJ Stage — full custom Blender twin-turntable DJ rig facing +Z dance floor!
+      { kind: 'dj_booth_rig', x: 0, y: 0.9, z: -7.8, rotY: 0, scale: 1.22 },
       { kind: 'stage_lights', x: -4.2, y: 0.9, z: -10.4, rotY: 0.25, scale: 0.9 },
       { kind: 'stage_lights', x: 4.2, y: 0.9, z: -10.4, rotY: -0.25, scale: 0.9 },
       { kind: 'sofa_club', x: 10.6, z: -3.2, rotY: -Math.PI * 0.5, scale: 1.3 },
@@ -558,7 +637,7 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'bar_stool', x: -19.6, z: 2.4, scale: 1.1 },
       { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: -3.8, scale: 1.15 },
       { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: 2.1, rotY: 2.0, scale: 1.15 },
-      { kind: 'neon_palm_sign', x: -17.5, y: 2.1, z: -8.86, rotY: Math.PI, scale: 1.3 },
+      { kind: 'neon_palm_sign', x: -17.5, y: 2.1, z: -8.86, rotY: 0, scale: 1.3 },
       { kind: 'metal_shelves', x: -24.3, z: -3.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'metal_shelves', x: -24.3, z: 1.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'wine_bottles', x: -21.2, y: 1.14, z: -2.5, rotY: Math.PI * 0.5, scale: 1.3 },
@@ -686,7 +765,15 @@ export const INTERIORS: InteriorDef[] = [
         lightColor: 0xffd296,
         lightIntensity: 1.4,
         ambientIntensity: 0.9,
-        floorRoughness: 0.55,
+        floorRoughness: 0.52,
+        floorPbr: 'terracotta',
+        floorTint: 0xffe8d6,
+        wallPbr: 'plaster',
+        wallTint: 0xf7e1c2,
+        wainscotColor: 0x59341f,
+        crownColor: 0x4a2a18,
+        ceilingStyle: 'rafters',
+        sconceColor: 0xffcf88,
       },
       {
         id: 'conservatory',
@@ -706,6 +793,14 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.5,
         ambientIntensity: 0.95,
         floorRoughness: 0.45,
+        floorPbr: 'terracotta',
+        floorTint: 0xf2f0e6,
+        wallPbr: 'brick',
+        wallTint: 0xf0d5be,
+        wainscotColor: 0x356968,
+        crownColor: 0x59341f,
+        ceilingStyle: 'skylight',
+        sconceColor: 0xffe4ad,
       },
       {
         id: 'roastery',
@@ -725,6 +820,12 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.35,
         ambientIntensity: 0.85,
         floorRoughness: 0.4,
+        floorPbr: 'concrete',
+        floorTint: 0x7b838f,
+        wallPbr: 'tile_white',
+        wallTint: 0xf5f8fc,
+        crownColor: 0x4a525e,
+        ceilingStyle: 'gallery-track',
       },
     ],
     doorways: [
@@ -749,9 +850,9 @@ export const INTERIORS: InteriorDef[] = [
       { minX: -7.2, maxX: -4.4, minZ: -9.0, maxZ: -6.8, minY: 0, maxY: 1.8 },
     ],
     props: [
-      // Espresso Bar & Bakery — custom Blender 3-group espresso machine & glass pastry vitrine!
-      { kind: 'espresso_machine', x: -5.2, y: 1.17, z: 3.2, rotY: Math.PI, scale: 1.1 },
-      { kind: 'pastry_display_case', x: 0.2, z: 3.0, rotY: Math.PI, scale: 1.05 },
+      // Espresso Bar & Bakery — custom Blender 3-group espresso machine & glass pastry vitrine facing customers (+Z)!
+      { kind: 'espresso_machine', x: -5.2, y: 1.17, z: 3.2, rotY: 0, scale: 1.1 },
+      { kind: 'pastry_display_case', x: 0.2, z: 3.0, rotY: 0, scale: 1.05 },
       { kind: 'coffee_cart', x: -5.6, z: 0.9, rotY: 0, scale: 0.92 },
       { kind: 'cake_display', x: -2.5, y: 1.17, z: 3.2, scale: 1.65 },
       { kind: 'bar_stool', x: -5.6, z: 4.9, scale: 1.05 },
@@ -883,6 +984,12 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.55,
         ambientIntensity: 0.95,
         floorRoughness: 0.32,
+        floorPbr: 'concrete',
+        floorTint: 0xd9dce3,
+        wallPbr: 'plaster',
+        wallTint: 0xfafbff,
+        crownColor: 0x262a35,
+        ceilingStyle: 'gallery-track',
       },
       {
         id: 'darkroom',
@@ -903,6 +1010,12 @@ export const INTERIORS: InteriorDef[] = [
         ambientIntensity: 0.35,
         floorRoughness: 0.1,
         floorMetalness: 0.35,
+        floorPbr: 'concrete',
+        floorTint: 0x161824,
+        wallPbr: 'concrete',
+        wallTint: 0x12141e,
+        crownColor: 0x2cf3ff,
+        ceilingStyle: 'trusses',
       },
       {
         id: 'studio',
@@ -922,6 +1035,13 @@ export const INTERIORS: InteriorDef[] = [
         lightIntensity: 1.4,
         ambientIntensity: 0.85,
         floorRoughness: 0.65,
+        floorPbr: 'parquet',
+        floorTint: 0xcfa782,
+        wallPbr: 'brick',
+        wallTint: 0xe6d4c8,
+        crownColor: 0x2e221b,
+        ceilingStyle: 'rafters',
+        sconceColor: 0xffe0ad,
       },
     ],
     doorways: [
@@ -1542,10 +1662,19 @@ interface BuiltNpcHandle {
   rig: HumanRigController | null;
 }
 
+interface PbrSurfaceBinding {
+  mat: THREE.MeshStandardMaterial;
+  key: InteriorTextureKey;
+  repeatX: number;
+  repeatY: number;
+  tintHex: number;
+}
+
 interface BuiltVenue {
   def: InteriorDef;
   group: THREE.Group;
   propsRoot: THREE.Group;
+  pbrBindings: PbrSurfaceBinding[];
   npcs: BuiltNpcHandle[];
   danceFloorMat?: THREE.MeshStandardMaterial;
   lasers?: THREE.Mesh[];
@@ -1557,16 +1686,89 @@ export interface InteriorSystemHandles {
   outdoorMarkersRoot: THREE.Group;
   attachGltfNpcs: (clonePedestrian: (variantIndex: number) => ClonedPerson | null) => void;
   attachGltfProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
+  applyPbrTextures: (texMap: InteriorTextureMap) => void;
   setActiveInterior: (id: InteriorId | null) => void;
   update: (elapsed: number, dt: number, activeId: InteriorId | null, playerX: number, playerZ: number) => void;
+}
+
+function addAreaRug(
+  group: THREE.Group,
+  cx: number,
+  cz: number,
+  w: number,
+  d: number,
+  mainHex: number,
+  borderHex: number,
+): void {
+  const outer = new THREE.Mesh(
+    new THREE.BoxGeometry(w, 0.024, d),
+    new THREE.MeshStandardMaterial({ color: borderHex, roughness: 0.92 }),
+  );
+  outer.position.set(cx, 0.012, cz);
+  const inner = new THREE.Mesh(
+    new THREE.BoxGeometry(w - 0.34, 0.028, d - 0.34),
+    new THREE.MeshStandardMaterial({ color: mainHex, roughness: 0.95 }),
+  );
+  inner.position.set(cx, 0.014, cz);
+  group.add(outer, inner);
+}
+
+function addArchitecturalWindow(
+  group: THREE.Group,
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+  h: number,
+  rotY: number,
+  frameHex: number,
+  glowHex: number,
+  cols = 3,
+): void {
+  const winGroup = new THREE.Group();
+  winGroup.position.set(x, y, z);
+  winGroup.rotation.y = rotY;
+
+  const frameMat = new THREE.MeshStandardMaterial({ color: frameHex, roughness: 0.35, metalness: 0.45 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: glowHex,
+    emissive: glowHex,
+    emissiveIntensity: 0.72,
+    roughness: 0.1,
+  });
+
+  // Glowing daylight / Miami sky pane
+  const pane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), glassMat);
+  winGroup.add(pane);
+
+  // Outer perimeter casing + sill
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 0.12, 0.14), frameMat);
+  topBar.position.set(0, h * 0.5, 0.04);
+  const botSill = new THREE.Mesh(new THREE.BoxGeometry(w + 0.28, 0.12, 0.22), frameMat);
+  botSill.position.set(0, -h * 0.5, 0.08);
+  winGroup.add(topBar, botSill);
+
+  for (let i = 0; i <= cols; i++) {
+    const mx = -w * 0.5 + (i / cols) * w;
+    const mull = new THREE.Mesh(new THREE.BoxGeometry(0.08, h + 0.06, 0.1), frameMat);
+    mull.position.set(mx, 0, 0.04);
+    winGroup.add(mull);
+  }
+  // Horizontal transom bar
+  const midBar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.09), frameMat);
+  midBar.position.set(0, h * 0.15, 0.04);
+  winGroup.add(midBar);
+
+  group.add(winGroup);
 }
 
 function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const group = new THREE.Group();
   group.position.set(0, INTERIOR_ORIGIN_Y, 0);
   group.visible = false;
+  const pbrBindings: PbrSurfaceBinding[] = [];
 
-  // 1. Build every individual room's floor, ceiling, and tailored lighting!
+  // 1. Build every individual room's PBR floor, architectural ceiling structure, & multi-point lighting!
   for (const room of def.rooms) {
     const rw = room.maxX - room.minX;
     const rd = room.maxZ - room.minZ;
@@ -1576,14 +1778,20 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const floorTex = createFloorTileTexture(room.floorColorA, room.floorColorB, 4);
     floorTex.repeat.set(Math.max(2, Math.round(rw / 3)), Math.max(2, Math.round(rd / 3)));
 
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(rw, rd),
-      new THREE.MeshStandardMaterial({
-        map: floorTex,
-        roughness: room.floorRoughness ?? 0.4,
-        metalness: room.floorMetalness ?? 0.08,
-      }),
-    );
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: floorTex,
+      roughness: room.floorRoughness ?? 0.4,
+      metalness: room.floorMetalness ?? 0.08,
+    });
+    pbrBindings.push({
+      mat: floorMat,
+      key: room.floorPbr,
+      repeatX: Math.max(2, rw / 2.2),
+      repeatY: Math.max(2, rd / 2.2),
+      tintHex: room.floorTint ?? 0xffffff,
+    });
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(rw, rd), floorMat);
     floor.rotation.x = -Math.PI * 0.5;
     floor.position.set(cx, 0, cz);
     group.add(floor);
@@ -1596,46 +1804,180 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     ceil.position.set(cx, room.height, cz);
     group.add(ceil);
 
-    // Room-specific overhead lighting
-    const roomLight = new THREE.PointLight(
-      room.lightColor,
-      room.lightIntensity * 20,
-      Math.max(rw, rd) * 1.4,
-      1.35,
-    );
-    roomLight.position.set(cx, room.height - 0.8, cz);
-    group.add(roomLight);
+    // Architectural Ceiling Structure tailored per room style!
+    const beamMat = new THREE.MeshStandardMaterial({
+      color: room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight' ? 0x452817 : room.crownColor ?? 0x262934,
+      roughness: room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.35 : 0.65,
+      metalness: room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.65 : 0.1,
+    });
+
+    if (room.ceilingStyle === 'coffered') {
+      // Art Deco coffered ceiling grid + recessed warm downlights
+      const stepsX = Math.max(2, Math.round(rw / 4.5));
+      for (let i = 1; i < stepsX; i++) {
+        const bx = room.minX + (i / stepsX) * rw;
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, rd - 0.2), beamMat);
+        beam.position.set(bx, room.height - 0.12, cz);
+        group.add(beam);
+      }
+      const stepsZ = Math.max(2, Math.round(rd / 4.5));
+      for (let j = 1; j < stepsZ; j++) {
+        const bz = room.minZ + (j / stepsZ) * rd;
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.2, 0.24, 0.28), beamMat);
+        beam.position.set(cx, room.height - 0.12, bz);
+        group.add(beam);
+      }
+    } else if (room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight') {
+      // Exposed timber ceiling rafters spanning across the room
+      const count = Math.max(3, Math.round(rd / 2.4));
+      for (let i = 1; i < count; i++) {
+        const bz = room.minZ + (i / count) * rd;
+        const rafter = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.2, 0.24, 0.18), beamMat);
+        rafter.position.set(cx, room.height - 0.14, bz);
+        group.add(rafter);
+      }
+    } else if (room.ceilingStyle === 'trusses') {
+      // Exposed industrial black steel ceiling trusses
+      for (let bz = room.minZ + 3.2; bz < room.maxZ - 2.0; bz += 4.5) {
+        const truss = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.4, 0.34, 0.28), beamMat);
+        truss.position.set(cx, room.height - 0.35, bz);
+        group.add(truss);
+      }
+    } else if (room.ceilingStyle === 'gallery-track') {
+      // Contemporary museum black track-lighting rails + glowing recessed cans
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x161820, metalness: 0.75, roughness: 0.3 });
+      const glowMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0 });
+      for (const offset of [-0.26, 0.26]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(rw - 2.4, 0.08, 0.1), railMat);
+        rail.position.set(cx, room.height - 0.16, cz + rd * offset);
+        group.add(rail);
+        for (let sx = room.minX + 2.8; sx <= room.maxX - 2.8; sx += 3.2) {
+          const spot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.18, 10), railMat);
+          spot.position.set(sx, room.height - 0.28, cz + rd * offset);
+          const bulb = new THREE.Mesh(new THREE.CircleGeometry(0.07, 10), glowMat);
+          bulb.rotation.x = Math.PI * 0.5;
+          bulb.position.set(sx, room.height - 0.38, cz + rd * offset);
+          group.add(spot, bulb);
+        }
+      }
+    } else if (room.ceilingStyle === 'neon-cove') {
+      // Glowing perimeter neon ceiling cove strips
+      const coveMat = new THREE.MeshBasicMaterial({ color: room.crownColor ?? 0xff2e93 });
+      const barN = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.6, 0.07, 0.08), coveMat);
+      barN.position.set(cx, room.height - 0.12, room.minZ + 0.14);
+      const barS = barN.clone();
+      barS.position.z = room.maxZ - 0.14;
+      group.add(barN, barS);
+    }
+
+    // Distributed 2-point warm/moody room lighting for even, natural illumination without harsh black corners
+    const spreadX = rw > rd ? rw * 0.24 : 0;
+    const spreadZ = rd >= rw ? rd * 0.24 : 0;
+    for (const sign of [-1, 1]) {
+      const pt = new THREE.PointLight(
+        room.lightColor,
+        room.lightIntensity * 14,
+        Math.max(rw, rd) * 1.45,
+        1.35,
+      );
+      pt.position.set(cx + sign * spreadX, room.height - 0.75, cz + sign * spreadZ);
+      group.add(pt);
+    }
   }
 
   // Venue-wide soft bounce fill
   const primaryRoom = def.rooms[0];
-  const hemi = new THREE.HemisphereLight(primaryRoom.lightColor, 0x202230, primaryRoom.ambientIntensity);
+  const hemi = new THREE.HemisphereLight(primaryRoom.lightColor, 0x2a2834, primaryRoom.ambientIntensity);
   group.add(hemi);
 
-  // 2. Build all perimeter & multi-room partition walls cleanly split around every doorway!
+  // 2. Build all perimeter & multi-room partition walls with photographic PBR textures,
+  //    architectural wainscoting, chair rail, baseboards, crown molding, & wall sconces!
   const wallSegs = computeRoomWallSegments(def.rooms, def.doorways);
-  const baseboardMat = new THREE.MeshStandardMaterial({ color: 0x221d26, roughness: 0.5, metalness: 0.2 });
+  const baseboardMat = new THREE.MeshStandardMaterial({ color: 0x221a16, roughness: 0.48, metalness: 0.15 });
+  const sconceMetalMat = new THREE.MeshStandardMaterial({ color: 0xd4a44a, metalness: 0.88, roughness: 0.22 });
 
   for (const seg of wallSegs) {
     const len = seg.end - seg.start;
     if (len < 0.05) continue;
     const mid = (seg.start + seg.end) * 0.5;
-    const mat = new THREE.MeshStandardMaterial({ color: seg.wallColor, roughness: 0.78 });
+    const room = seg.room;
 
-    const wallMesh = new THREE.Mesh(new THREE.PlaneGeometry(len, seg.height), mat);
-    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.06), baseboardMat);
+    const wallMat = new THREE.MeshStandardMaterial({ color: seg.wallColor, roughness: 0.82 });
+    pbrBindings.push({
+      mat: wallMat,
+      key: room.wallPbr,
+      repeatX: Math.max(1, len / 2.6),
+      repeatY: Math.max(1, seg.height / 2.6),
+      tintHex: room.wallTint ?? seg.wallColor,
+    });
 
+    const segGroup = new THREE.Group();
     if (seg.axis === 'x') {
-      wallMesh.position.set(seg.coord, seg.height * 0.5, mid);
-      wallMesh.rotation.y = seg.outwardSign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5;
-      baseboard.rotation.y = Math.PI * 0.5;
-      baseboard.position.set(seg.coord - seg.outwardSign * 0.03, 0.11, mid);
+      segGroup.position.set(seg.coord, 0, mid);
+      segGroup.rotation.y = seg.outwardSign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5;
     } else {
-      wallMesh.position.set(mid, seg.height * 0.5, seg.coord);
-      wallMesh.rotation.y = seg.outwardSign > 0 ? Math.PI : 0;
-      baseboard.position.set(mid, 0.11, seg.coord - seg.outwardSign * 0.03);
+      segGroup.position.set(mid, 0, seg.coord);
+      segGroup.rotation.y = seg.outwardSign > 0 ? Math.PI : 0;
     }
-    group.add(wallMesh, baseboard);
+
+    // Main PBR textured wall plane (faces local +Z inward into room)
+    const wallMesh = new THREE.Mesh(new THREE.PlaneGeometry(len, seg.height), wallMat);
+    wallMesh.position.set(0, seg.height * 0.5, 0);
+    segGroup.add(wallMesh);
+
+    // Baseboard trim
+    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(len, 0.2, 0.06), baseboardMat);
+    baseboard.position.set(0, 0.1, 0.03);
+    segGroup.add(baseboard);
+
+    // Architectural Wainscoting + Chair Rail (on Hotel, Café, VIP Bar walls!)
+    if (room.wainscotColor !== undefined) {
+      const wainMat = new THREE.MeshStandardMaterial({
+        color: room.wainscotColor,
+        roughness: 0.55,
+        metalness: 0.1,
+      });
+      const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(len, 1.05, 0.045), wainMat);
+      wainPanel.position.set(0, 0.54, 0.022);
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(len, 0.08, 0.09),
+        new THREE.MeshStandardMaterial({
+          color: room.crownColor ?? room.wainscotColor,
+          roughness: 0.32,
+          metalness: 0.45,
+        }),
+      );
+      rail.position.set(0, 1.08, 0.045);
+      segGroup.add(wainPanel, rail);
+    }
+
+    // Crown Molding along the top of every wall!
+    if (room.crownColor !== undefined) {
+      const crownMat = new THREE.MeshStandardMaterial({
+        color: room.crownColor,
+        roughness: 0.35,
+        metalness: 0.3,
+      });
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(len, 0.16, 0.12), crownMat);
+      crown.position.set(0, seg.height - 0.08, 0.06);
+      segGroup.add(crown);
+    }
+
+    // Architectural Wall Sconces spaced cleanly along longer walls!
+    if (room.sconceColor !== undefined && len >= 4.2) {
+      const glowMat = new THREE.MeshBasicMaterial({ color: room.sconceColor });
+      const sconceCount = Math.min(3, Math.floor(len / 4.2));
+      for (let si = 0; si < sconceCount; si++) {
+        const sx = -len * 0.5 + ((si + 0.5) / sconceCount) * len;
+        const backplate = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.36, 0.06), sconceMetalMat);
+        backplate.position.set(sx, 2.35, 0.04);
+        const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.24, 10), glowMat);
+        shade.position.set(sx, 2.42, 0.13);
+        segGroup.add(backplate, shade);
+      }
+    }
+
+    group.add(segGroup);
   }
 
   // 3. Build architectural Doorway Archways, Frames & Upper Header Transoms (zero gaps to void!)
@@ -1648,7 +1990,6 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       metalness: 0.65,
     });
 
-    // Find tallest adjacent room to seal transom header cleanly
     const adjacentRooms = def.rooms.filter((r) =>
       dw.axis === 'x'
         ? Math.abs(r.minX - dw.coord) < 0.1 || Math.abs(r.maxX - dw.coord) < 0.1
@@ -1733,7 +2074,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   exitRing.position.set(def.exitX, 0.04, def.exitZ);
   group.add(exitRing);
 
-  // 5. Architectural Built-Ins & Hero Setpieces (bars, counters, stages, panoramic windows, art canvases)
+  // 5. Coherent Room-Specific Architectural Setpieces (windows, rugs, feature walls, bars, kitchen hood!)
   let danceFloorMat: THREE.MeshStandardMaterial | undefined;
   let lasers: THREE.Mesh[] | undefined;
   let monolithMats: THREE.MeshStandardMaterial[] | undefined;
@@ -1743,7 +2084,29 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const marbleMat = new THREE.MeshStandardMaterial({ color: 0xf4eee6, roughness: 0.22, metalness: 0.08 });
 
   if (def.id === 'hotel-solaire') {
-    // Ocean Cocktail Lounge Mahogany Bar Counter (Atrium uses custom Blender hotel_reception_desk.glb!)
+    // Coherent Woven Area Rugs anchoring every seating & piano zone!
+    addAreaRug(group, -5.8, 7.4, 5.2, 3.8, 0x7b2839, 0xd9a84e); // West Atrium Lounge rug
+    addAreaRug(group, 5.8, 7.4, 5.2, 3.8, 0x7b2839, 0xd9a84e); // East Atrium Lounge rug
+    addAreaRug(group, 6.1, 1.5, 3.8, 3.8, 0x274c52, 0xd9a84e); // Grand Piano rug
+    addAreaRug(group, 0, -12.4, 5.8, 5.0, 0xdccbb4, 0x9e7d4b); // Penthouse Suite bed rug
+
+    // Check-In Feature Wall Behind Concierge Elena with Wood Slats & Brass "HOTEL SOLAIRE" Sign
+    const featureWall = new THREE.Mesh(new THREE.BoxGeometry(6.0, 4.4, 0.16), darkWoodMat);
+    featureWall.position.set(-5.9, 2.2, -1.88);
+    const hotelCrest = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.6, 1.1),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('HOTEL SOLAIRE', 'EST. 1938 · OCEAN DRIVE', '#2b1a14', '#ffe6b0', '#d9a84e'),
+      }),
+    );
+    hotelCrest.position.set(-5.9, 3.3, -1.78);
+    group.add(featureWall, hotelCrest);
+
+    // Tall Sunlit Ocean Drive Windows flanking the Atrium Front Entrance
+    addArchitecturalWindow(group, -6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
+    addArchitecturalWindow(group, 6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
+
+    // Ocean Cocktail Lounge Mahogany Bar Counter + Glowing Backlit Mirrored Liquor Wall!
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.2), darkWoodMat);
     bar.position.set(20.5, 0.55, 2.9);
     const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.1, 9.4), marbleMat);
@@ -1752,6 +2115,24 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     barFootRail.rotation.x = Math.PI * 0.5;
     barFootRail.position.set(19.52, 0.22, 2.9);
     group.add(bar, barTop, barFootRail);
+
+    const backMirror = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 2.8, 8.4),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd296,
+        emissive: 0xff9e4a,
+        emissiveIntensity: 0.42,
+        roughness: 0.1,
+        metalness: 0.85,
+      }),
+    );
+    backMirror.position.set(23.88, 2.3, 2.9);
+    group.add(backMirror);
+    for (const sy of [1.55, 2.2, 2.85]) {
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.06, 8.2), goldMat);
+      shelf.position.set(23.66, sy, 2.9);
+      group.add(shelf);
+    }
 
     // Penthouse Suite Panoramic Backlit Miami Ocean Sunset Window!
     const sunsetTex = createSunsetOceanViewTexture();
@@ -1782,7 +2163,11 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(col, cap);
     }
   } else if (def.id === 'club-neon') {
-    // Velvet Entry Tunnel Glowing Neon Ribs!
+    // Velvet Entry Tunnel Carpet Runner + Glowing Neon Ribs!
+    addAreaRug(group, 0, 14.4, 2.8, 7.8, 0x5c1138, 0xff2e93);
+    addAreaRug(group, -15.8, -6.2, 4.4, 3.6, 0x26113b, 0x2cf3ff);
+    addAreaRug(group, -15.8, 4.6, 4.4, 3.4, 0x26113b, 0xff2e93);
+
     for (let z = 11.5; z <= 17.5; z += 2.0) {
       const col = z % 4 === 1.5 ? 0xff2e93 : 0x2cf3ff;
       const ribMat = new THREE.MeshBasicMaterial({ color: col });
@@ -1803,7 +2188,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     stage.position.set(0, 0.45, -9.2);
     const backdrop = new THREE.Mesh(
       new THREE.PlaneGeometry(10.5, 4.5),
-      new THREE.MeshBasicMaterial({ map: createSignTexture('CLUB NEON', 'VICE WAVE 98.5 LIVE', '#0c071a', '#2cf3ff', '#ff2e93') }),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('CLUB NEON', 'VICE WAVE 98.5 LIVE', '#0c071a', '#2cf3ff', '#ff2e93'),
+      }),
     );
     backdrop.position.set(0, 3.6, -11.88);
     group.add(stage, backdrop);
@@ -1839,7 +2226,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       lasers.push(beam);
     }
 
-    // VIP Lounge Glowing Neon Bar Counter
+    // VIP Lounge Glowing Neon Bar Counter + Backlit Cyan Bottle Wall!
     const vipBar = new THREE.Mesh(
       new THREE.BoxGeometry(1.6, 1.1, 10.2),
       new THREE.MeshStandardMaterial({
@@ -1855,38 +2242,68 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       new THREE.MeshStandardMaterial({ color: 0x0b0d16, roughness: 0.12, metalness: 0.5 }),
     );
     vipBarTop.position.set(-21.3, 1.14, -1.0);
-    group.add(vipBar, vipBarTop);
+    const vipBackGlow = new THREE.Mesh(
+      new THREE.PlaneGeometry(9.2, 2.4),
+      new THREE.MeshBasicMaterial({ color: 0x221044 }),
+    );
+    vipBackGlow.rotation.y = Math.PI * 0.5;
+    vipBackGlow.position.set(-24.88, 2.3, -1.0);
+    group.add(vipBar, vipBarTop, vipBackGlow);
   } else if (def.id === 'cafe-habana') {
-    // Warm Espresso & Bakery Counter
+    // Warm Espresso & Bakery Counter with Brass Trim + Wall-Mounted Menu Board Behind Barista!
     const counter = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.08, 1.8), darkWoodMat);
     counter.position.set(-4.1, 0.54, 3.2);
     const counterTop = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.1, 2.0), marbleMat);
     counterTop.position.set(-4.1, 1.12, 3.2);
-    group.add(counter, counterTop);
+    const counterTrim = new THREE.Mesh(new THREE.BoxGeometry(5.26, 0.1, 1.86), goldMat);
+    counterTrim.position.set(-4.1, 0.92, 3.2);
+    group.add(counter, counterTop, counterTrim);
 
-    // Conservatory Overhead Skylight Beams
+    // Wall-mounted CAFÉ HABANA Menu Board directly behind Barista Sofia!
+    const menuSign = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.4, 1.35),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('CAFÉ HABANA MENU', 'CAFECITO $8 · CORTADITO · PASTELITOS $12', '#261a14', '#fff5e0', '#ffb347'),
+      }),
+    );
+    menuSign.position.set(-4.1, 2.65, 0.12);
+    group.add(menuSign);
+
+    // Sunlit Streetfront Café Windows flanking the front door + Conservatory Garden Windows!
+    addArchitecturalWindow(group, -4.8, 2.2, 10.9, 3.6, 2.4, Math.PI, 0x59341f, 0xfff0cc, 3);
+    addArchitecturalWindow(group, 4.8, 2.2, 10.9, 3.6, 2.4, Math.PI, 0x59341f, 0xfff0cc, 3);
+    addArchitecturalWindow(group, 15.0, 2.4, 10.9, 7.2, 2.6, Math.PI, 0x59341f, 0xfff2d2, 5);
+    addArchitecturalWindow(group, 21.9, 2.4, 4.5, 6.4, 2.6, -Math.PI * 0.5, 0x59341f, 0xfff2d2, 4);
+
+    // Conservatory Overhead Skylight Panels
     const skyLightMat = new THREE.MeshBasicMaterial({ color: 0xe6f8ff });
     for (const sx of [11.5, 15.0, 18.5]) {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 9.5), skyLightMat);
       panel.rotation.x = Math.PI * 0.5;
-      panel.position.set(sx, 4.76, 4.5);
+      panel.position.set(sx, 4.74, 4.5);
       group.add(panel);
     }
 
-    // Kitchen Stainless Prep Island
-    const steelMat = new THREE.MeshStandardMaterial({ color: 0xcfd6de, metalness: 0.8, roughness: 0.25 });
+    // Kitchen Stainless Prep Island + Overhead Commercial Stainless Range Hood!
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0xcfd6de, metalness: 0.85, roughness: 0.22 });
     const island = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.02, 1.6), steelMat);
     island.position.set(-0.9, 0.51, -5.3);
-    group.add(island);
+    const hoodCanopy = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.55, 1.7), steelMat);
+    hoodCanopy.position.set(-0.9, 2.95, -5.3);
+    const hoodDuct = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.9), steelMat);
+    hoodDuct.position.set(-0.9, 3.5, -5.3);
+    group.add(island, hoodCanopy, hoodDuct);
 
-    // Framed Vintage Havana Art on Conservatory Wall
+    // Framed Vintage Havana Art on Conservatory North Wall
     for (let i = 0; i < 3; i++) {
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.6, 0.08), darkWoodMat);
+      frame.position.set(10.8 + i * 4.0, 2.4, -1.9);
       const art = new THREE.Mesh(
         new THREE.PlaneGeometry(2.0, 1.4),
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(i + 1) }),
       );
-      art.position.set(10.8 + i * 4.0, 2.4, -1.88);
-      group.add(art);
+      art.position.set(10.8 + i * 4.0, 2.4, -1.85);
+      group.add(frame, art);
     }
   } else {
     // Wynwood Art Gallery — Main Atrium Dual Sculpture Pedestal
@@ -1897,7 +2314,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     plinth.position.set(0, 0.575, 1.1);
     group.add(plinth);
 
-    // Framed Miami Pop-Art Canvases across White-Cube Atrium Walls
+    // Framed Miami Pop-Art Canvases with Dark Museum Frames & White Wall Title Placards!
     const canvasSpots: [number, number, number, number][] = [
       [-6.5, 2.8, -5.88, 0],
       [6.5, 2.8, -5.88, 0],
@@ -1906,15 +2323,27 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       [-10.88, 2.8, -4.0, Math.PI * 0.5],
       [-10.88, 2.8, 6.2, Math.PI * 0.5],
     ];
+    const placardMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     canvasSpots.forEach(([x, y, z, ry], idx) => {
+      const frameGroup = new THREE.Group();
+      frameGroup.position.set(x, y, z);
+      frameGroup.rotation.y = ry;
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(3.64, 2.64, 0.1), doorFrameMat);
+      frame.position.z = -0.05;
       const art = new THREE.Mesh(
         new THREE.PlaneGeometry(3.4, 2.4),
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(idx) }),
       );
-      art.position.set(x, y, z);
-      art.rotation.y = ry;
-      group.add(art);
+      const placard = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 0.22), placardMat);
+      placard.position.set(1.55, -1.48, 0.01);
+      frameGroup.add(frame, art, placard);
+      group.add(frameGroup);
     });
+
+    // Tall Industrial Steel-Grid Loft Windows in Artist Studio Loft!
+    addArchitecturalWindow(group, -9.9, 2.6, -11.5, 5.4, 2.8, Math.PI * 0.5, 0x1b1e28, 0xffe4c4, 4);
+    addArchitecturalWindow(group, 9.9, 2.6, -11.5, 5.4, 2.8, -Math.PI * 0.5, 0x1b1e28, 0xffe4c4, 4);
+    addAreaRug(group, 6.2, -14.2, 4.8, 4.6, 0x3b2f45, 0xffcf5c);
 
     // Darkroom Wing: 4 Flanking Animated Neon Light Monoliths around the custom Blender kinetic sculpture!
     monolithMats = [];
@@ -1969,7 +2398,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     npcs.push({ def: nDef, root: npcRoot, rig: null });
   }
 
-  return { def, group, propsRoot, npcs, danceFloorMat, lasers, monolithMats, exitRing };
+  return { def, group, propsRoot, pbrBindings, npcs, danceFloorMat, lasers, monolithMats, exitRing };
 }
 
 export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles {
@@ -2051,6 +2480,29 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
           instance.rotation.y = slot.rotY;
           instance.scale.setScalar(slot.scale);
           sf.group.add(instance);
+        }
+      }
+    },
+
+    applyPbrTextures(texMap) {
+      const cloneWithRepeat = (base: THREE.Texture, rx: number, ry: number): THREE.Texture => {
+        const t = base.clone();
+        t.wrapS = THREE.RepeatWrapping;
+        t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(rx, ry);
+        t.needsUpdate = true;
+        return t;
+      };
+
+      for (const venue of venues.values()) {
+        for (const b of venue.pbrBindings) {
+          const pbr = texMap[b.key];
+          if (!pbr) continue;
+          b.mat.map = cloneWithRepeat(pbr.map, b.repeatX, b.repeatY);
+          b.mat.normalMap = cloneWithRepeat(pbr.normalMap, b.repeatX, b.repeatY);
+          b.mat.roughnessMap = cloneWithRepeat(pbr.roughnessMap, b.repeatX, b.repeatY);
+          b.mat.color.setHex(b.tintHex);
+          b.mat.needsUpdate = true;
         }
       }
     },

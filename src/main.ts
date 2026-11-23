@@ -40,7 +40,7 @@ import {
 import { RagdollPhysicsWorld } from './systems/ragdollWorld';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
-import { loadGameAssets, loadInteriorPropAssets } from './world/assets';
+import { loadGameAssets, loadInteriorPropAssets, loadInteriorTextures } from './world/assets';
 import { buildCityScene } from './world/cityBuilder';
 import {
   createCityBlueprint,
@@ -193,11 +193,14 @@ function bootstrap(): void {
     }
   });
 
-  // Load all 40 CC0 & custom Blender interior furniture & hero GLBs in parallel immediately!
+  // Load all 40 CC0 & custom Blender interior furniture/hero GLBs + 8 interior PBR texture sets immediately!
   void loadInteriorPropAssets().then((propsMap) => {
     if (propsMap.size > 0) {
       interiorSystem.attachGltfProps(propsMap);
     }
+  });
+  void loadInteriorTextures().then((texMap) => {
+    interiorSystem.applyPbrTextures(texMap);
   });
 
   const input = new InputManager(canvas);

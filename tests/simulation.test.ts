@@ -26,7 +26,7 @@ import {
   stepVehiclePhysics,
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
-import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS } from '../src/world/assets';
+import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS, INTERIOR_TEXTURE_KEYS } from '../src/world/assets';
 import { createCityBlueprint } from '../src/world/cityData';
 import {
   INTERIOR_ORIGIN_Y,
@@ -751,6 +751,14 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     const dracoDir = path.resolve(__dirname, '../public', DRACO_DECODER_PATH.replace(/^\/+/, ''));
     expect(fs.readFileSync(path.resolve(dracoDir, 'draco_decoder.wasm')).byteLength).toBeGreaterThan(50_000);
     expect(fs.readFileSync(path.resolve(dracoDir, 'draco_wasm_wrapper.js')).byteLength).toBeGreaterThan(10_000);
+
+    // All 8 photographic Poly Haven interior PBR texture sets (diffuse + normal + roughness) exist
+    const texDir = path.resolve(__dirname, '../public/assets/textures');
+    for (const key of INTERIOR_TEXTURE_KEYS) {
+      for (const map of ['diff', 'nor', 'rough']) {
+        expect(fs.readFileSync(path.resolve(texDir, `int_${key}_${map}.jpg`)).byteLength).toBeGreaterThan(1_000);
+      }
+    }
 
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
