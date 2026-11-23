@@ -1725,6 +1725,46 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       );
       lighthouseBeacon.scale.setScalar(0.55);
     }
+
+    const lampSrc = propsMap.get('prop_street_lamp');
+    if (lampSrc && slCount > 0) {
+      lampSrc.updateMatrixWorld(true);
+      let attachedLampMeshes = 0;
+      lampSrc.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const rawMat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        const mat = rawMat instanceof THREE.MeshStandardMaterial ? rawMat.clone() : rawMat;
+        const isGlow = mat instanceof THREE.MeshStandardMaterial && /LampGlow/i.test(mat.name);
+        if (isGlow && mat instanceof THREE.MeshStandardMaterial) {
+          streetLampMaterials.push(mat);
+        }
+        const geo = obj.geometry.clone();
+        geo.applyMatrix4(obj.matrixWorld);
+        const inst = new THREE.InstancedMesh(geo, mat, slCount);
+        inst.castShadow = !isGlow;
+        inst.receiveShadow = true;
+        blueprint.streetLights.forEach((sl, idx) => {
+          tmpObj.position.set(sl.x, sl.y, sl.z);
+          tmpObj.rotation.set(0, sl.yaw, 0);
+          tmpObj.scale.set(1, 1, 1);
+          tmpObj.updateMatrix();
+          inst.setMatrixAt(idx, tmpObj.matrix);
+          if (isGlow) {
+            tmpColor.setHex(sl.color);
+            inst.setColorAt(idx, tmpColor);
+          }
+        });
+        inst.instanceMatrix.needsUpdate = true;
+        if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+        worldPropsGltfRoot.add(inst);
+        attachedLampMeshes++;
+      });
+      if (attachedLampMeshes > 0) {
+        poleInst.visible = false;
+        armInst.visible = false;
+        bulbInst.visible = false;
+      }
+    }
   };
 
   const hideFallbackYachts = () => {

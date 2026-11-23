@@ -73,7 +73,14 @@ export type InteriorPropKind =
   | 'prop_beach_umbrella'
   | 'prop_beach_lounger'
   | 'prop_basketball_hoop'
-  | 'prop_lighthouse_pavilion';
+  | 'prop_lighthouse_pavilion'
+  | 'prop_park_bench'
+  | 'prop_fire_hydrant'
+  | 'prop_bougainvillea_planter'
+  | 'prop_sidewalk_cafe'
+  | 'prop_street_lamp'
+  | 'prop_traffic_signal'
+  | 'prop_bollard';
 
 export type NpcUniformKind = 'concierge' | 'bellhop' | 'maid' | 'bartender' | 'waiter' | 'security';
 
@@ -138,6 +145,13 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'prop_beach_lounger',
   'prop_basketball_hoop',
   'prop_lighthouse_pavilion',
+  'prop_park_bench',
+  'prop_fire_hydrant',
+  'prop_bougainvillea_planter',
+  'prop_sidewalk_cafe',
+  'prop_street_lamp',
+  'prop_traffic_signal',
+  'prop_bollard',
 ];
 
 export interface LoadedPbrTextures {

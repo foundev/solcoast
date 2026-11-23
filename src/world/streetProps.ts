@@ -401,6 +401,8 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   }
 
   // 2. Live Cycling Intersection Traffic Signal Gantries (shared exact coords with blueprint.propObbs!)
+  const fallbackSignalsRoot = new THREE.Group();
+  root.add(fallbackSignalsRoot);
   const signalBoxMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.5, metalness: 0.4 });
   for (const sigSpec of blueprint.trafficSignals) {
       const redMat = new THREE.MeshStandardMaterial({ color: 0x330808, emissive: 0xff1e2d, emissiveIntensity: 0.2 });
@@ -446,7 +448,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       gLensB.position.z = -0.16;
       gantry.add(rLensB, aLensB, gLensB);
 
-      root.add(gantry);
+      fallbackSignalsRoot.add(gantry);
   }
 
   // 3. Readable Neon Hotel & District Marquees (shared exact coords with blueprint.propObbs!)
@@ -523,6 +525,12 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   }
 
   // 5. Ocean Drive Sidewalk Cafés & Tropical Bougainvillea Planters (exact blueprint coords!)
+  const fallbackCafesRoot = new THREE.Group();
+  const fallbackPlantersRoot = new THREE.Group();
+  const fallbackBenchesRoot = new THREE.Group();
+  const fallbackHydrantsRoot = new THREE.Group();
+  root.add(fallbackCafesRoot, fallbackPlantersRoot, fallbackBenchesRoot, fallbackHydrantsRoot);
+
   for (const sc of blueprint.sidewalkCafes) {
     const cafe = new THREE.Group();
     cafe.position.set(sc.x, sc.y, sc.z);
@@ -544,7 +552,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     umbTop.position.y = 2.5;
     umbTop.castShadow = true;
     cafe.add(umbTop);
-    root.add(cafe);
+    fallbackCafesRoot.add(cafe);
   }
 
   for (const pl of blueprint.planters) {
@@ -563,7 +571,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       flower.position.set((rng() - 0.5) * 0.6, 1.05 + rng() * 0.14, b);
       planter.add(flower);
     }
-    root.add(planter);
+    fallbackPlantersRoot.add(planter);
   }
 
   // 6. Park Benches in Palm Plaza & along the Boardwalk + Fire Hydrants at street corners
@@ -583,7 +591,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       leg.position.set(lx, 0.24, 0);
       bench.add(leg);
     }
-    root.add(bench);
+    fallbackBenchesRoot.add(bench);
   }
 
   // Fire hydrants near avenue corners
@@ -596,7 +604,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), hydrantMat);
     cap.position.y = 0.74;
     hyd.add(cyl, cap);
-    root.add(hyd);
+    fallbackHydrantsRoot.add(hyd);
   }
 
   // 6b. Beach Loungers & Colorful Towels resting flush on the sculpted Sol Beach dunes
@@ -706,6 +714,141 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           gltfStreetPropsRoot.add(inst);
         }
         fallbackLoungersRoot.visible = false;
+      }
+
+      const benchSrc = propsMap.get('prop_park_bench');
+      if (benchSrc) {
+        for (const bc of blueprint.benches) {
+          const inst = benchSrc.clone(true);
+          inst.position.set(bc.x, bc.y, bc.z);
+          inst.rotation.y = bc.yaw;
+          inst.traverse((obj) => {
+            if (obj instanceof THREE.Mesh) {
+              obj.castShadow = true;
+              obj.receiveShadow = true;
+            }
+          });
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackBenchesRoot.visible = false;
+      }
+
+      const hydrantSrc = propsMap.get('prop_fire_hydrant');
+      if (hydrantSrc) {
+        for (const hy of blueprint.hydrants) {
+          const inst = hydrantSrc.clone(true);
+          inst.position.set(hy.x, hy.y, hy.z);
+          inst.traverse((obj) => {
+            if (obj instanceof THREE.Mesh) {
+              obj.castShadow = true;
+              obj.receiveShadow = true;
+            }
+          });
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackHydrantsRoot.visible = false;
+      }
+
+      const planterSrc = propsMap.get('prop_bougainvillea_planter');
+      if (planterSrc) {
+        for (const pl of blueprint.planters) {
+          const inst = planterSrc.clone(true);
+          inst.position.set(pl.x, pl.y, pl.z);
+          inst.traverse((obj) => {
+            if (obj instanceof THREE.Mesh) {
+              obj.castShadow = true;
+              obj.receiveShadow = true;
+            }
+          });
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackPlantersRoot.visible = false;
+      }
+
+      const cafeSrc = propsMap.get('prop_sidewalk_cafe');
+      if (cafeSrc) {
+        for (const sc of blueprint.sidewalkCafes) {
+          const inst = cafeSrc.clone(true);
+          inst.position.set(sc.x, sc.y, sc.z);
+          inst.traverse((obj) => {
+            if (!(obj instanceof THREE.Mesh)) return;
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            const cloned = mats.map((m) => {
+              if (m instanceof THREE.MeshStandardMaterial && /TintCanopy/i.test(m.name)) {
+                const c = m.clone();
+                c.color.setHex(sc.color);
+                return c;
+              }
+              return m;
+            });
+            obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
+          });
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackCafesRoot.visible = false;
+      }
+
+      const bollardSrc = propsMap.get('prop_bollard');
+      if (bollardSrc && bollardMatrices.length > 0) {
+        bollardSrc.updateMatrixWorld(true);
+        let attachedBollards = 0;
+        bollardSrc.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return;
+          const geo = obj.geometry.clone();
+          geo.applyMatrix4(obj.matrixWorld);
+          const inst = new THREE.InstancedMesh(geo, obj.material, bollardMatrices.length);
+          inst.castShadow = true;
+          inst.receiveShadow = true;
+          bollardMatrices.forEach((m, i) => inst.setMatrixAt(i, m));
+          inst.instanceMatrix.needsUpdate = true;
+          gltfStreetPropsRoot.add(inst);
+          attachedBollards++;
+        });
+        if (attachedBollards > 0) {
+          bollardInst.visible = false;
+        }
+      }
+
+      const signalSrc = propsMap.get('prop_traffic_signal');
+      if (signalSrc && blueprint.trafficSignals.length > 0) {
+        signals.length = 0;
+        for (const sigSpec of blueprint.trafficSignals) {
+          const inst = signalSrc.clone(true);
+          inst.position.set(sigSpec.x, sigSpec.y, sigSpec.z);
+          let redMat: THREE.MeshStandardMaterial | null = null;
+          let amberMat: THREE.MeshStandardMaterial | null = null;
+          let greenMat: THREE.MeshStandardMaterial | null = null;
+          inst.traverse((obj) => {
+            if (!(obj instanceof THREE.Mesh)) return;
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            const cloned = mats.map((m) => {
+              if (!(m instanceof THREE.MeshStandardMaterial)) return m;
+              if (/SigRed/i.test(m.name)) {
+                redMat = redMat ?? m.clone();
+                return redMat;
+              }
+              if (/SigAmber/i.test(m.name)) {
+                amberMat = amberMat ?? m.clone();
+                return amberMat;
+              }
+              if (/SigGreen/i.test(m.name)) {
+                greenMat = greenMat ?? m.clone();
+                return greenMat;
+              }
+              return m;
+            });
+            obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
+          });
+          if (redMat && amberMat && greenMat) {
+            signals.push({ redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
+          }
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackSignalsRoot.visible = false;
       }
     },
     update(elapsed: number, nightFactor: number) {
