@@ -472,8 +472,9 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       return idx;
     };
 
-    const signPostGeo = new THREE.CylinderGeometry(0.055, 0.065, 3.5, 8);
-    signPostGeo.translate(0, 1.75, 0);
+    // Steel sign post terminates cleanly at y = 2.97m right below the lower blade (never pierces or chops the sign text!)
+    const signPostGeo = new THREE.CylinderGeometry(0.052, 0.064, 2.97, 8);
+    signPostGeo.translate(0, 1.485, 0);
     const signPostInst = new THREE.InstancedMesh(signPostGeo, poleMat, blueprint.streetSigns.length);
     signPostInst.castShadow = false;
 
@@ -521,9 +522,12 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       const aveSlot = ensureAtlasSlot(ss.avenueName, ss.style);
       const stSlot = ensureAtlasSlot(ss.streetName, ss.style);
 
-      // Lower blade runs N-S along the Avenue; upper perpendicular blade runs E-W along the Cross-Street
-      pushSignBlade(ss.x, ss.y + 3.06, ss.z, Math.PI * 0.5, aveSlot);
-      pushSignBlade(ss.x, ss.y + 3.38, ss.z, 0, stSlot);
+      // Stacked top-mount street blades: lower Avenue blade (2.97..3.27m) + cross-coupler (3.27..3.31m) + upper Street blade (3.31..3.61m)
+      pushSignBlade(ss.x, ss.y + 3.12, ss.z, Math.PI * 0.5, aveSlot);
+      const coupler = new THREE.BoxGeometry(0.14, 0.04, 0.14);
+      coupler.translate(ss.x, ss.y + 3.29, ss.z);
+      bladeEdgeGeos.push(coupler);
+      pushSignBlade(ss.x, ss.y + 3.46, ss.z, 0, stSlot);
     });
     signPostInst.instanceMatrix.needsUpdate = true;
     root.add(signPostInst);
