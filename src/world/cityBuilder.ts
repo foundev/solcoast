@@ -2175,42 +2175,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   lotGroup.add(parkedLotCarsRoot);
   root.add(lotGroup);
 
-  const attachParkedLotCars = (cloneCar: (kind: CarModelKind) => THREE.Group | null) => {
-    const carGlassMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0b1524,
-      roughness: 0.05,
-      metalness: 0.78,
-      transparent: true,
-      opacity: 0.82,
-      clearcoat: 1.0,
-    });
-    for (const pc of blueprint.parkedLotCars) {
-      const model = cloneCar(pc.modelKind);
-      if (!model) continue;
-      const paintMat = new THREE.MeshPhysicalMaterial({
-        color: pc.paintHex,
-        roughness: 0.18,
-        metalness: 0.55,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.08,
-      });
-      model.traverse((obj) => {
-        if (!(obj instanceof THREE.Mesh)) return;
-        obj.castShadow = false;
-        obj.receiveShadow = true;
-        const matName = Array.isArray(obj.material) ? '' : (obj.material?.name ?? '').toLowerCase();
-        if (matName === 'paint' || matName.startsWith('body paint')) {
-          obj.material = paintMat;
-        } else if (matName.startsWith('glass') || matName.includes('tinted glass')) {
-          obj.material = carGlassMat;
-        }
-      });
-      const holder = new THREE.Group();
-      holder.position.set(pc.x, pc.y, pc.z);
-      holder.rotation.y = -pc.yaw;
-      holder.add(model);
-      parkedLotCarsRoot.add(holder);
-    }
+  const attachParkedLotCars = (_cloneCar: (kind: CarModelKind) => THREE.Group | null) => {
+    // All 7 Club Neon VIP Parking Lot cars are now spawned as real drivable VehicleStates in main.ts!
   };
 
   const setActiveInteriorBuilding = (_interiorId: string | null) => {

@@ -106,6 +106,73 @@ export function createTrafficCars(nodes: TrafficNode[], count = 18): TrafficCarS
   return cars;
 }
 
+export function findNearestTrafficCar(
+  x: number,
+  z: number,
+  cars: TrafficCarState[],
+  maxRange = 5.8,
+): { car: TrafficCarState; dist: number } | null {
+  let best: TrafficCarState | null = null;
+  let bestDist = maxRange;
+  for (const c of cars) {
+    const d = distXZ(x, z, c.x, c.z);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best ? { car: best, dist: bestDist } : null;
+}
+
+/**
+ * Relocates a commandeered AI traffic car slot to a distant road intersection (>220m away)
+ * so the player drives the taken car as a full VehicleState while street traffic stays lively.
+ */
+export function relocateTrafficCarAway(
+  car: TrafficCarState,
+  nodes: TrafficNode[],
+  avoidX: number,
+  avoidZ: number,
+): void {
+  if (nodes.length === 0) return;
+  let chosenIdx = -1;
+  let bestDistSq = -1;
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.neighbors.length === 0) continue;
+    const dSq = (n.x - avoidX) * (n.x - avoidX) + (n.z - avoidZ) * (n.z - avoidZ);
+    if (dSq > 240 * 240 && dSq < 460 * 460) {
+      chosenIdx = i;
+      break;
+    }
+    if (dSq > bestDistSq) {
+      bestDistSq = dSq;
+      chosenIdx = i;
+    }
+  }
+  if (chosenIdx < 0) chosenIdx = 0;
+  const from = nodes[chosenIdx];
+  if (from.neighbors.length === 0) return;
+  const toIdx = from.neighbors[car.id % from.neighbors.length];
+  const to = nodes[toIdx];
+  const pos = lanePosition(from, to, 0.25);
+  car.fromNode = chosenIdx;
+  car.toNode = toIdx;
+  car.progress = 0.25;
+  car.x = pos.x;
+  car.z = pos.z;
+  car.y = getGroundHeight(pos.x, pos.z);
+  car.yaw = pos.yaw;
+  car.yawRate = 0;
+  car.vx = Math.sin(pos.yaw) * car.cruiseSpeed;
+  car.vz = -Math.cos(pos.yaw) * car.cruiseSpeed;
+  car.speed = car.cruiseSpeed;
+  car.stunnedTimer = 0;
+  car.pitchTilt = 0;
+  car.rollTilt = 0;
+  car.suspOffset = 0;
+}
+
 function lanePosition(
   from: TrafficNode,
   to: TrafficNode,

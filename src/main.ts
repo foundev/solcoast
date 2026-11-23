@@ -17,12 +17,21 @@ import {
   stepPlayerOnFoot,
   type PlayerState,
 } from './entities/player';
-import { createTrafficCars, createTrafficMeshes, stepTraffic } from './entities/traffic';
+import {
+  createTrafficCars,
+  createTrafficMeshes,
+  findNearestTrafficCar,
+  relocateTrafficCarAway,
+  stepTraffic,
+} from './entities/traffic';
 import {
   DEFAULT_VEHICLES,
   PAINT_FINISHES,
+  createActiveHeadlightRig,
+  createVehicleConfigForModel,
   createVehicleMesh,
   createVehicleState,
+  getModelDisplayName,
   resolveVehiclePairCollisions,
   stepVehiclePhysics,
   type VehicleMeshHandles,
@@ -132,12 +141,25 @@ async function bootstrap(): Promise<void> {
   const beaconRenderer = createMissionBeacons(scene);
   const interiorSystem = createInteriorSystem(scene);
 
-  // Create sculpted multi-station lofted modern vehicles
-  const vehicles: VehicleState[] = DEFAULT_VEHICLES.map(createVehicleState);
+  // Create all drivable vehicles: 8 coastal fleet cars + 7 Club Neon VIP Parking Lot cars!
+  const vipLotConfigs = blueprint.parkedLotCars.map((pc, idx) =>
+    createVehicleConfigForModel(
+      `vip-lot-${idx}`,
+      pc.modelKind,
+      pc.x,
+      pc.z,
+      pc.yaw,
+      `VIP ${getModelDisplayName(pc.modelKind)}`,
+      pc.paintHex,
+    ),
+  );
+  const vehicles: VehicleState[] = [...DEFAULT_VEHICLES, ...vipLotConfigs].map(createVehicleState);
   const vehicleMeshes = new Map<string, VehicleMeshHandles>();
   for (const v of vehicles) {
     vehicleMeshes.set(v.id, createVehicleMesh(v, scene));
   }
+  const activeHeadlights = createActiveHeadlightRig(scene);
+  let commandeeredCounter = 0;
 
   // Player, missions & persistent world state
   const missions = new MissionManager();
@@ -164,14 +186,19 @@ async function bootstrap(): Promise<void> {
         target.yaw = sv.yaw;
         target.paintIndex = sv.paintIndex;
         target.odometerMeters = sv.odometerMeters;
-        vehicleMeshes.get(target.id)?.applyPaint(target.paintIndex);
+        if (target.config.customColorHex === undefined || sv.paintIndex !== target.config.defaultPaintIndex) {
+          vehicleMeshes.get(target.id)?.applyPaint(target.paintIndex);
+        }
       }
     }
     player.x = saved.player.x;
     player.y = saved.player.y;
     player.z = saved.player.z;
     player.yaw = saved.player.yaw;
-    player.vehicleId = saved.player.vehicleId;
+    player.vehicleId =
+      saved.player.vehicleId && vehicles.some((v) => v.id === saved.player.vehicleId)
+        ? saved.player.vehicleId
+        : null;
     player.walkedMeters = saved.player.walkedMeters;
     saved.completedMissions.forEach((id) => missions.completedIds.add(id));
     Object.assign(missions.bestTimes, saved.bestTimes);
@@ -707,6 +734,7 @@ async function bootstrap(): Promise<void> {
         for (const v of vehicles) {
           vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, false);
         }
+        activeHeadlights.sync(null, skyRes.nightFactor);
         trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, pWorld.x, pWorld.z);
         pedestrianMeshes.syncFromState(pedestrians, dt, pWorld.x, pWorld.z, ragdollWorld);
         boatMeshes.update(elapsed, dt, skyRes.nightFactor);
@@ -798,6 +826,9 @@ async function bootstrap(): Promise<void> {
     const nearbyEntrance =
       !activeVehicle && !player.rapierControlled ? findNearbyBuildingEntrance(player.x, player.z) : null;
     const nearbyCar = activeVehicle ? null : findNearestVehicle(player.x, player.z, vehicles);
+    const nearbyTraffic = activeVehicle ? null : findNearestTrafficCar(player.x, player.z, trafficCars, 5.8);
+    const preferTraffic =
+      nearbyTraffic !== null && (nearbyCar === null || nearbyTraffic.dist < nearbyCar.dist);
 
     let promptText: string | null = null;
     if (nearbyMission) {
@@ -805,6 +836,8 @@ async function bootstrap(): Promise<void> {
       promptText = `Start Mission: ${nearbyMission.title}${doneTag} — $${nearbyMission.rewardCash.toLocaleString()}`;
     } else if (nearbyEntrance) {
       promptText = `Enter ${nearbyEntrance.name}`;
+    } else if (!activeVehicle && preferTraffic && nearbyTraffic) {
+      promptText = `Take ${getModelDisplayName(nearbyTraffic.car.modelKind)}`;
     } else if (!activeVehicle && nearbyCar) {
       promptText = `Enter ${nearbyCar.vehicle.name}`;
     } else if (activeVehicle && Math.abs(activeVehicle.speed) < 3.5) {
@@ -906,6 +939,60 @@ async function bootstrap(): Promise<void> {
         } else {
           hud.showToast('Slow down to exit the vehicle!', 'warn');
         }
+      } else if (preferTraffic && nearbyTraffic && !player.rapierControlled) {
+        // Commandeer any roaming AI traffic car seamlessly into a full drivable VehicleState!
+        const tc = nearbyTraffic.car;
+        const newId = `street-car-${++commandeeredCounter}`;
+        const cfg = createVehicleConfigForModel(
+          newId,
+          tc.modelKind,
+          tc.x,
+          tc.z,
+          tc.yaw,
+          undefined,
+          tc.color,
+        );
+        const promoted = createVehicleState(cfg);
+        promoted.y = tc.y;
+        promoted.vx = tc.vx * 0.35;
+        promoted.vz = tc.vz * 0.35;
+        promoted.speed = tc.speed * 0.35;
+        promoted.pitchTilt = tc.pitchTilt;
+        promoted.rollTilt = tc.rollTilt;
+
+        const meshHandle = createVehicleMesh(promoted, scene);
+        const carModel = assets.cloneCarModel(tc.modelKind);
+        if (carModel) {
+          meshHandle.attachGltfCar(carModel, tc.modelKind === 'ferrari');
+        }
+        vehicles.push(promoted);
+        vehicleMeshes.set(promoted.id, meshHandle);
+
+        // Relocate the AI traffic slot to a distant road so street traffic stays lively
+        relocateTrafficCarAway(tc, blueprint.trafficNodes, player.x, player.z);
+
+        // Keep at most 12 dynamically commandeered street cars alive so memory/draws stay bounded
+        const baseFleetCount = DEFAULT_VEHICLES.length + vipLotConfigs.length;
+        if (vehicles.length > baseFleetCount + 12) {
+          const evictIdx = vehicles.findIndex(
+            (v, idx) => idx >= baseFleetCount && v.id !== promoted.id && distXZ(v.x, v.z, player.x, player.z) > 60,
+          );
+          if (evictIdx >= 0) {
+            const [oldV] = vehicles.splice(evictIdx, 1);
+            vehicleMeshes.get(oldV.id)?.dispose();
+            vehicleMeshes.delete(oldV.id);
+          }
+        }
+
+        player.vehicleId = promoted.id;
+        player.x = promoted.x;
+        player.y = promoted.y;
+        player.z = promoted.z;
+        player.yaw = promoted.yaw;
+        activeVehicle = promoted;
+        sound.playChime('enter');
+        hud.showToast(`Took ${promoted.name}!`, 'info');
+        persistNow(false);
       } else if (nearbyCar && !player.rapierControlled) {
         player.vehicleId = nearbyCar.vehicle.id;
         player.x = nearbyCar.vehicle.x;
@@ -1126,6 +1213,7 @@ async function bootstrap(): Promise<void> {
       const occupied = activeVehicle !== null && activeVehicle.id === v.id;
       vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
     }
+    activeHeadlights.sync(activeVehicle, skyRes.nightFactor);
     const activeBodyGroup = activeVehicle ? (vehicleMeshes.get(activeVehicle.id)?.bodyGroup ?? null) : null;
     playerMesh.syncFromState(
       player,
@@ -1198,6 +1286,7 @@ async function bootstrap(): Promise<void> {
   for (const v of vehicles) {
     vehicleMeshes.get(v.id)?.syncFromState(v, initSky.nightFactor, 0.016, initVehicle !== null && initVehicle.id === v.id);
   }
+  activeHeadlights.sync(initVehicle, initSky.nightFactor);
   const initBodyGroup = initVehicle ? (vehicleMeshes.get(initVehicle.id)?.bodyGroup ?? null) : null;
   playerMesh.syncFromState(player, 0, 0.016, initVehicle, initBodyGroup, false);
   trafficMeshes.syncFromState(trafficCars, initSky.nightFactor, player.x, player.z);

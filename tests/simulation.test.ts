@@ -16,11 +16,13 @@ import {
   findNearestVehicle,
   stepPlayerOnFoot,
 } from '../src/entities/player';
-import { createTrafficCars, stepTraffic } from '../src/entities/traffic';
+import { createTrafficCars, findNearestTrafficCar, relocateTrafficCarAway, stepTraffic } from '../src/entities/traffic';
 import {
   DEFAULT_VEHICLES,
   computeGear,
+  createVehicleConfigForModel,
   createVehicleState,
+  getModelDisplayName,
   resolveVehiclePairCollisions,
   speedToMph,
   stepVehiclePhysics,
@@ -1107,6 +1109,46 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       expect(Number.isFinite(tc.yaw)).toBe(true);
       expect(Number.isFinite(tc.pitchTilt)).toBe(true);
       expect(Number.isFinite(tc.rollTilt)).toBe(true);
+    }
+  });
+
+  it('allows entering any roaming AI traffic car or Club Neon VIP lot car and relocates the AI traffic slot far away', () => {
+    const traffic = createTrafficCars(blueprint.trafficNodes, 18);
+    const target = traffic[3];
+    const px = target.x + 2.5;
+    const pz = target.z;
+    const found = findNearestTrafficCar(px, pz, traffic, 5.8);
+    expect(found).not.toBeNull();
+    expect(found!.car.id).toBe(target.id);
+
+    // Promote traffic car into a full drivable VehicleState preserving its exact color & pose
+    const cfg = createVehicleConfigForModel(
+      'street-test-1',
+      found!.car.modelKind,
+      found!.car.x,
+      found!.car.z,
+      found!.car.yaw,
+      undefined,
+      found!.car.color,
+    );
+    const drivable = createVehicleState(cfg);
+    expect(drivable.name).toBe(getModelDisplayName(found!.car.modelKind));
+    expect(drivable.config.customColorHex).toBe(found!.car.color);
+
+    // Relocate AI traffic slot well away from player so street traffic stays full
+    relocateTrafficCarAway(target, blueprint.trafficNodes, px, pz);
+    expect(Math.hypot(target.x - px, target.z - pz)).toBeGreaterThan(200);
+    expect(Number.isFinite(target.x) && Number.isFinite(target.z)).toBe(true);
+
+    // Every Club Neon VIP parking lot car converts cleanly into a drivable VehicleState
+    expect(blueprint.parkedLotCars.length).toBeGreaterThanOrEqual(7);
+    for (let i = 0; i < blueprint.parkedLotCars.length; i++) {
+      const pc = blueprint.parkedLotCars[i];
+      const v = createVehicleState(
+        createVehicleConfigForModel(`vip-lot-${i}`, pc.modelKind, pc.x, pc.z, pc.yaw, undefined, pc.paintHex),
+      );
+      expect(v.config.customColorHex).toBe(pc.paintHex);
+      expect(Number.isFinite(v.y)).toBe(true);
     }
   });
 });

@@ -54,6 +54,7 @@ export interface VehicleConfig {
   style: VehicleBodyStyle;
   modelKind: CarModelKind;
   defaultPaintIndex: number;
+  customColorHex?: number;
   spawnX: number;
   spawnZ: number;
   spawnYaw: number;
@@ -61,6 +62,51 @@ export interface VehicleConfig {
   accel: number;
   brakeDecel: number;
   turnRate: number;
+}
+
+const MODEL_SPEC_TABLE: Record<
+  CarModelKind,
+  { name: string; style: VehicleBodyStyle; maxSpeed: number; accel: number; brakeDecel: number; turnRate: number }
+> = {
+  ferrari: { name: 'Solstice GT', style: 'supercar', maxSpeed: 54, accel: 24, brakeDecel: 38, turnRate: 2.35 },
+  spyder: { name: 'Coastal Spyder', style: 'spyder', maxSpeed: 52, accel: 23, brakeDecel: 37, turnRate: 2.45 },
+  gt: { name: 'Street GT', style: 'coupe', maxSpeed: 53, accel: 25, brakeDecel: 38, turnRate: 2.4 },
+  coupe: { name: 'Miami GT Coupe', style: 'coupe', maxSpeed: 52, accel: 24, brakeDecel: 37, turnRate: 2.4 },
+  jdm: { name: 'Biscayne JDM', style: 'coupe', maxSpeed: 51, accel: 24, brakeDecel: 37, turnRate: 2.5 },
+  ev: { name: 'Metro EV', style: 'sedan', maxSpeed: 50, accel: 26, brakeDecel: 36, turnRate: 2.15 },
+  taxi: { name: 'Sol City Taxi', style: 'sedan', maxSpeed: 47, accel: 21, brakeDecel: 35, turnRate: 2.2 },
+  suv: { name: 'Coastal SUV', style: 'sedan', maxSpeed: 46, accel: 20, brakeDecel: 34, turnRate: 2.05 },
+};
+
+export function getModelDisplayName(kind: CarModelKind): string {
+  return MODEL_SPEC_TABLE[kind].name;
+}
+
+export function createVehicleConfigForModel(
+  id: string,
+  modelKind: CarModelKind,
+  spawnX: number,
+  spawnZ: number,
+  spawnYaw: number,
+  customName?: string,
+  customColorHex?: number,
+): VehicleConfig {
+  const spec = MODEL_SPEC_TABLE[modelKind];
+  return {
+    id,
+    name: customName ?? spec.name,
+    style: spec.style,
+    modelKind,
+    defaultPaintIndex: 0,
+    customColorHex,
+    spawnX,
+    spawnZ,
+    spawnYaw,
+    maxSpeed: spec.maxSpeed,
+    accel: spec.accel,
+    brakeDecel: spec.brakeDecel,
+    turnRate: spec.turnRate,
+  };
 }
 
 export const DEFAULT_VEHICLES: VehicleConfig[] = [
@@ -645,6 +691,45 @@ interface DriftSmokeParticle {
   maxAge: number;
 }
 
+export interface ActiveHeadlightRig {
+  spot: THREE.SpotLight;
+  target: THREE.Object3D;
+  sync: (activeVehicle: VehicleState | null, nightFactor: number) => void;
+}
+
+/** Single shared SpotLight rig attached dynamically to whichever car the player is driving (1 SpotLight total!) */
+export function createActiveHeadlightRig(scene: THREE.Scene): ActiveHeadlightRig {
+  const spot = new THREE.SpotLight(0xe8f9ff, 0, 62, Math.PI * 0.26, 0.52, 1.2);
+  const target = new THREE.Object3D();
+  spot.target = target;
+  scene.add(spot);
+  scene.add(target);
+
+  return {
+    spot,
+    target,
+    sync(activeVehicle, nightFactor) {
+      if (!activeVehicle || !activeVehicle.headlightsOn || nightFactor <= 0.08) {
+        spot.intensity = 0;
+        return;
+      }
+      const fwd = forwardFromYaw(activeVehicle.yaw);
+      spot.position.set(
+        activeVehicle.x + fwd.x * 2.35,
+        activeVehicle.y + 0.85 + activeVehicle.suspOffset,
+        activeVehicle.z + fwd.z * 2.35,
+      );
+      target.position.set(
+        activeVehicle.x + fwd.x * 28,
+        activeVehicle.y + 0.08,
+        activeVehicle.z + fwd.z * 28,
+      );
+      target.updateMatrixWorld();
+      spot.intensity = 28 * nightFactor;
+    },
+  };
+}
+
 export interface VehicleMeshHandles {
   root: THREE.Group;
   bodyGroup: THREE.Group;
@@ -653,14 +738,13 @@ export interface VehicleMeshHandles {
   caliperMaterial: THREE.MeshStandardMaterial;
   brakeLightMaterial: THREE.MeshStandardMaterial;
   headlightMaterial: THREE.MeshStandardMaterial;
-  headlightSpot: THREE.SpotLight;
-  headlightTarget: THREE.Object3D;
   wheelMeshes: THREE.Object3D[];
   frontWheelPivots: THREE.Object3D[];
   syncFromState: (state: VehicleState, nightFactor: number, dt?: number, isOccupied?: boolean) => void;
   applyPaint: (paintIndex: number) => void;
   attachGltfSupercar: (ferrariRoot: THREE.Group) => void;
   attachGltfCar: (carRoot: THREE.Group, isFerrari?: boolean) => void;
+  dispose: () => void;
 }
 
 let sharedContactShadowTex: THREE.CanvasTexture | null = null;
@@ -679,10 +763,11 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
   root.add(bodyGroup);
 
   const finish = PAINT_FINISHES[state.paintIndex % PAINT_FINISHES.length];
+  const initialColorHex = state.config.customColorHex ?? finish.hex;
 
   // True high-gloss metallic automotive clearcoat paint reflecting PMREM sky & clouds!
   const paintMaterial = new THREE.MeshPhysicalMaterial({
-    color: finish.hex,
+    color: initialColorHex,
     metalness: 0.72,
     roughness: 0.14,
     clearcoat: 1.0,
@@ -1021,15 +1106,6 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     }
   }
 
-  // Real dynamic headlight beam projecting ahead on the road
-  const headlightSpot = new THREE.SpotLight(0xe8f9ff, 0, 62, Math.PI * 0.26, 0.52, 1.2);
-  headlightSpot.position.set(0, 0.85, -2.35);
-  const headlightTarget = new THREE.Object3D();
-  headlightTarget.position.set(0, 0.08, -28);
-  root.add(headlightSpot);
-  root.add(headlightTarget);
-  headlightSpot.target = headlightTarget;
-
   // Drift tire smoke + persistent asphalt skid marks ring buffer!
   const smokePool: DriftSmokeParticle[] = [];
   const skidMarks: THREE.Mesh[] = [];
@@ -1069,9 +1145,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       w.rotation.x = gltfWheelBaseRotX - s.wheelSpin;
     }
 
-    const lightsActive = s.headlightsOn && nightFactor > 0.08;
     headlightMaterial.emissiveIntensity = s.headlightsOn ? 1.5 + nightFactor * 2.6 : 0.2;
-    headlightSpot.intensity = lightsActive ? 28 * nightFactor : 0;
     brakeLightMaterial.emissiveIntensity = s.braking ? 4.4 : 0.95 + nightFactor * 1.15;
 
     for (const sp of headGlowSprites) {
@@ -1246,6 +1320,14 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
 
   const attachGltfSupercar = (ferrariRoot: THREE.Group) => attachGltfCar(ferrariRoot, true);
 
+  const dispose = () => {
+    scene.remove(root);
+    for (const sm of skidMarks) scene.remove(sm);
+    for (const p of smokePool) scene.remove(p.sprite);
+    skidMarks.length = 0;
+    smokePool.length = 0;
+  };
+
   syncFromState(state, 0.2, 0.016, false);
 
   return {
@@ -1256,13 +1338,12 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     caliperMaterial,
     brakeLightMaterial,
     headlightMaterial,
-    headlightSpot,
-    headlightTarget,
     wheelMeshes,
     frontWheelPivots,
     syncFromState,
     applyPaint,
     attachGltfSupercar,
     attachGltfCar,
+    dispose,
   };
 }

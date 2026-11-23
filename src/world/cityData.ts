@@ -1372,7 +1372,8 @@ export function createCityBlueprint(): CityBlueprint {
   ];
   propObbs.push(...storefrontPropObbs);
 
-  // 10n. Club Neon Rear VIP Parking Lot & North Valet Lot: Parked 3D Nightclub Cars, Floodlight Poles & Entrance Arch!
+  // 10n. Club Neon Rear VIP Parking Lot & North Valet Lot: Drivable 3D Nightclub Cars, Floodlight Poles & Entrance Arch!
+  //      (Spawned as live drivable VehicleStates in main.ts so players can hop into & drive every VIP lot car!)
   const parkedLotCars: ParkedLotCarSpec[] = [
     { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -87.0, yaw: -Math.PI * 0.5, modelKind: 'gt', paintHex: 0xff2e93 },
     { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -75.0, yaw: -Math.PI * 0.5, modelKind: 'spyder', paintHex: 0x2cf3ff },
@@ -1382,9 +1383,6 @@ export function createCityBlueprint(): CityBlueprint {
     { x: 33.4, y: SIDEWALK_HEIGHT + 0.02, z: -45.0, yaw: Math.PI * 0.5, modelKind: 'ev', paintHex: 0xe6edf5 },
     { x: 10.0, y: SIDEWALK_HEIGHT + 0.02, z: -93.6, yaw: Math.PI, modelKind: 'gt', paintHex: 0x141a2b },
   ];
-  for (const pc of parkedLotCars) {
-    propObbs.push({ cx: pc.x, cz: pc.z, halfW: 1.05, halfD: 2.35, rotY: pc.yaw });
-  }
   // Parking lot floodlight poles & VIP Parking entrance arch columns
   for (const [lx, lz] of [
     [47.5, -84.0],
