@@ -413,6 +413,7 @@ const PROP_FOOTPRINTS: Partial<Record<InteriorPropKind, [number, number]>> = {
   grandfather_clock: [0.58, 0.40],
   hotel_elevator_doors: [2.70, 0.42],
   hotel_housekeeping_cart: [1.40, 0.54],
+  hotel_ice_machine: [0.94, 0.70],
   hotel_luggage_cart: [1.18, 0.64],
   hotel_reception_desk: [4.95, 1.48],
   hotel_room_service_cart: [0.94, 0.72],
@@ -436,7 +437,7 @@ function buildPropColliders(props: InteriorPropPlacement[]): InteriorPropObb[] {
   for (const p of props) {
     if (p.hangFromCeiling) continue;
     // Only floor-standing props collide at walking height (tabletop/wall/stage-top props skip)
-    if ((p.y ?? 0) >= 0.45) continue;
+    if ((p.y ?? 0) >= 0.35) continue;
     const fp = PROP_FOOTPRINTS[p.kind];
     if (!fp) continue;
     const sc = p.scale ?? 1.0;
@@ -943,6 +944,11 @@ export const INTERIORS: InteriorDef[] = [
       },
     ],
     colliders: [
+      // Floor 0: 1F Grand Lobby 4 Art Deco Marble Columns (radius 0.36m)
+      { floor: 0, minX: -9.56, maxX: -8.84, minZ: -3.56, maxZ: -2.84, minY: 0, maxY: 5.8 },
+      { floor: 0, minX: 8.84, maxX: 9.56, minZ: -3.56, maxZ: -2.84, minY: 0, maxY: 5.8 },
+      { floor: 0, minX: -9.56, maxX: -8.84, minZ: 10.84, maxZ: 11.56, minY: 0, maxY: 5.8 },
+      { floor: 0, minX: 8.84, maxX: 9.56, minZ: 10.84, maxZ: 11.56, minY: 0, maxY: 5.8 },
       // Floor 0: Ocean Cocktail Lounge mahogany bar counter (exact mesh bounds: 1.8x9.2 centered at 19.8, 2.8)
       { floor: 0, minX: 18.9, maxX: 20.7, minZ: -1.8, maxZ: 7.4, minY: 0, maxY: 1.2 },
       // Floor 1: Suite 201 & 202 glass shower curbs/enclosures (walk-in glass partition panels)
@@ -1000,8 +1006,9 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 1.0, scale: 1.1, hangFromCeiling: true },
       { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 5.0, scale: 1.1, hangFromCeiling: true },
 
-      // ── FLOOR 1: 2F GUEST CORRIDOR (HOUSEKEEPING CARTS, ROOM SERVICE & LINENS) ──
+      // ── FLOOR 1: 2F GUEST CORRIDOR (HOUSEKEEPING CARTS, ROOM SERVICE, ICE MACHINE & LINENS) ──
       { floor: 1, kind: 'hotel_elevator_doors', x: 0, z: -1.76, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'hotel_ice_machine', x: -9.6, z: -1.62, rotY: 0, scale: 1.0 },
       { floor: 1, kind: 'hotel_housekeeping_cart', x: -5.8, z: -1.35, rotY: 0, scale: 1.0 },
       { floor: 1, kind: 'hotel_housekeeping_cart', x: 8.6, z: -1.35, rotY: 0, scale: 1.0 },
       { floor: 1, kind: 'hotel_room_service_cart', x: 5.2, z: 3.9, rotY: Math.PI, scale: 1.0 },
@@ -1841,6 +1848,9 @@ export const INTERIORS: InteriorDef[] = [
       { minX: -21.05, maxX: -20.55, minZ: -4.65, maxZ: -4.15, minY: 0, maxY: 4.2 },
       { minX: -15.05, maxX: -14.55, minZ: 4.35, maxZ: 4.85, minY: 0, maxY: 4.2 },
       { minX: -21.05, maxX: -20.55, minZ: 4.15, maxZ: 4.65, minY: 0, maxY: 4.2 },
+      // Artist Studio Loft: oversized leaning WIP canvases along north brick wall
+      { minX: -7.2, maxX: -4.4, minZ: -18.0, maxZ: -17.45, minY: 0, maxY: 2.2 },
+      { minX: 1.2, maxX: 4.0, minZ: -18.0, maxZ: -17.45, minY: 0, maxY: 2.2 },
     ],
     props: [
       // Main White-Cube Atrium
@@ -3185,23 +3195,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     addClosedHotelDoor(group, 3.2, f1Y, 4.92, Math.PI, '205');
     addClosedHotelDoor(group, 8.2, f1Y, 4.92, Math.PI, '206');
 
-    // 2F Corridor Commercial Hotel Ice Machine & Service Sign on North-West Wall!
-    const steelIceMat = new THREE.MeshStandardMaterial({ color: 0xc8d0da, metalness: 0.88, roughness: 0.24 });
-    const iceBody = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.72, 0.68), steelIceMat);
-    iceBody.position.set(-9.6, f1Y + 0.86, -1.62);
-    const iceChute = new THREE.Mesh(
-      new THREE.BoxGeometry(0.42, 0.38, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0x151922, roughness: 0.4 }),
-    );
-    iceChute.position.set(-9.6, f1Y + 1.04, -1.27);
+    // 2F Corridor Complimentary Ice Service Wall Sign above the bespoke Blender hotel_ice_machine.glb!
     const iceSign = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.84, 0.28),
+      new THREE.PlaneGeometry(0.96, 0.30),
       new THREE.MeshBasicMaterial({
         map: createSignTexture('ICE', 'COMPLIMENTARY · 2F', '#141a24', '#9ceeff', '#2cf3ff'),
       }),
     );
-    iceSign.position.set(-9.6, f1Y + 1.54, -1.26);
-    group.add(iceBody, iceChute, iceSign);
+    iceSign.position.set(-9.6, f1Y + 2.02, -1.94);
+    group.add(iceSign);
 
     // Framed coastal hotel art along 2F Corridor North Wall
     for (const [ax, seed] of [

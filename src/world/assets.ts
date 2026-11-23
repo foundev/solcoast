@@ -69,6 +69,7 @@ export type InteriorPropKind =
   | 'hotel_room_service_cart'
   | 'hotel_toilet_bidet'
   | 'hotel_tv_minibar'
+  | 'hotel_ice_machine'
   | 'prop_lifeguard_tower'
   | 'prop_beach_umbrella'
   | 'prop_beach_lounger'
@@ -140,6 +141,7 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'hotel_room_service_cart',
   'hotel_toilet_bidet',
   'hotel_tv_minibar',
+  'hotel_ice_machine',
   'prop_lifeguard_tower',
   'prop_beach_umbrella',
   'prop_beach_lounger',

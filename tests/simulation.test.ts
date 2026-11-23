@@ -773,7 +773,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
 
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
-    expect(INTERIOR_PROP_KINDS.length).toBe(67);
+    expect(INTERIOR_PROP_KINDS.length).toBe(68);
     for (const kind of INTERIOR_PROP_KINDS) {
       const buf = fs.readFileSync(path.resolve(propsDir, `${kind}.glb`));
       expect(buf.byteLength, `${kind}.glb non-empty`).toBeGreaterThan(5_000);
@@ -954,6 +954,33 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(p.z).toBeGreaterThanOrEqual(4.9 + 0.45);
     expect(p.z).toBeLessThan(4.9 + 0.65);
+
+    // 8b. Every floor-standing prop across all 4 venues produces a tight OBB collider (zero ghost props!)
+    for (const venue of INTERIORS) {
+      const floorStanding = venue.props.filter((pr) => !pr.hangFromCeiling && (pr.y ?? 0) < 0.35);
+      expect(
+        venue.propColliders.length,
+        `${venue.id} must generate tight OBBs for every floor-standing prop`,
+      ).toBe(floorStanding.length);
+    }
+
+    // Hotel Solaire 2F commercial ice machine & 1F lobby marble columns are 100% solid!
+    p.x = -9.6;
+    p.y = INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y;
+    p.z = 0.2;
+    for (let i = 0; i < 80; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.z).toBeGreaterThanOrEqual(-1.62 + 0.58);
+    expect(p.z).toBeLessThan(-1.62 + 0.85);
+
+    p.x = -9.2;
+    p.y = INTERIOR_ORIGIN_Y;
+    p.z = -1.2;
+    for (let i = 0; i < 80; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.z).toBeGreaterThanOrEqual(-3.2 + 0.58);
 
     // 9. Outdoor world props (planters, benches, lifeguard towers, palms) all use the unified tight OBB collision!
     const planter = blueprint.planters[0];
