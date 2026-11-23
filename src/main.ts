@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 
-import { SoundEngine } from './core/audio';
+import {
+  SoundEngine,
+  computeSpatialPanGain,
+  detectInteriorFootstepSurface,
+  detectOutdoorFootstepSurface,
+} from './core/audio';
 import { InputManager } from './core/input';
 import { clamp, distXZ } from './core/math';
 import { createCoastalBoatFleet, createCoastalBoatMeshes } from './entities/boats';
@@ -288,6 +293,33 @@ async function bootstrap(): Promise<void> {
   let interiorTransitionCooldown = 0;
   const npcTalkCounts = new Map<string, number>();
 
+  // Footstep, jump/land & spatialized nearby-walker audio tracking
+  let lastPlayerStepIdx = Math.floor(player.walkPhase / Math.PI);
+  let wasPlayerGrounded = player.grounded;
+  let prevPlayerVy = 0;
+  const pedStepIndices = new Map<number, number>();
+  const indoorNpcStepAccum = new Map<string, { x: number; z: number; dist: number }>();
+
+  const computeOceanProximity = (wx: number, wz: number): number => {
+    const eastBeach = clamp((wx - 115) / 62, 0, 1);
+    const southMarina = clamp((wz - 135) / 65, 0, 1);
+    const keySol = wx > 230 ? 0.85 : 0;
+    return clamp(Math.max(eastBeach, southMarina, keySol), 0, 1);
+  };
+
+  const findNearestPassingTrafficAudio = (lx: number, lz: number, lYaw: number) => {
+    let best: { gain: number; pan: number; speedMps: number } | null = null;
+    for (let i = 0; i < trafficCars.length; i++) {
+      const tc = trafficCars[i];
+      if (tc.speed < 1.8) continue;
+      const sample = computeSpatialPanGain(lx, lz, lYaw, tc.x, tc.z, 38);
+      if (sample.gain > 0.005 && (!best || sample.gain > best.gain)) {
+        best = { gain: sample.gain, pan: sample.pan, speedMps: tc.speed };
+      }
+    }
+    return best;
+  };
+
   const setOutdoorVisible = (visible: boolean) => {
     cityHandles.root.visible = visible;
     streetProps.root.visible = visible;
@@ -560,7 +592,7 @@ async function bootstrap(): Promise<void> {
         player.grounded = true;
         cameraCtrl.yaw = dest.spawnYaw;
         cameraCtrl.snap();
-        sound.playChime('enter');
+        sound.playDoorLatch('elevator');
         hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
         hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
       };
@@ -600,9 +632,9 @@ async function bootstrap(): Promise<void> {
           player.grounded = true;
           cameraCtrl.yaw = def.outdoorExitYaw;
           cameraCtrl.snap();
-          camera.far = 2200;
+          camera.far = 1250;
           camera.updateProjectionMatrix();
-          sound.playChime('enter');
+          sound.playDoorLatch('room');
           hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
           persistNow(false);
         } else if (nearbyElevator && accessibleElevators.length > 1) {
@@ -628,10 +660,10 @@ async function bootstrap(): Promise<void> {
             const wasOpen = openDoorIds.has(nearbyDoor.id);
             if (wasOpen) {
               openDoorIds.delete(nearbyDoor.id);
-              sound.playChime('checkpoint');
+              sound.playDoorLatch('room');
             } else {
               openDoorIds.add(nearbyDoor.id);
-              sound.playChime('enter');
+              sound.playDoorLatch('room');
               if (nearbyDoor.requiredKeycard) {
                 hud.showToast(`Keycard accepted — unlocked ${nearbyDoor.label}`, 'success');
               }
@@ -755,14 +787,59 @@ async function bootstrap(): Promise<void> {
         cameraCtrl.update(camera, dt, player, null, activeInterior);
         sound.updateDriving(false, 0, 0, 0, false);
 
+        const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
+        const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z, updatedFloor);
+        const indoorSurface = detectInteriorFootstepSurface(currentRoom.floorPbr);
+
+        // Player footsteps & jump/land inside buildings (surface-aware: marble tile, plush carpet, timber!)
+        const curStepIdx = Math.floor(player.walkPhase / Math.PI);
+        if (player.grounded && player.speed > 0.35 && curStepIdx !== lastPlayerStepIdx) {
+          sound.playFootstep(indoorSurface, 0.92, 0, player.sprinting, false);
+        }
+        lastPlayerStepIdx = curStepIdx;
+        if (wasPlayerGrounded && !player.grounded && player.vy > 2.0) {
+          sound.playJump(indoorSurface);
+        } else if (!wasPlayerGrounded && player.grounded) {
+          sound.playLand(indoorSurface, clamp(-prevPlayerVy / 10, 0.3, 1.0));
+        }
+        wasPlayerGrounded = player.grounded;
+        prevPlayerVy = player.vy;
+
+        // Spatialized stereo-panned footsteps for patrolling hotel staff / indoor NPCs on your floor!
+        for (const npc of activeInterior.npcs) {
+          if ((npc.floor ?? 0) !== updatedFloor || !npc.patrol || npc.patrol.length < 2) continue;
+          const prev = indoorNpcStepAccum.get(npc.id);
+          if (!prev) {
+            indoorNpcStepAccum.set(npc.id, { x: npc.x, z: npc.z, dist: 0 });
+            continue;
+          }
+          const moved = Math.hypot(npc.x - prev.x, npc.z - prev.z);
+          prev.x = npc.x;
+          prev.z = npc.z;
+          prev.dist += moved;
+          if (prev.dist >= 0.72) {
+            prev.dist -= 0.72;
+            const sp = computeSpatialPanGain(player.x, player.z, cameraCtrl.yaw, npc.x, npc.z, 14);
+            if (sp.gain > 0.03) {
+              sound.playFootstep(indoorSurface, sp.gain * 0.58, sp.pan, false, true);
+            }
+          }
+        }
+
+        sound.updateWorldAmbience({
+          elapsed,
+          inCar: false,
+          inInteriorId: activeInterior.id,
+          oceanProximity: 0,
+          clubProximity: activeInterior.id === 'club-neon' ? 1.0 : 0,
+          nearestTraffic: findNearestPassingTrafficAudio(pWorld.x, pWorld.z, cameraCtrl.yaw),
+        });
+
         autoSaveTimer += dt;
         if (autoSaveTimer >= 15) {
           autoSaveTimer = 0;
           persistNow(true);
         }
-
-        const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
-        const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z, updatedFloor);
         const keyBadges: string[] = [];
         if (ownedKeycards.has('hotel-suite-201')) keyBadges.push('201');
         if (ownedKeycards.has('hotel-penthouse')) keyBadges.push('3F PH');
@@ -877,7 +954,7 @@ async function bootstrap(): Promise<void> {
         cameraCtrl.snap();
         camera.far = 1250;
         camera.updateProjectionMatrix();
-        sound.playChime('enter');
+        sound.playDoorLatch('room');
         hud.showDistrictBanner(nearbyEntrance.name);
         const elevHint =
           nearbyEntrance.elevators && nearbyEntrance.elevators.length > 1
@@ -934,7 +1011,7 @@ async function bootstrap(): Promise<void> {
           activeVehicle.vx *= 0.2;
           activeVehicle.vz *= 0.2;
           activeVehicle = null;
-          sound.playChime('enter');
+          sound.playDoorLatch('car');
           persistNow(false);
         } else {
           hud.showToast('Slow down to exit the vehicle!', 'warn');
@@ -990,7 +1067,7 @@ async function bootstrap(): Promise<void> {
         player.z = promoted.z;
         player.yaw = promoted.yaw;
         activeVehicle = promoted;
-        sound.playChime('enter');
+        sound.playDoorLatch('car');
         hud.showToast(`Took ${promoted.name}!`, 'info');
         persistNow(false);
       } else if (nearbyCar && !player.rapierControlled) {
@@ -1000,7 +1077,7 @@ async function bootstrap(): Promise<void> {
         player.z = nearbyCar.vehicle.z;
         player.yaw = nearbyCar.vehicle.yaw;
         activeVehicle = nearbyCar.vehicle;
-        sound.playChime('enter');
+        sound.playDoorLatch('car');
         persistNow(false);
       }
     }
@@ -1238,9 +1315,57 @@ async function bootstrap(): Promise<void> {
     if (activeVehicle) {
       const driftAmt = activeVehicle.drifting ? clamp(Math.abs(activeVehicle.lateralSpeed) / 10, 0.25, 1) : 0;
       sound.updateDriving(true, speedNorm, snap.forward, driftAmt, snap.horn);
+      lastPlayerStepIdx = Math.floor(player.walkPhase / Math.PI);
+      wasPlayerGrounded = true;
+      prevPlayerVy = 0;
     } else {
       sound.updateDriving(false, 0, 0, 0, false);
+
+      // Player outdoor footsteps & jump/land thuds (surface-aware: concrete, boardwalk wood, beach sand!)
+      const surface = detectOutdoorFootstepSurface(player.x, player.z);
+      const curStepIdx = Math.floor(player.walkPhase / Math.PI);
+      if (player.grounded && !player.rapierControlled && player.speed > 0.35 && curStepIdx !== lastPlayerStepIdx) {
+        sound.playFootstep(surface, 1.0, 0, player.sprinting, false);
+      }
+      lastPlayerStepIdx = curStepIdx;
+      if (!player.rapierControlled) {
+        if (wasPlayerGrounded && !player.grounded && player.vy > 2.0) {
+          sound.playJump(surface);
+        } else if (!wasPlayerGrounded && player.grounded) {
+          sound.playLand(surface, clamp(-prevPlayerVy / 10, 0.3, 1.0));
+        }
+      }
+      wasPlayerGrounded = player.grounded;
+      prevPlayerVy = player.vy;
+
+      // Spatialized stereo-panned footsteps for nearby strolling pedestrians (louder as they pass, fading away!)
+      for (let i = 0; i < pedestrians.length; i++) {
+        const ped = pedestrians[i];
+        const pStep = Math.floor(ped.walkPhase / Math.PI);
+        const prevStep = pedStepIndices.get(ped.id);
+        pedStepIndices.set(ped.id, pStep);
+        if (prevStep === undefined || prevStep === pStep || ped.ragdollMode !== 'normal' || ped.speed < 0.3) {
+          continue;
+        }
+        const sp = computeSpatialPanGain(player.x, player.z, cameraCtrl.yaw, ped.x, ped.z, 15);
+        if (sp.gain > 0.025) {
+          const pedSurface = detectOutdoorFootstepSurface(ped.x, ped.z);
+          sound.playFootstep(pedSurface, sp.gain * 0.56, sp.pan, false, true);
+        }
+      }
     }
+
+    // Subtle continuous spatial ambience: passing AI traffic hum, coastal ocean surf & Club Neon entrance bass
+    const clubDist = distXZ(player.x, player.z, -3.8, -62.0);
+    const clubProx = clubDist < 26 ? clamp((26 - clubDist) / 22, 0, 1) * 0.32 : 0;
+    sound.updateWorldAmbience({
+      elapsed,
+      inCar: activeVehicle !== null,
+      inInteriorId: null,
+      oceanProximity: computeOceanProximity(player.x, player.z),
+      clubProximity: clubProx,
+      nearestTraffic: findNearestPassingTrafficAudio(player.x, player.z, cameraCtrl.yaw),
+    });
 
     autoSaveTimer += dt;
     if (autoSaveTimer >= 15) {

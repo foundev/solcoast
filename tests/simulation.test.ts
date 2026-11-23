@@ -3,6 +3,11 @@ import path from 'node:path';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
+import {
+  computeSpatialPanGain,
+  detectInteriorFootstepSurface,
+  detectOutdoorFootstepSurface,
+} from '../src/core/audio';
 import { InputManager } from '../src/core/input';
 import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
@@ -1178,5 +1183,30 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
         expect(Math.abs(wheelWorldY - groundY)).toBeLessThan(0.035);
       }
     }
+  });
+
+  it('computes accurate stereo pan, distance attenuation, and surface-aware footstep materials', () => {
+    // Listener facing North (yaw = 0): right is +X, left is -X
+    const rightClose = computeSpatialPanGain(0, 0, 0, 3, 0, 15);
+    const rightFar = computeSpatialPanGain(0, 0, 0, 11, 0, 15);
+    const leftClose = computeSpatialPanGain(0, 0, 0, -3, 0, 15);
+    const outOfRange = computeSpatialPanGain(0, 0, 0, 20, 0, 15);
+
+    expect(rightClose.pan).toBeGreaterThan(0.8);
+    expect(leftClose.pan).toBeLessThan(-0.8);
+    expect(rightClose.gain).toBeGreaterThan(rightFar.gain);
+    expect(rightFar.gain).toBeGreaterThan(0);
+    expect(outOfRange.gain).toBe(0);
+
+    // Outdoor surface detection (sand, boardwalk/pier wood, city concrete)
+    expect(detectOutdoorFootstepSurface(180, 10)).toBe('sand');
+    expect(detectOutdoorFootstepSurface(158, 10)).toBe('wood');
+    expect(detectOutdoorFootstepSurface(220, 160)).toBe('wood');
+    expect(detectOutdoorFootstepSurface(140, 10)).toBe('concrete');
+
+    // Interior surface detection (plush carpet, marble tile, timber wood)
+    expect(detectInteriorFootstepSurface('carpet')).toBe('carpet');
+    expect(detectInteriorFootstepSurface('marble')).toBe('tile');
+    expect(detectInteriorFootstepSurface('wood')).toBe('wood');
   });
 });
