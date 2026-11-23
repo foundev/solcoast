@@ -13,6 +13,7 @@ import {
   getDistrictAt,
   getGroundHeight,
   getShorelineX,
+  getTerrainHeight,
   isDeepWater,
   isOnRoad,
 } from '../src/world/cityData';
@@ -21,11 +22,14 @@ import { INTERIORS, INTERIOR_ORIGIN_Y, interiorLocalToWorld } from '../src/world
 describe('Sol Coast World Blueprint', () => {
   const blueprint = createCityBlueprint();
 
-  it('builds a dense expanded coastal metropolis with 11 districts, varied building styles, palms, and 54-node traffic graph', () => {
-    expect(blueprint.roads.length).toBeGreaterThanOrEqual(18);
-    expect(blueprint.buildings.length).toBeGreaterThanOrEqual(100);
-    expect(blueprint.palms.length).toBeGreaterThanOrEqual(80);
-    expect(blueprint.trafficNodes.length).toBe(54); // 7x7 grid + 5 Key Sol island loop nodes
+  it('builds a dense expanded coastal metropolis with 14 districts, varied building styles, terrain variance, street signs, palms, and 86-node traffic graph', () => {
+    expect(blueprint.roads.length).toBeGreaterThanOrEqual(22);
+    expect(blueprint.buildings.length).toBeGreaterThanOrEqual(160);
+    expect(blueprint.palms.length).toBeGreaterThanOrEqual(110);
+    expect(blueprint.trafficNodes.length).toBe(86); // 9x9 grid + 5 Key Sol island loop nodes
+    expect(blueprint.streetSigns.length).toBe(81); // 9x9 intersection corner street-name signs!
+    expect(blueprint.streetSigns.some((s) => s.avenueName === 'OCEAN DR' && s.streetName === '5TH ST')).toBe(true);
+    expect(blueprint.streetSigns.some((s) => s.avenueName === 'SUNSET RIDGE DR' && s.streetName === 'HIGHLAND PKWY')).toBe(true);
     const styles = new Set(blueprint.buildings.map((b) => b.style));
     expect(styles.has('art-deco')).toBe(true);
     expect(styles.has('skyscraper')).toBe(true);
@@ -62,6 +66,20 @@ describe('Sol Coast World Blueprint', () => {
     const shoreVals = [-120, -40, 40, 120].map((z) => getShorelineX(z));
     expect(Math.max(...shoreVals) - Math.min(...shoreVals)).toBeGreaterThan(6);
     expect(getGroundHeight(getShorelineX(0) + 6, 0)).toBeLessThan(-0.3);
+
+    // Real-world mainland terrain variance: level along Ocean Drive & enterable pads, rising into rolling hills inland!
+    expect(getTerrainHeight(140, 0)).toBe(0);
+    expect(getTerrainHeight(25, -62)).toBe(0); // Enterable Club Neon pad stays smoothly level
+    const urbanSamples = [-340, -240, -155, -70].flatMap((ux) =>
+      [-280, -160, -50, 40].map((uz) => getTerrainHeight(ux, uz)),
+    );
+    expect(Math.max(...urbanSamples)).toBeGreaterThan(1.5); // Rolling urban hills in Downtown/Wynwood/Coral Heights
+    expect(Math.max(...urbanSamples) - Math.min(...urbanSamples)).toBeGreaterThan(1.2);
+    expect(getTerrainHeight(-470, -470)).toBeGreaterThan(4.0); // Sunset Hills panoramic ridge!
+    expect(getTerrainHeight(-110, -470)).toBeGreaterThan(2.5); // North Bay Highlands coastal bluff!
+    // Sidewalks remain cleanly +SIDEWALK_HEIGHT above the rolling terrain elevation at the same spot
+    const hillSidewalkY = getGroundHeight(-450, -450);
+    expect(hillSidewalkY - getTerrainHeight(-450, -450)).toBeCloseTo(SIDEWALK_HEIGHT, 3);
   });
 
   it('classifies water boundaries accurately while keeping pier, causeway, island, and marina docks dry', () => {
@@ -74,7 +92,7 @@ describe('Sol Coast World Blueprint', () => {
     expect(isDeepWater(200, -230)).toBe(true); // North Bay water beside causeway
   });
 
-  it('maps all 11 coastal districts accurately', () => {
+  it('maps all 14 coastal districts accurately', () => {
     expect(getDistrictAt(140, 20).id).toBe('ocean-drive');
     expect(getDistrictAt(185, 20).id).toBe('sol-beach');
     expect(getDistrictAt(260, SOUTH_PIER.centerZ).id).toBe('south-pier');
@@ -86,6 +104,9 @@ describe('Sol Coast World Blueprint', () => {
     expect(getDistrictAt(-160, -290).id).toBe('wynwood-arts');
     expect(getDistrictAt(-335, 25).id).toBe('coral-heights');
     expect(getDistrictAt(90, -290).id).toBe('north-beach');
+    expect(getDistrictAt(-470, -420).id).toBe('sunset-hills');
+    expect(getDistrictAt(-470, -40).id).toBe('coconut-grove');
+    expect(getDistrictAt(-110, -470).id).toBe('north-highlands');
   });
 
   it('places every mission start beacon and step waypoint on dry, obstacle-free ground', () => {

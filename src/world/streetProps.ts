@@ -7,6 +7,7 @@ import {
   SOUTH_PIER,
   STREET_ZS,
   getGroundHeight,
+  getTerrainHeight,
 } from './cityData';
 import { createLightGlowTexture } from './postfx';
 import {
@@ -142,63 +143,84 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   const hedgeMat = new THREE.MeshStandardMaterial({ color: 0x276e3c, roughness: 0.88 });
   const blossomMat = new THREE.MeshStandardMaterial({ color: 0xf2388f, roughness: 0.65 });
 
-  // 1. Redesigned Architectural Miami Sidewalks:
-  //    - Rounded/chamfered street corners with beveled granite curbstones (zero flat grey boxes!)
+  // 1. Terrain-Conforming Architectural Miami Sidewalks across all 64 city blocks:
+  //    - Subdivided top paving mesh draped cleanly onto getTerrainHeight(x, z) + SIDEWALK_HEIGHT so sidewalks
+  //      rise & slope naturally with rolling hills, plus deep granite curb skirts down into the roadbed!
   //    - District-specific high-res 512px PBR sidewalk paving (Coastal Terrazzo, Coral Heights Travertine, Urban Concrete)
-  //    - Concrete street gutter aprons, cast-iron storm drains, ADA yellow tactile curb ramps, & palm tree grates!
+  //    - Slope-aligned concrete gutters, cast-iron storm drains, ADA yellow tactile curb ramps, & palm tree grates!
   const halfRoad = ROAD_WIDTH * 0.5;
   const cornerR = 2.4;
-  const bevelSize = 0.04;
-  const bevelThick = 0.035;
 
-  const createRoundedBlockGeometry = (w: number, d: number): THREE.ExtrudeGeometry => {
-    const hw = w * 0.5 - bevelSize;
-    const hd = d * 0.5 - bevelSize;
-    const r = Math.min(cornerR, hw * 0.4, hd * 0.4);
-    const shape = new THREE.Shape();
-    shape.moveTo(-hw + r, -hd);
-    shape.lineTo(hw - r, -hd);
-    shape.absarc(hw - r, -hd + r, r, -Math.PI * 0.5, 0, false);
-    shape.lineTo(hw, hd - r);
-    shape.absarc(hw - r, hd - r, r, 0, Math.PI * 0.5, false);
-    shape.lineTo(-hw + r, hd);
-    shape.absarc(-hw + r, hd - r, r, Math.PI * 0.5, Math.PI, false);
-    shape.lineTo(-hw, -hd + r);
-    shape.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
+  const createTerrainBlockMeshes = (
+    cx: number,
+    cz: number,
+    w: number,
+    d: number,
+    topMat: THREE.MeshStandardMaterial,
+    curbMat: THREE.MeshStandardMaterial,
+  ): THREE.Group => {
+    const g = new THREE.Group();
+    const segs = 8;
 
-    const depth = Math.max(0.05, SIDEWALK_HEIGHT - bevelThick * 2);
-    const geo = new THREE.ExtrudeGeometry(shape, {
-      depth,
-      bevelEnabled: true,
-      bevelThickness: bevelThick,
-      bevelSize,
-      bevelSegments: 2,
-      curveSegments: 6,
-    });
-    // Rotate so extrusion rises along +Y with bottom at y = 0 and top cleanly at y = SIDEWALK_HEIGHT
-    geo.rotateX(-Math.PI * 0.5);
-    geo.translate(0, bevelThick, 0);
-
-    // Normalize UVs to exact real-world meters (1 tile = 2.4m x 2.4m slabs, ZERO stretching!)
-    const pos = geo.attributes.position;
-    const norm = geo.attributes.normal;
-    const uv = geo.attributes.uv;
-    for (let i = 0; i < pos.count; i++) {
-      const px = pos.getX(i);
-      const py = pos.getY(i);
-      const pz = pos.getZ(i);
-      const ny = Math.abs(norm.getY(i));
-      if (ny > 0.65) {
-        uv.setXY(i, px / 2.4, pz / 2.4);
-      } else {
-        // Vertical curbstone face: map perimeter length along U, height along V
-        const nx = Math.abs(norm.getX(i));
-        const uCoord = nx > 0.5 ? pz : px;
-        uv.setXY(i, uCoord / 1.4, 1 - py / SIDEWALK_HEIGHT);
-      }
+    // Top paved sidewalk surface conforming vertex-by-vertex to rolling terrain
+    const topGeo = new THREE.PlaneGeometry(w, d, segs, segs);
+    topGeo.rotateX(-Math.PI * 0.5);
+    const tPos = topGeo.attributes.position;
+    const tUv = topGeo.attributes.uv;
+    for (let i = 0; i < tPos.count; i++) {
+      const lx = tPos.getX(i);
+      const lz = tPos.getZ(i);
+      tPos.setY(i, getTerrainHeight(cx + lx, cz + lz) + SIDEWALK_HEIGHT);
+      tUv.setXY(i, lx / 2.4, lz / 2.4);
     }
-    uv.needsUpdate = true;
-    return geo;
+    topGeo.computeVertexNormals();
+    const topMesh = new THREE.Mesh(topGeo, topMat);
+    topMesh.position.set(cx, 0, cz);
+    topMesh.receiveShadow = true;
+    g.add(topMesh);
+
+    // 4-sided terrain-hugging granite curbstone skirt dropping 0.65m below road surface
+    const skirtVerts: number[] = [];
+    const skirtUvs: number[] = [];
+    const skirtIdx: number[] = [];
+    let vBase = 0;
+    const addCurbSide = (x0: number, z0: number, x1: number, z1: number) => {
+      const steps = segs;
+      const sideLen = Math.hypot(x1 - x0, z1 - z0);
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const wx = x0 + (x1 - x0) * t;
+        const wz = z0 + (z1 - z0) * t;
+        const ty = getTerrainHeight(wx, wz);
+        skirtVerts.push(wx, ty + SIDEWALK_HEIGHT, wz);
+        skirtVerts.push(wx, ty - 0.55, wz);
+        skirtUvs.push((t * sideLen) / 1.4, 0);
+        skirtUvs.push((t * sideLen) / 1.4, 1);
+        if (s < steps) {
+          const i0 = vBase + s * 2;
+          skirtIdx.push(i0, i0 + 1, i0 + 2, i0 + 2, i0 + 1, i0 + 3);
+        }
+      }
+      vBase += (steps + 1) * 2;
+    };
+    const xL = cx - w * 0.5;
+    const xR = cx + w * 0.5;
+    const zN = cz - d * 0.5;
+    const zS = cz + d * 0.5;
+    addCurbSide(xL, zS, xR, zS); // South face (+Z)
+    addCurbSide(xR, zS, xR, zN); // East face (+X)
+    addCurbSide(xR, zN, xL, zN); // North face (-Z)
+    addCurbSide(xL, zN, xL, zS); // West face (-X)
+
+    const skirtGeo = new THREE.BufferGeometry();
+    skirtGeo.setAttribute('position', new THREE.Float32BufferAttribute(skirtVerts, 3));
+    skirtGeo.setAttribute('uv', new THREE.Float32BufferAttribute(skirtUvs, 2));
+    skirtGeo.setIndex(skirtIdx);
+    skirtGeo.computeVertexNormals();
+    const skirtMesh = new THREE.Mesh(skirtGeo, curbMat);
+    skirtMesh.receiveShadow = true;
+    g.add(skirtMesh);
+    return g;
   };
 
   const coastalPbr = createDistrictSidewalkPbr('coastal');
@@ -237,23 +259,26 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     roughness: 0.84,
   });
 
-  const blockGeoCache = new Map<string, THREE.ExtrudeGeometry>();
-  const getBlockGeo = (w: number, d: number) => {
-    const key = `${w.toFixed(1)}x${d.toFixed(1)}`;
-    let g = blockGeoCache.get(key);
-    if (!g) {
-      g = createRoundedBlockGeometry(w, d);
-      blockGeoCache.set(key, g);
-    }
-    return g;
-  };
-
-  // Collect instanced sidewalk street-level details across all 36 blocks
-  const gutterMatrices: THREE.Matrix4[] = [];
+  // Collect instanced sidewalk street-level details across all 64 city blocks
   const tactileMatrices: THREE.Matrix4[] = [];
   const grateMatrices: THREE.Matrix4[] = [];
   const bollardMatrices: THREE.Matrix4[] = [];
   const dummy = new THREE.Object3D();
+  const upVec = new THREE.Vector3(0, 1, 0);
+  const sNorm = new THREE.Vector3();
+  const sQuat = new THREE.Quaternion();
+  const yQuat = new THREE.Quaternion();
+  const alignToTerrain = (wx: number, wz: number, yaw = 0) => {
+    const hx = (getTerrainHeight(wx + 1.5, wz) - getTerrainHeight(wx - 1.5, wz)) / 3.0;
+    const hz = (getTerrainHeight(wx, wz + 1.5) - getTerrainHeight(wx, wz - 1.5)) / 3.0;
+    sNorm.set(-hx, 1, -hz).normalize();
+    sQuat.setFromUnitVectors(upVec, sNorm);
+    if (yaw !== 0) {
+      yQuat.setFromAxisAngle(upVec, yaw);
+      sQuat.multiply(yQuat);
+    }
+    return sQuat;
+  };
 
   for (let bx = 0; bx < AVENUE_XS.length - 1; bx++) {
     for (let bz = 0; bz < STREET_ZS.length - 1; bz++) {
@@ -266,67 +291,52 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       const cx = (minX + maxX) * 0.5;
       const cz = (minZ + maxZ) * 0.5;
 
-      // Pick district-specific sidewalk paving style
+      // Pick district-specific sidewalk paving style by world position
       const style: SidewalkDistrictStyle =
-        bx >= 5 || (bz <= 1 && bx >= 4)
+        cx >= 70 || (cz <= -200 && cx >= -20)
           ? 'coastal'
-          : bx <= 1 && bz >= 2
+          : cx <= -200
             ? 'mediterranean'
             : 'urban';
 
-      const blockMesh = new THREE.Mesh(getBlockGeo(w, d), [sidewalkTopMats[style], curbEdgeMat]);
-      blockMesh.position.set(cx, 0, cz);
-      blockMesh.receiveShadow = true;
-      root.add(blockMesh);
+      root.add(createTerrainBlockMeshes(cx, cz, w, d, sidewalkTopMats[style], curbEdgeMat));
 
-      // Concrete drainage gutter apron strips along all 4 road edges (flush at y = 0.032)
-      const gutterW = 0.62;
-      const edgeLenX = w - cornerR * 2;
-      const edgeLenZ = d - cornerR * 2;
+      // Cast-iron storm drain grates nestled into the avenue gutters (2 per block side)
       for (const side of [-1, 1]) {
-        // North & South gutters
-        dummy.position.set(cx, 0.032, cz + side * (d * 0.5 + gutterW * 0.5 - 0.02));
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(edgeLenX, 1, gutterW);
-        dummy.updateMatrix();
-        gutterMatrices.push(dummy.matrix.clone());
-
-        // East & West gutters
-        dummy.position.set(cx + side * (w * 0.5 + gutterW * 0.5 - 0.02), 0.032, cz);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(gutterW, 1, edgeLenZ);
-        dummy.updateMatrix();
-        gutterMatrices.push(dummy.matrix.clone());
-
-        // Cast-iron storm drain grates nestled into the avenue gutters (2 per block side)
         for (const zOff of [-0.28, 0.28]) {
-          dummy.position.set(cx + side * (w * 0.5 + 0.28), 0.038, cz + d * zOff);
-          dummy.rotation.set(0, 0, 0);
+          const gx = cx + side * (w * 0.5 + 0.28);
+          const gz = cz + d * zOff;
+          dummy.position.set(gx, getTerrainHeight(gx, gz) + 0.044, gz);
+          dummy.quaternion.copy(alignToTerrain(gx, gz, 0));
           dummy.scale.set(0.54, 1, 0.92);
           dummy.updateMatrix();
           grateMatrices.push(dummy.matrix.clone());
         }
       }
 
-      // Bright safety-yellow ADA tactile curb-ramp warning pads at all 4 crosswalk corners!
+      // Bright safety-yellow ADA tactile curb-ramp warning pads & corner bollards on rolling terrain!
       for (const sx of [-1, 1]) {
         for (const sz of [-1, 1]) {
-          // Pad facing N/S crosswalk
-          dummy.position.set(cx + sx * (w * 0.5 - 3.0), SIDEWALK_HEIGHT + 0.008, cz + sz * (d * 0.5 - 0.58));
-          dummy.rotation.set(0, 0, 0);
+          const tx1 = cx + sx * (w * 0.5 - 3.0);
+          const tz1 = cz + sz * (d * 0.5 - 0.58);
+          dummy.position.set(tx1, getTerrainHeight(tx1, tz1) + SIDEWALK_HEIGHT + 0.015, tz1);
+          dummy.quaternion.copy(alignToTerrain(tx1, tz1, 0));
           dummy.scale.set(2.1, 1, 0.72);
           dummy.updateMatrix();
           tactileMatrices.push(dummy.matrix.clone());
 
-          // Pad facing E/W crosswalk
-          dummy.position.set(cx + sx * (w * 0.5 - 0.58), SIDEWALK_HEIGHT + 0.008, cz + sz * (d * 0.5 - 3.0));
-          dummy.rotation.set(0, Math.PI * 0.5, 0);
+          const tx2 = cx + sx * (w * 0.5 - 0.58);
+          const tz2 = cz + sz * (d * 0.5 - 3.0);
+          dummy.position.set(tx2, getTerrainHeight(tx2, tz2) + SIDEWALK_HEIGHT + 0.015, tz2);
+          dummy.quaternion.copy(alignToTerrain(tx2, tz2, Math.PI * 0.5));
           dummy.scale.set(2.1, 1, 0.72);
           dummy.updateMatrix();
           tactileMatrices.push(dummy.matrix.clone());
 
-          // Sleek charcoal corner safety bollards guarding the rounded curb corner
-          dummy.position.set(cx + sx * (w * 0.5 - 1.15), SIDEWALK_HEIGHT, cz + sz * (d * 0.5 - 1.15));
+          // Sleek charcoal corner safety bollards guarding each corner
+          const bxPos = cx + sx * (w * 0.5 - 1.15);
+          const bzPos = cz + sz * (d * 0.5 - 1.15);
+          dummy.position.set(bxPos, getTerrainHeight(bxPos, bzPos) + SIDEWALK_HEIGHT, bzPos);
           dummy.rotation.set(0, 0, 0);
           dummy.scale.set(1, 1, 1);
           dummy.updateMatrix();
@@ -335,17 +345,9 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       }
     }
   }
+  void cornerR;
 
-  // Batch gutters, tactile ADA pads, storm drain grates, & corner bollards into 4 single draw calls!
-  const gutterGeo = new THREE.PlaneGeometry(1, 1);
-  gutterGeo.rotateX(-Math.PI * 0.5);
-  const gutterMat = new THREE.MeshStandardMaterial({ color: 0x8e9199, roughness: 0.9 });
-  const gutterInst = new THREE.InstancedMesh(gutterGeo, gutterMat, gutterMatrices.length);
-  gutterInst.receiveShadow = true;
-  gutterMatrices.forEach((m, i) => gutterInst.setMatrixAt(i, m));
-  gutterInst.instanceMatrix.needsUpdate = true;
-  root.add(gutterInst);
-
+  // Batch tactile ADA pads, storm drain grates, & corner bollards into 3 single draw calls!
   const tactileGeo = new THREE.PlaneGeometry(1, 1);
   tactileGeo.rotateX(-Math.PI * 0.5);
   const tactileMat = new THREE.MeshStandardMaterial({ map: createTactilePadTexture(), roughness: 0.65 });
@@ -376,9 +378,11 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
 
   // Cast-iron decorative tree grates framing concrete sidewalk palm trees (skip park lawn palms!)
   const inParkLawn = (x: number, z: number) =>
-    (x > -8 && x < 58 && z > -8 && z < 58) || (x > -368 && x < -302 && z > -8 && z < 58);
+    (x > -8 && x < 58 && z > -8 && z < 58) ||
+    (x > -368 && x < -302 && z > -8 && z < 58) ||
+    (x > -548 && x < -482 && z > -98 && z < -32);
   const sidewalkPalms = blueprint.palms.filter(
-    (p) => Math.abs(p.y - SIDEWALK_HEIGHT) < 0.03 && !inParkLawn(p.x, p.z),
+    (p) => Math.abs(p.y - (getTerrainHeight(p.x, p.z) + SIDEWALK_HEIGHT)) < 0.05 && !inParkLawn(p.x, p.z),
   );
   if (sidewalkPalms.length > 0) {
     const grateRingGeo = new THREE.BoxGeometry(1.55, 0.03, 1.55);
@@ -390,14 +394,95 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     });
     const treeGrateInst = new THREE.InstancedMesh(grateRingGeo, treeGrateMat, sidewalkPalms.length);
     sidewalkPalms.forEach((p, i) => {
-      dummy.position.set(p.x, SIDEWALK_HEIGHT + 0.012, p.z);
-      dummy.rotation.set(0, 0, 0);
+      dummy.position.set(p.x, p.y + 0.014, p.z);
+      dummy.quaternion.copy(alignToTerrain(p.x, p.z, 0));
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       treeGrateInst.setMatrixAt(i, dummy.matrix);
     });
     treeGrateInst.instanceMatrix.needsUpdate = true;
     root.add(treeGrateInst);
+  }
+
+  // 1b. Readable 3D Corner Street Name Signs at Every Intersection (crossed Avenue + Cross-Street blades!)
+  const streetBladeMatCache = new Map<string, THREE.MeshStandardMaterial>();
+  const getStreetBladeMat = (label: string, style: 'green' | 'coastal'): THREE.MeshStandardMaterial => {
+    const key = `${style}:${label}`;
+    let mat = streetBladeMatCache.get(key);
+    if (!mat) {
+      const c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 64;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = style === 'coastal' ? '#0d5e66' : '#0f5c35';
+      ctx.fillRect(0, 0, 256, 64);
+      ctx.strokeStyle = style === 'coastal' ? '#ffd166' : '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(4, 4, 248, 56);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '900 24px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, 128, 33, 232);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: 0.36,
+        metalness: 0.18,
+      });
+      streetBladeMatCache.set(key, mat);
+    }
+    return mat;
+  };
+
+  if (blueprint.streetSigns.length > 0) {
+    const signPostGeo = new THREE.CylinderGeometry(0.055, 0.065, 3.5, 8);
+    signPostGeo.translate(0, 1.75, 0);
+    const signPostInst = new THREE.InstancedMesh(signPostGeo, poleMat, blueprint.streetSigns.length);
+    signPostInst.castShadow = true;
+
+    const bladeGeo = new THREE.BoxGeometry(1.38, 0.3, 0.045);
+    const bladeEdgeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0ea, roughness: 0.35, metalness: 0.7 });
+
+    blueprint.streetSigns.forEach((ss, idx) => {
+      dummy.position.set(ss.x, ss.y, ss.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      signPostInst.setMatrixAt(idx, dummy.matrix);
+
+      const aveMat = getStreetBladeMat(ss.avenueName, ss.style);
+      const stMat = getStreetBladeMat(ss.streetName, ss.style);
+
+      // Lower blade runs N-S along the Avenue
+      const aveBlade = new THREE.Mesh(bladeGeo, [
+        bladeEdgeMat,
+        bladeEdgeMat,
+        bladeEdgeMat,
+        bladeEdgeMat,
+        aveMat,
+        aveMat,
+      ]);
+      aveBlade.position.set(ss.x, ss.y + 3.06, ss.z);
+      aveBlade.rotation.y = Math.PI * 0.5;
+      root.add(aveBlade);
+
+      // Upper perpendicular blade runs E-W along the Cross-Street
+      const stBlade = new THREE.Mesh(bladeGeo, [
+        bladeEdgeMat,
+        bladeEdgeMat,
+        bladeEdgeMat,
+        bladeEdgeMat,
+        stMat,
+        stMat,
+      ]);
+      stBlade.position.set(ss.x, ss.y + 3.38, ss.z);
+      root.add(stBlade);
+    });
+    signPostInst.instanceMatrix.needsUpdate = true;
+    root.add(signPostInst);
   }
 
   // 2. Live Cycling Intersection Traffic Signal Gantries (shared exact coords with blueprint.propObbs!)
@@ -464,7 +549,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     signMaterials.push(mat);
 
     const signFrame = new THREE.Group();
-    signFrame.position.set(m.x, 5.8, m.z);
+    signFrame.position.set(m.x, getGroundHeight(m.x, m.z) + 5.8, m.z);
     signFrame.rotation.y = Math.PI * 0.5;
 
     const board = new THREE.Mesh(new THREE.BoxGeometry(8.6, 2.7, 0.35), [

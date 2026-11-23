@@ -14,6 +14,7 @@ import type {
   OutdoorLoungerSpec,
   OutdoorMarqueeSpec,
   OutdoorPlanterSpec,
+  OutdoorStreetSignSpec,
   OutdoorTrafficSignalSpec,
   PalmSpec,
   ParkedLotCarSpec,
@@ -23,13 +24,116 @@ import type {
   YachtSpec,
 } from './types';
 
-export const AVENUE_XS = [-380, -290, -200, -110, -20, 70, 140];
-export const STREET_ZS = [-380, -290, -200, -110, -20, 70, 160];
+export const AVENUE_XS = [-560, -470, -380, -290, -200, -110, -20, 70, 140];
+export const STREET_ZS = [-560, -470, -380, -290, -200, -110, -20, 70, 160];
+
+export const AVENUE_NAMES: Record<number, string> = {
+  [-560]: 'SUNSET RIDGE DR',
+  [-470]: 'GROVE TERRACE',
+  [-380]: 'CORAL WAY',
+  [-290]: 'PALM GROVE AVE',
+  [-200]: 'WYNWOOD BLVD',
+  [-110]: 'BISCAYNE AVE',
+  [-20]: 'NEON BLVD',
+  70: 'COLLINS AVE',
+  140: 'OCEAN DR',
+};
+
+export const STREET_NAMES: Record<number, string> = {
+  [-560]: 'HIGHLAND PKWY',
+  [-470]: 'VISTA CREST RD',
+  [-380]: 'NORTH BAY RD',
+  [-290]: '24TH ST · WYNWOOD',
+  [-200]: 'CAUSEWAY BLVD',
+  [-110]: '12TH ST',
+  [-20]: '5TH ST',
+  70: '1ST ST',
+  160: 'MARINA BLVD',
+};
+
+export const MAINLAND_BOUNDS = {
+  minX: -608,
+  maxX: 156,
+  minZ: -590,
+  maxZ: 192.8,
+};
+
 export const ROAD_WIDTH = 16;
 export const SIDEWALK_WIDTH = 4;
 export const SIDEWALK_HEIGHT = 0.22;
 export const BOARDWALK_HEIGHT = 0.14;
 export const SEAWALL_HEIGHT = 0.24;
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// Level architectural pads around the 4 enterable multi-room buildings & landmark flat parks/arena
+const TERRAIN_FLAT_PADS = [
+  { minX: 98, maxX: 132, minZ: -92, maxZ: -34 }, // Hotel Solaire
+  { minX: -8, maxX: 62, minZ: -102, maxZ: -28 }, // Club Neon + Rear VIP Parking Lot
+  { minX: -280, maxX: -246, minZ: -6, maxZ: 36 }, // Café Habana
+  { minX: -190, maxX: -150, minZ: -258, maxZ: -212 }, // Wynwood Art Gallery
+  { minX: -12, maxX: 62, minZ: -12, maxZ: 62 }, // Palm Plaza Central Park
+  { minX: -372, maxX: -298, minZ: -12, maxZ: 62 }, // Coral Park & Basketball Courts
+  { minX: -372, maxX: -298, minZ: -282, maxZ: -208 }, // Sol Coast Stadium / Arena
+];
+
+/**
+ * Continuous, deterministic real-world mainland terrain elevation (meters above sea level).
+ * Stays level (0.0m) along Ocean Drive, Marina Cove, North Bay seawalls, and the 4 enterable building pads,
+ * while rising smoothly into rolling inland streets, Coconut Grove terraces, North Bay Highlands, and Sunset Hills!
+ */
+export function getTerrainHeight(x: number, z: number): number {
+  if (x >= 104 || z >= 154 || x <= -592 || z <= -575) return 0;
+
+  // Smooth coastal & seawall edge falloff so shorelines and waterfront promenades stay cleanly at sea level
+  const eastMask = smoothstep(104, 48, x);
+  const southMask = smoothstep(154, 102, z);
+  const northRimMask = smoothstep(-575, -515, z);
+  const westRimMask = smoothstep(-592, -530, x);
+  let mask = eastMask * southMask * northRimMask * westRimMask;
+  if (mask <= 0.0005) return 0;
+
+  // Smoothly level out around enterable venues & flat landmark parks (22m transition ramp!)
+  for (const pad of TERRAIN_FLAT_PADS) {
+    const dx = x < pad.minX ? pad.minX - x : x > pad.maxX ? x - pad.maxX : 0;
+    const dz = z < pad.minZ ? pad.minZ - z : z > pad.maxZ ? z - pad.maxZ : 0;
+    const d = Math.hypot(dx, dz);
+    if (d <= 0.001) return 0;
+    if (d < 22) {
+      mask *= smoothstep(0, 22, d);
+    }
+  }
+  if (mask <= 0.0005) return 0;
+
+  // 1. Subtle rolling urban road/sidewalk variance across Downtown, Midtown, Wynwood & Coral Heights (0.4..2.8m)
+  const urbanRoll =
+    (Math.sin(x * 0.0082 + 0.55) * 0.5 + 0.5) * 1.45 +
+    (Math.cos(z * 0.0088 - 0.35) * 0.5 + 0.5) * 1.2 +
+    Math.sin(x * 0.0165 - z * 0.0135) * 0.55 +
+    Math.cos(x * 0.022 + z * 0.018) * 0.28;
+
+  // 2. Sunset Hills dramatic Northwest Ridge (rises smoothly up to +7.8m overlooking the skyline & ocean!)
+  const sunsetHill =
+    smoothstep(-310, -475, x) *
+    smoothstep(-165, -345, z) *
+    (4.6 + Math.sin(x * 0.018 + z * 0.015) * 1.05);
+
+  // 3. Coconut Grove rolling Southwest terraces (+2.0..4.5m)
+  const groveHill =
+    smoothstep(-310, -470, x) *
+    smoothstep(-220, -60, z) *
+    (2.1 + Math.cos(x * 0.02 - z * 0.017) * 0.6);
+
+  // 4. North Bay Highlands coastal bluff (+3.0..6.0m)
+  const northRidge =
+    smoothstep(-320, -455, z) *
+    (3.2 + Math.sin(x * 0.014 + 0.7) * 0.85);
+
+  return Math.max(0, (urbanRoll + sunsetHill + groveHill + northRidge) * mask);
+}
 
 /**
  * Natural scalloped Miami Beach shoreline curve (world X of waterline as a function of Z).
@@ -170,6 +274,21 @@ export const DISTRICTS: Record<DistrictId, DistrictInfo> = {
     name: 'North Beach',
     tagline: 'Wave-balcony resort towers overlooking North Bay',
   },
+  'sunset-hills': {
+    id: 'sunset-hills',
+    name: 'Sunset Hills',
+    tagline: 'Panoramic hilltop estates & winding coastal ridge drives',
+  },
+  'coconut-grove': {
+    id: 'coconut-grove',
+    name: 'Coconut Grove',
+    tagline: 'Rolling leafy terraces, botanical gardens & shaded avenues',
+  },
+  'north-highlands': {
+    id: 'north-highlands',
+    name: 'North Bay Highlands',
+    tagline: 'Elevated northern coastal bluffs & resort overlooks',
+  },
 };
 
 export const ALL_DISTRICT_IDS = Object.keys(DISTRICTS) as DistrictId[];
@@ -223,15 +342,15 @@ export function getGroundHeight(x: number, z: number): number {
   }
 
   // Marina Cove waterfront seawall promenade edge (low walkable curb, never knee-high!)
-  if (z >= 190.4 && z <= 193.2 && x >= -428 && x <= 160) {
+  if (z >= 190.4 && z <= 193.2 && x >= MAINLAND_BOUNDS.minX && x <= 160) {
     return SEAWALL_HEIGHT;
   }
 
-  // North Bay waterfront seawall promenade (east edge north of Causeway & north rim)
-  if (x >= 153.2 && x <= 156.2 && z >= -410 && z <= -212) {
+  // North Bay waterfront seawall promenade (east edge north of Causeway, north rim & west rim)
+  if (x >= 153.2 && x <= 156.2 && z >= MAINLAND_BOUNDS.minZ && z <= -212) {
     return SEAWALL_HEIGHT;
   }
-  if (z >= -410.5 && z <= -407.5 && x >= -428 && x <= 156) {
+  if (z >= MAINLAND_BOUNDS.minZ - 0.5 && z <= MAINLAND_BOUNDS.minZ + 2.5 && x >= MAINLAND_BOUNDS.minX && x <= 156) {
     return SEAWALL_HEIGHT;
   }
 
@@ -245,12 +364,14 @@ export function getGroundHeight(x: number, z: number): number {
     return getBeachHeight(x, z);
   }
 
-  // Raised city-block concrete sidewalks between roads
+  const baseTerrainY = getTerrainHeight(x, z);
+
+  // Raised city-block concrete sidewalks draped over rolling mainland terrain
   if (isOnCityBlockSidewalk(x, z)) {
-    return SIDEWALK_HEIGHT;
+    return baseTerrainY + SIDEWALK_HEIGHT;
   }
 
-  return 0;
+  return baseTerrainY;
 }
 
 export function isOnCityBlockSidewalk(x: number, z: number): boolean {
@@ -321,7 +442,11 @@ export function isDeepWater(x: number, z: number): boolean {
 
   // Mainland peninsula boundary with natural curved eastern beach shoreline
   const shoreLimitX = z >= -186 && z <= 192 ? getShorelineX(z) + 1.5 : 156;
-  const onMainland = x >= -428 && x <= shoreLimitX && z >= -410 && z <= 192.8;
+  const onMainland =
+    x >= MAINLAND_BOUNDS.minX &&
+    x <= shoreLimitX &&
+    z >= MAINLAND_BOUNDS.minZ &&
+    z <= MAINLAND_BOUNDS.maxZ;
   if (onMainland) {
     // Cutout North Bay inlet east of Ocean Drive (north of Z = -182) so Key Sol Causeway crosses open water
     if (x > 156 && z < -182) {
@@ -338,6 +463,12 @@ export function getDistrictAt(x: number, z: number): DistrictInfo {
   if (x >= 216 && Math.abs(z - SOUTH_PIER.centerZ) <= 22) return DISTRICTS['south-pier'];
   if (z >= 168 && x < 216) return DISTRICTS['marina-cove'];
   if (x >= 152 && z > -186) return DISTRICTS['sol-beach'];
+  if (x < -385) {
+    return z < -200 ? DISTRICTS['sunset-hills'] : DISTRICTS['coconut-grove'];
+  }
+  if (z < -385) {
+    return DISTRICTS['north-highlands'];
+  }
   if (z < -208) {
     if (x >= -65) return DISTRICTS['north-beach'];
     if (x >= -335) return DISTRICTS['wynwood-arts'];
@@ -354,11 +485,11 @@ export function isOnRoad(x: number, z: number): boolean {
   const half = ROAD_WIDTH * 0.5 + 1.5;
   // Main avenues
   for (const ax of AVENUE_XS) {
-    if (Math.abs(x - ax) <= half && z >= -388 && z <= 168) return true;
+    if (Math.abs(x - ax) <= half && z >= -568 && z <= 168) return true;
   }
   // Main streets
   for (const sz of STREET_ZS) {
-    if (Math.abs(z - sz) <= half && x >= -388 && x <= 148) return true;
+    if (Math.abs(z - sz) <= half && x >= -568 && x <= 148) return true;
   }
   // Causeway & Key Sol loop
   if (Math.abs(z - CAUSEWAY.centerZ) <= half && x >= 140 && x <= 268) return true;
@@ -396,15 +527,16 @@ export function createCityBlueprint(): CityBlueprint {
   const loungers: OutdoorLoungerSpec[] = [];
   const bollards: OutdoorBollardSpec[] = [];
   const trafficSignals: OutdoorTrafficSignalSpec[] = [];
+  const streetSigns: OutdoorStreetSignSpec[] = [];
   const billboards: OutdoorBillboardSpec[] = [];
   const marquees: OutdoorMarqueeSpec[] = [];
 
-  // 1. Road network segments (expanded 7x7 coastal metropolis grid!)
+  // 1. Road network segments (expanded 9x9 coastal metropolis grid!)
   for (const ax of AVENUE_XS) {
-    roads.push({ x1: ax, z1: -380, x2: ax, z2: 160, width: ROAD_WIDTH });
+    roads.push({ x1: ax, z1: -560, x2: ax, z2: 160, width: ROAD_WIDTH });
   }
   for (const sz of STREET_ZS) {
-    roads.push({ x1: -380, z1: sz, x2: 140, z2: sz, width: ROAD_WIDTH });
+    roads.push({ x1: -560, z1: sz, x2: 140, z2: sz, width: ROAD_WIDTH });
   }
   // Key Sol Causeway bridge
   roads.push({ x1: 140, z1: -200, x2: 262, z2: -200, width: ROAD_WIDTH, isBridge: true });
@@ -511,23 +643,53 @@ export function createCityBlueprint(): CityBlueprint {
         continue;
       }
 
-      // Determine neighborhood architectural style based on district block
+      // Landmark Open Park 3: Grove Botanical Park (-560..-470, -110..-20) in Coconut Grove
+      if (AVENUE_XS[bx] === -560 && STREET_ZS[bz] === -110) {
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2;
+          const r = 22 + (i % 2) * 5;
+          const px = centerX + Math.cos(angle) * r;
+          const pz = centerZ + Math.sin(angle) * r;
+          palms.push({
+            x: px,
+            y: getGroundHeight(px, pz),
+            z: pz,
+            height: 9.0 + rng() * 3.5,
+            leanX: (rng() - 0.5) * 0.14,
+            leanZ: (rng() - 0.5) * 0.14,
+            seed: rng() * 100,
+          });
+        }
+        continue;
+      }
+
+      // Determine neighborhood architectural style cleanly by world coordinates across all 14 districts!
       let style: BuildingStyle;
-      if (bz <= 1) {
-        if (bx >= 4) {
+      if (centerZ < -380) {
+        if (centerX < -380) {
+          style = rng() < 0.6 ? 'villa' : 'mediterranean'; // Sunset Hills panoramic hillside estates
+        } else if (centerX >= -110) {
+          style = 'resort-tower'; // North Bay Highlands coastal ridge resort towers
+        } else {
+          style = rng() < 0.55 ? 'mediterranean' : 'warehouse-mural'; // North Wynwood hillside lofts
+        }
+      } else if (centerX < -380) {
+        style = centerZ < -200 ? (rng() < 0.55 ? 'villa' : 'mediterranean') : 'mediterranean'; // Sunset Hills & Coconut Grove
+      } else if (centerZ < -200) {
+        if (centerX >= -20) {
           style = 'resort-tower'; // North Beach oceanfront wave-balcony condos
-        } else if (bx >= 1) {
+        } else if (centerX >= -290) {
           style = 'warehouse-mural'; // Wynwood Arts mural warehouses & galleries
         } else {
           style = 'mediterranean'; // Northwest Coral Heights
         }
-      } else if (bx <= 1) {
+      } else if (centerX < -200) {
         style = 'mediterranean'; // Coral Heights / Little Havana terracotta plazas
-      } else if (bx === 2) {
+      } else if (centerX < -110) {
         style = 'skyscraper'; // Downtown Biscayne glass financial skyline
-      } else if (bx === 3) {
+      } else if (centerX < -20) {
         style = rng() < 0.65 ? 'skyscraper' : 'neon-club';
-      } else if (bx === 4) {
+      } else if (centerX < 70) {
         style = 'neon-club'; // Neon Strip Midtown
       } else {
         style = 'art-deco'; // Iconic Ocean Drive Pastel Art Deco
@@ -596,13 +758,14 @@ export function createCityBlueprint(): CityBlueprint {
             hasRoofSign = cx === cols - 1;
           }
 
+          const baseY = getTerrainHeight(x, z) + SIDEWALK_HEIGHT;
           const collider: AABB = {
             minX: x - w * 0.5,
             maxX: x + w * 0.5,
             minZ: z - d * 0.5,
             maxZ: z + d * 0.5,
-            minY: 0,
-            maxY: height,
+            minY: baseY - 2.0,
+            maxY: baseY + height,
           };
 
           buildings.push({
@@ -612,7 +775,7 @@ export function createCityBlueprint(): CityBlueprint {
             width: w,
             depth: d,
             height,
-            baseY: SIDEWALK_HEIGHT,
+            baseY,
             style,
             wallColor,
             accentColor,
@@ -841,13 +1004,14 @@ export function createCityBlueprint(): CityBlueprint {
     }
   }
 
-  // Avenue sidewalk palms along Coral Blvd, Collins Way, Neon Ave & North Bay Promenade
-  for (const ax of [-290, -110, -20, 70]) {
-    for (let z = -355; z <= 135; z += 36) {
+  // Avenue sidewalk palms along Grove Terrace, Coral Blvd, Collins Way, Neon Ave & North Bay Promenade
+  for (const ax of [-470, -290, -110, -20, 70]) {
+    for (let z = -535; z <= 135; z += 36) {
       if (STREET_ZS.some((sz) => Math.abs(z - sz) < 16)) continue;
+      const px = ax + 11.2;
       palms.push({
-        x: ax + 11.2,
-        y: SIDEWALK_HEIGHT,
+        x: px,
+        y: getGroundHeight(px, z),
         z,
         height: 8 + rng() * 2.8,
         leanX: (rng() - 0.5) * 0.08,
@@ -857,10 +1021,10 @@ export function createCityBlueprint(): CityBlueprint {
     }
   }
   // North Bay waterfront palms (overlooking Key Sol across turquoise water)
-  for (let z = -392; z <= -220; z += 22) {
+  for (let z = -572; z <= -220; z += 22) {
     palms.push({
       x: 151.5,
-      y: 0,
+      y: getGroundHeight(151.5, z),
       z,
       height: 9.2 + rng() * 3.0,
       leanX: 0.09,
@@ -869,11 +1033,11 @@ export function createCityBlueprint(): CityBlueprint {
     });
   }
 
-  // Marina Cove waterfront palms (extended west along Coral Heights harbor!)
-  for (let x = -395; x <= 115; x += 26) {
+  // Marina Cove waterfront palms (extended west along Coral Heights & Coconut Grove harbor!)
+  for (let x = -575; x <= 115; x += 26) {
     palms.push({
       x,
-      y: 0,
+      y: getGroundHeight(x, 184),
       z: 184,
       height: 8.5 + rng() * 3,
       leanX: (rng() - 0.5) * 0.08,
@@ -904,13 +1068,14 @@ export function createCityBlueprint(): CityBlueprint {
     });
   }
 
-  // 6. Streetlights along avenues & Causeway
+  // 6. Streetlights along avenues & Causeway (grounded dynamically on rolling hills!)
   for (const ax of AVENUE_XS) {
-    for (let z = -360; z <= 145; z += 54) {
+    for (let z = -540; z <= 145; z += 54) {
       if (STREET_ZS.some((sz) => Math.abs(z - sz) < 14)) continue;
+      const sx = ax - 10.5;
       streetLights.push({
-        x: ax - 10.5,
-        y: 0,
+        x: sx,
+        y: getGroundHeight(sx, z),
         z,
         yaw: Math.PI * 0.5,
         color: ax === 140 ? 0xff9ec7 : ax === -20 ? 0x52f2ff : ax <= -290 ? 0xffd28a : 0xffdf9e,
@@ -1044,21 +1209,37 @@ export function createCityBlueprint(): CityBlueprint {
         for (const sz of [-1, 1]) {
           const x = cx + sx * (w * 0.5 - 1.15);
           const z = cz + sz * (d * 0.5 - 1.15);
-          bollards.push({ x, y: SIDEWALK_HEIGHT, z });
+          bollards.push({ x, y: getGroundHeight(x, z), z });
           propObbs.push({ cx: x, cz: z, halfW: 0.1, halfD: 0.1, rotY: 0 });
         }
       }
     }
   }
 
-  // 10b. Live Intersection Traffic Signal Gantries
+  // 10b. Live Intersection Traffic Signal Gantries & Corner Street Name Signs!
   for (let ix = 0; ix < AVENUE_XS.length; ix++) {
     for (let iz = 0; iz < STREET_ZS.length; iz++) {
-      if ((ix + iz) % 2 !== 0) continue;
-      const x = AVENUE_XS[ix] - 9.4;
-      const z = STREET_ZS[iz] - 9.4;
-      trafficSignals.push({ x, y: 0.2, z, phaseOffset: (ix * 3 + iz * 5) * 1.9 });
-      propObbs.push({ cx: x, cz: z, halfW: 0.2, halfD: 0.2, rotY: 0 });
+      const ax = AVENUE_XS[ix];
+      const sz = STREET_ZS[iz];
+      if ((ix + iz) % 2 === 0) {
+        const x = ax - 9.4;
+        const z = sz - 9.4;
+        trafficSignals.push({ x, y: getGroundHeight(x, z), z, phaseOffset: (ix * 3 + iz * 5) * 1.9 });
+        propObbs.push({ cx: x, cz: z, halfW: 0.2, halfD: 0.2, rotY: 0 });
+      }
+
+      // Readable crossed street-name blades on the opposite sidewalk corner at every single intersection!
+      const signX = ax === 140 ? ax - 9.6 : ax + 9.6;
+      const signZ = ax === 140 ? sz + 9.6 : sz - 9.6;
+      streetSigns.push({
+        x: signX,
+        y: getGroundHeight(signX, signZ),
+        z: signZ,
+        avenueName: AVENUE_NAMES[ax] ?? `${ax} AVE`,
+        streetName: STREET_NAMES[sz] ?? `${sz} ST`,
+        style: ax >= 70 || ax === -20 ? 'coastal' : 'green',
+      });
+      propObbs.push({ cx: signX, cz: signZ, halfW: 0.12, halfD: 0.12, rotY: 0 });
     }
   }
 
@@ -1128,7 +1309,7 @@ export function createCityBlueprint(): CityBlueprint {
       if ((ax + sz) % 40 !== 0) continue;
       const hx = ax + 9.2;
       const hz = sz + 9.2;
-      hydrants.push({ x: hx, y: SIDEWALK_HEIGHT, z: hz });
+      hydrants.push({ x: hx, y: getGroundHeight(hx, hz), z: hz });
       propObbs.push({ cx: hx, cz: hz, halfW: 0.19, halfD: 0.19, rotY: 0 });
     }
   }
@@ -1236,6 +1417,7 @@ export function createCityBlueprint(): CityBlueprint {
     loungers,
     bollards,
     trafficSignals,
+    streetSigns,
     billboards,
     marquees,
     parkedLotCars,

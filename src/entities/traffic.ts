@@ -264,8 +264,30 @@ export function stepTraffic(
     car.y = getGroundHeight(car.x, car.z);
     car.yaw = lerpAngle(car.yaw, pos.yaw, clamp(safeDt * 7, 0, 1));
     car.yawRate = 0;
-    car.pitchTilt = lerp(car.pitchTilt, 0, clamp(safeDt * 8, 0, 1));
-    car.rollTilt = lerp(car.rollTilt, 0, clamp(safeDt * 8, 0, 1));
+    const tFx = Math.sin(car.yaw);
+    const tFz = -Math.cos(car.yaw);
+    const tRx = Math.cos(car.yaw);
+    const tRz = Math.sin(car.yaw);
+    const tPitch = clamp(
+      Math.atan2(
+        getGroundHeight(car.x + tFx * 1.8, car.z + tFz * 1.8) -
+          getGroundHeight(car.x - tFx * 1.8, car.z - tFz * 1.8),
+        3.6,
+      ),
+      -0.2,
+      0.2,
+    );
+    const tRoll = clamp(
+      Math.atan2(
+        getGroundHeight(car.x - tRx * 0.9, car.z - tRz * 0.9) -
+          getGroundHeight(car.x + tRx * 0.9, car.z + tRz * 0.9),
+        1.8,
+      ),
+      -0.14,
+      0.14,
+    );
+    car.pitchTilt = lerp(car.pitchTilt, tPitch, clamp(safeDt * 8, 0, 1));
+    car.rollTilt = lerp(car.rollTilt, tRoll, clamp(safeDt * 8, 0, 1));
     car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 10, 0, 1));
   }
 

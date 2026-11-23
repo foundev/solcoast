@@ -5,12 +5,14 @@ import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
   KEY_SOL_BOUNDS,
+  MAINLAND_BOUNDS,
   SEAWALL_HEIGHT,
   SIDEWALK_HEIGHT,
   SOUTH_PIER,
   getBeachHeight,
   getGroundHeight,
   getShorelineX,
+  getTerrainHeight,
 } from './cityData';
 import { createFountainWaterEffect, type AnimatedFountainWater } from './fountains';
 import {
@@ -468,6 +470,19 @@ function buildBuildingMesh(
     metalness: 0.22,
   });
 
+  // Solid architectural concrete foundation plinth below y = 0 so buildings on sloped Sunset Hills &
+  // Coconut Grove blocks embed cleanly into rolling terrain with ZERO floating downhill corners!
+  if (b.style !== 'pavilion') {
+    const plinthH = 4.6;
+    const plinth = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width + 0.08, plinthH, b.depth + 0.08),
+      hvacMat,
+    );
+    plinth.position.y = -plinthH * 0.5 + 0.05;
+    plinth.receiveShadow = true;
+    group.add(plinth);
+  }
+
   // Main tower volume + real transparent ground-floor glass storefronts with visible illuminated interior lobbies!
   if (b.style === 'villa') {
     const lowerH = b.height * 0.52;
@@ -830,8 +845,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   oceanMesh.position.set(160, -0.55, 0);
   root.add(oceanMesh);
 
-  // 2. Expanded Mainland Peninsula Base (Wynwood, Coral Heights, North Beach, Downtown, Neon Strip, Ocean Drive)
-  // Split cleanly so North Bay water east of x=156 (north of z=-182) stays open under Key Sol Causeway!
+  // 2. Expanded Rolling Mainland Peninsula Terrain (Sunset Hills, Coconut Grove, North Bay Highlands,
+  //    Wynwood, Coral Heights, North Beach, Downtown, Neon Strip, Ocean Drive — 764m x 782m!)
   const mainlandMat = new THREE.MeshStandardMaterial({
     map: sidewalkPbr.map,
     normalMap: sidewalkPbr.normalMap,
@@ -839,29 +854,57 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     roughnessMap: sidewalkPbr.roughnessMap,
     roughness: 1.0,
   });
-  const mainland = new THREE.Mesh(new THREE.BoxGeometry(584, 2.2, 602), mainlandMat);
-  mainland.position.set(-136, -1.11, -109);
+  const mlW = MAINLAND_BOUNDS.maxX - MAINLAND_BOUNDS.minX;
+  const mlD = MAINLAND_BOUNDS.maxZ - MAINLAND_BOUNDS.minZ;
+  const mlCX = (MAINLAND_BOUNDS.minX + MAINLAND_BOUNDS.maxX) * 0.5;
+  const mlCZ = (MAINLAND_BOUNDS.minZ + MAINLAND_BOUNDS.maxZ) * 0.5;
+  const mainlandGeo = new THREE.PlaneGeometry(mlW, mlD, 128, 128);
+  mainlandGeo.rotateX(-Math.PI * 0.5);
+  const mlPos = mainlandGeo.attributes.position;
+  for (let i = 0; i < mlPos.count; i++) {
+    const wx = mlPos.getX(i) + mlCX;
+    const wz = mlPos.getZ(i) + mlCZ;
+    mlPos.setY(i, getTerrainHeight(wx, wz) - 0.03);
+  }
+  mainlandGeo.computeVertexNormals();
+  const mainland = new THREE.Mesh(mainlandGeo, mainlandMat);
+  mainland.position.set(mlCX, 0, mlCZ);
   mainland.receiveShadow = true;
   root.add(mainland);
 
-  // Walkable Marina Cove & North Bay waterfront coping curbs (top sits cleanly at SEAWALL_HEIGHT = 0.24m!)
+  // Solid below-sea-level coastal plinth skirt under mainland so ocean edges never reveal a gap
+  const mainlandSkirt = new THREE.Mesh(
+    new THREE.BoxGeometry(mlW - 0.6, 2.4, mlD - 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x3b4048, roughness: 0.9 }),
+  );
+  mainlandSkirt.position.set(mlCX, -1.25, mlCZ);
+  root.add(mainlandSkirt);
+
+  // Walkable Marina Cove, North Bay & West Rim waterfront coping curbs (top sits cleanly at SEAWALL_HEIGHT = 0.24m!)
   const seawallMat = new THREE.MeshStandardMaterial({ color: 0xdce0e8, roughness: 0.72 });
-  const southWall = new THREE.Mesh(new THREE.BoxGeometry(588, 1.4, 2.7), seawallMat);
-  southWall.position.set(-134, SEAWALL_HEIGHT - 0.7, 191.8);
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(mlW + 4, 1.4, 2.7), seawallMat);
+  southWall.position.set(mlCX + 2, SEAWALL_HEIGHT - 0.7, 191.8);
   southWall.receiveShadow = true;
   root.add(southWall);
 
   // North Bay east seawall promenade (north of Key Sol Causeway overlooking Key Sol Island)
-  const northBayEastWall = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.4, 200), seawallMat);
-  northBayEastWall.position.set(154.7, SEAWALL_HEIGHT - 0.7, -310);
+  const northBayLen = -210 - MAINLAND_BOUNDS.minZ;
+  const northBayEastWall = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.4, northBayLen), seawallMat);
+  northBayEastWall.position.set(154.7, SEAWALL_HEIGHT - 0.7, MAINLAND_BOUNDS.minZ + northBayLen * 0.5);
   northBayEastWall.receiveShadow = true;
   root.add(northBayEastWall);
 
-  // North shoreline seawall along northern rim of Wynwood & North Beach
-  const northRimWall = new THREE.Mesh(new THREE.BoxGeometry(584, 1.4, 2.7), seawallMat);
-  northRimWall.position.set(-136, SEAWALL_HEIGHT - 0.7, -409);
+  // North shoreline seawall along northern rim of Sunset Hills & North Bay Highlands
+  const northRimWall = new THREE.Mesh(new THREE.BoxGeometry(mlW, 1.4, 2.7), seawallMat);
+  northRimWall.position.set(mlCX, SEAWALL_HEIGHT - 0.7, MAINLAND_BOUNDS.minZ + 1.0);
   northRimWall.receiveShadow = true;
   root.add(northRimWall);
+
+  // West shoreline seawall along western rim of Sunset Hills & Coconut Grove
+  const westRimWall = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.4, mlD), seawallMat);
+  westRimWall.position.set(MAINLAND_BOUNDS.minX + 1.0, SEAWALL_HEIGHT - 0.7, mlCZ);
+  westRimWall.receiveShadow = true;
+  root.add(westRimWall);
 
   // 3. Boardwalk Promenade with weathered coastal timber planks
   const boardwalkMat = new THREE.MeshStandardMaterial({
@@ -1025,8 +1068,32 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     metalness: 0.08,
   });
 
-  const yellowLineMat = new THREE.MeshStandardMaterial({ color: 0xf4c042, roughness: 0.65 });
-  const whiteLineMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf5, roughness: 0.65 });
+  const yellowLineMat = new THREE.MeshStandardMaterial({
+    color: 0xf4c042,
+    roughness: 0.65,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const whiteLineMat = new THREE.MeshStandardMaterial({
+    color: 0xe6ecf5,
+    roughness: 0.65,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+
+  // Helper to drape any road ribbon or lane stripe geometry smoothly onto getTerrainHeight(x, z)!
+  const drapeRibbonOnTerrain = (geo: THREE.PlaneGeometry, cx: number, cz: number, yOffset: number, isKeySol: boolean) => {
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const wx = pos.getX(i) + cx;
+      const wz = pos.getZ(i) + cz;
+      const gy = isKeySol ? KEY_SOL_BOUNDS.baseY : getTerrainHeight(wx, wz);
+      pos.setY(i, gy + yOffset);
+    }
+    geo.computeVertexNormals();
+  };
 
   for (const road of blueprint.roads) {
     if (road.isBridge) continue;
@@ -1035,7 +1102,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     const len = Math.hypot(dx, dz);
     const xm = (road.x1 + road.x2) * 0.5;
     const zm = (road.z1 + road.z2) * 0.5;
-    const baseY = xm > 230 ? KEY_SOL_BOUNDS.baseY + 0.03 : 0.025;
+    const isKeySol = xm > 230;
     const rep = Math.max(1, len / 18);
 
     const map = asphaltPbr.map.clone();
@@ -1055,51 +1122,56 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       roughnessMap: rough,
       roughness: 1.0,
       metalness: 0.08,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
     roadMaterials.push({ mat: roadMat, repeatY: rep });
 
     const isHoriz = Math.abs(dx) > Math.abs(dz);
-    const geo = new THREE.PlaneGeometry(road.width, len);
+    const segs = isKeySol ? 2 : Math.max(16, Math.round(len / 8));
+    const geo = new THREE.PlaneGeometry(road.width, len, 2, segs);
     geo.rotateX(-Math.PI * 0.5);
     if (isHoriz) geo.rotateY(Math.PI * 0.5);
+    drapeRibbonOnTerrain(geo, xm, zm, isKeySol ? 0.03 : 0.032, isKeySol);
     const mesh = new THREE.Mesh(geo, roadMat);
-    mesh.position.set(xm, baseY, zm);
+    mesh.position.set(xm, 0, zm);
     mesh.receiveShadow = true;
     root.add(mesh);
 
-    // Painted double-yellow centerline & white shoulder decals overlaid above photographed asphalt
-    const lineY = baseY + 0.012;
+    // Painted double-yellow centerline & white shoulder decals draped smoothly over hills & valleys!
+    const lineOff = isKeySol ? 0.044 : 0.048;
     for (const side of [-1, 1]) {
-      const shoulder = new THREE.Mesh(
-        new THREE.PlaneGeometry(isHoriz ? len : 0.22, isHoriz ? 0.22 : len),
-        whiteLineMat,
-      );
-      shoulder.rotation.x = -Math.PI * 0.5;
-      shoulder.position.set(
-        xm + (isHoriz ? 0 : side * (road.width * 0.5 - 0.65)),
-        lineY,
-        zm + (isHoriz ? side * (road.width * 0.5 - 0.65) : 0),
-      );
+      const shX = xm + (isHoriz ? 0 : side * (road.width * 0.5 - 0.65));
+      const shZ = zm + (isHoriz ? side * (road.width * 0.5 - 0.65) : 0);
+      const shGeo = new THREE.PlaneGeometry(isHoriz ? len : 0.22, isHoriz ? 0.22 : len, isHoriz ? segs : 1, isHoriz ? 1 : segs);
+      shGeo.rotateX(-Math.PI * 0.5);
+      drapeRibbonOnTerrain(shGeo, shX, shZ, lineOff, isKeySol);
+      const shoulder = new THREE.Mesh(shGeo, whiteLineMat);
+      shoulder.position.set(shX, 0, shZ);
       roadMarkingsGroup.add(shoulder);
 
-      const centerStripe = new THREE.Mesh(
-        new THREE.PlaneGeometry(isHoriz ? len : 0.14, isHoriz ? 0.14 : len),
-        yellowLineMat,
-      );
-      centerStripe.rotation.x = -Math.PI * 0.5;
-      centerStripe.position.set(
-        xm + (isHoriz ? 0 : side * 0.16),
-        lineY,
-        zm + (isHoriz ? side * 0.16 : 0),
-      );
+      const csX = xm + (isHoriz ? 0 : side * 0.16);
+      const csZ = zm + (isHoriz ? side * 0.16 : 0);
+      const csGeo = new THREE.PlaneGeometry(isHoriz ? len : 0.14, isHoriz ? 0.14 : len, isHoriz ? segs : 1, isHoriz ? 1 : segs);
+      csGeo.rotateX(-Math.PI * 0.5);
+      drapeRibbonOnTerrain(csGeo, csX, csZ, lineOff, isKeySol);
+      const centerStripe = new THREE.Mesh(csGeo, yellowLineMat);
+      centerStripe.position.set(csX, 0, csZ);
       roadMarkingsGroup.add(centerStripe);
     }
   }
   roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
   root.add(roadMarkingsGroup);
 
-  // Instanced intersection pads & crosswalk stripes (275 meshes -> 2 draw calls!)
-  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xe6ecf5, roughness: 0.65 });
+  // Terrain-aligned instanced intersection pads & crosswalk stripes (2 draw calls across all 81 intersections!)
+  const stripeMat = new THREE.MeshStandardMaterial({
+    color: 0xe6ecf5,
+    roughness: 0.65,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+  });
   const totalIntersections = blueprint.avenueXs.length * blueprint.streetZs.length;
   const padGeo = new THREE.PlaneGeometry(blueprint.roadWidth + 0.6, blueprint.roadWidth + 0.6);
   padGeo.rotateX(-Math.PI * 0.5);
@@ -1111,24 +1183,44 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   const barInst = new THREE.InstancedMesh(barGeo, stripeMat, totalIntersections * 10);
 
   const tmpObj = new THREE.Object3D();
+  const upVec = new THREE.Vector3(0, 1, 0);
+  const slopeNormal = new THREE.Vector3();
+  const slopeQuat = new THREE.Quaternion();
+  const yawQuat = new THREE.Quaternion();
+  const sampleSlopeQuat = (wx: number, wz: number, yaw = 0) => {
+    const hx = (getTerrainHeight(wx + 2.0, wz) - getTerrainHeight(wx - 2.0, wz)) / 4.0;
+    const hz = (getTerrainHeight(wx, wz + 2.0) - getTerrainHeight(wx, wz - 2.0)) / 4.0;
+    slopeNormal.set(-hx, 1, -hz).normalize();
+    slopeQuat.setFromUnitVectors(upVec, slopeNormal);
+    if (yaw !== 0) {
+      yawQuat.setFromAxisAngle(upVec, yaw);
+      slopeQuat.multiply(yawQuat);
+    }
+    return slopeQuat;
+  };
+
   let padIdx = 0;
   let barIdx = 0;
   for (const ax of blueprint.avenueXs) {
     for (const sz of blueprint.streetZs) {
-      tmpObj.position.set(ax, 0.04, sz);
-      tmpObj.rotation.set(0, 0, 0);
+      tmpObj.position.set(ax, getTerrainHeight(ax, sz) + 0.045, sz);
+      tmpObj.quaternion.copy(sampleSlopeQuat(ax, sz, 0));
       tmpObj.scale.set(1, 1, 1);
       tmpObj.updateMatrix();
       padInst.setMatrixAt(padIdx++, tmpObj.matrix);
 
       for (let s = -5; s <= 5; s += 2.5) {
-        tmpObj.position.set(ax + s, 0.052, sz - 9.4);
-        tmpObj.rotation.set(0, 0, 0);
+        const bx1 = ax + s;
+        const bz1 = sz - 9.4;
+        tmpObj.position.set(bx1, getTerrainHeight(bx1, bz1) + 0.056, bz1);
+        tmpObj.quaternion.copy(sampleSlopeQuat(bx1, bz1, 0));
         tmpObj.updateMatrix();
         barInst.setMatrixAt(barIdx++, tmpObj.matrix);
 
-        tmpObj.position.set(ax + 9.4, 0.052, sz + s);
-        tmpObj.rotation.set(0, Math.PI * 0.5, 0);
+        const bx2 = ax + 9.4;
+        const bz2 = sz + s;
+        tmpObj.position.set(bx2, getTerrainHeight(bx2, bz2) + 0.056, bz2);
+        tmpObj.quaternion.copy(sampleSlopeQuat(bx2, bz2, Math.PI * 0.5));
         tmpObj.updateMatrix();
         barInst.setMatrixAt(barIdx++, tmpObj.matrix);
       }
@@ -1347,6 +1439,24 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     rim.position.set(-335, parkY + 3.05, 25 + side * 13.3);
     fallbackHoopsGroup.add(rim);
   }
+
+  // 10c. Grove Botanical Park rolling hillside lawn (-560..-470, -110..-20 -> center -515, -65)
+  const groveGeo = new THREE.PlaneGeometry(66, 66, 12, 12);
+  groveGeo.rotateX(-Math.PI * 0.5);
+  const gPos = groveGeo.attributes.position;
+  for (let i = 0; i < gPos.count; i++) {
+    const wx = gPos.getX(i) - 515;
+    const wz = gPos.getZ(i) - 65;
+    gPos.setY(i, getTerrainHeight(wx, wz) + SIDEWALK_HEIGHT + 0.03);
+  }
+  groveGeo.computeVertexNormals();
+  const groveGrass = new THREE.Mesh(
+    groveGeo,
+    new THREE.MeshStandardMaterial({ color: 0x35824b, roughness: 0.92 }),
+  );
+  groveGrass.position.set(-515, 0, -65);
+  groveGrass.receiveShadow = true;
+  root.add(groveGrass);
 
   // 11. PBR Buildings with Real Transparent Glass Lobbies, Balconies, Villas & Penthouses!
   const facadeCache = new Map<string, THREE.MeshStandardMaterial>();

@@ -528,23 +528,36 @@ export function stepVehiclePhysics(
   const accelInstant = accelForce !== 0 ? accelForce : (v.speed - prevForward) / safeDt;
   // Soft suspension cars (SUV/Taxi/Sedan) roll & squat more than stiff supercars!
   const softness = v.style === 'sedan' ? 1.45 : v.style === 'spyder' ? 1.15 : 0.95;
-  // Right-hand rule around +X with nose at -Z: +pitch lifts nose (rear squat on launch), -pitch dips nose (brake dive)
+
+  // Sample rolling road slope under front/rear axles & left/right track so vehicles tilt naturally over hills!
+  let groundPitch = 0;
+  let groundRoll = 0;
+  if (v.grounded) {
+    const yFwd = getGroundHeight(v.x + curFwd.x * 1.8, v.z + curFwd.z * 1.8);
+    const yBack = getGroundHeight(v.x - curFwd.x * 1.8, v.z - curFwd.z * 1.8);
+    const yRight = getGroundHeight(v.x + curRight.x * 0.9, v.z + curRight.z * 0.9);
+    const yLeft = getGroundHeight(v.x - curRight.x * 0.9, v.z - curRight.z * 0.9);
+    groundPitch = clamp(Math.atan2(yFwd - yBack, 3.6), -0.22, 0.22);
+    groundRoll = clamp(Math.atan2(yLeft - yRight, 1.8), -0.16, 0.16);
+  }
+
+  // Right-hand rule around +X with nose at -Z: +pitch lifts nose (uphill + rear squat), -pitch dips nose (downhill + brake dive)
   const targetPitch = v.grounded
-    ? clamp(accelInstant * 0.0034 * softness, -0.095, 0.095)
-    : clamp(v.vy * 0.024, -0.18, 0.16);
+    ? clamp(groundPitch + accelInstant * 0.0034 * softness, -0.26, 0.26)
+    : clamp(v.vy * 0.024, -0.22, 0.22);
   // Right-hand rule around +Z: turning right (+yawRate) shifts weight left (-X down, +X up -> +rollTilt)
   const lateralG = v.grounded ? v.yawRate * v.speed * 0.012 + v.lateralSpeed * 0.008 : 0;
-  const targetRoll = clamp(lateralG * 0.38 * softness, -0.115, 0.115);
+  const targetRoll = clamp(groundRoll + lateralG * 0.38 * softness, -0.22, 0.22);
 
   const pitchK = 54;
   const pitchDamp = 8.2;
   v.pitchVel += (pitchK * (targetPitch - v.pitchTilt) - pitchDamp * v.pitchVel) * safeDt;
-  v.pitchTilt = clamp(v.pitchTilt + v.pitchVel * safeDt, -0.18, 0.18);
+  v.pitchTilt = clamp(v.pitchTilt + v.pitchVel * safeDt, -0.28, 0.28);
 
   const rollK = 50;
   const rollDamp = 7.8;
   v.rollVel += (rollK * (targetRoll - v.rollTilt) - rollDamp * v.rollVel) * safeDt;
-  v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.14, 0.14);
+  v.rollTilt = clamp(v.rollTilt + v.rollVel * safeDt, -0.22, 0.22);
 }
 
 /**

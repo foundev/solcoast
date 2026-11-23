@@ -11,7 +11,10 @@ export type DistrictId =
   | 'marina-cove'
   | 'wynwood-arts'
   | 'coral-heights'
-  | 'north-beach';
+  | 'north-beach'
+  | 'sunset-hills'
+  | 'coconut-grove'
+  | 'north-highlands';
 
 export interface DistrictInfo {
   id: DistrictId;
@@ -159,6 +162,15 @@ export interface OutdoorMarqueeSpec {
   z: number;
 }
 
+export interface OutdoorStreetSignSpec {
+  x: number;
+  y: number;
+  z: number;
+  avenueName: string;
+  streetName: string;
+  style: 'green' | 'coastal';
+}
+
 export interface ParkedLotCarSpec {
   x: number;
   y: number;
@@ -196,6 +208,7 @@ export interface CityBlueprint {
   loungers: OutdoorLoungerSpec[];
   bollards: OutdoorBollardSpec[];
   trafficSignals: OutdoorTrafficSignalSpec[];
+  streetSigns: OutdoorStreetSignSpec[];
   billboards: OutdoorBillboardSpec[];
   marquees: OutdoorMarqueeSpec[];
   parkedLotCars: ParkedLotCarSpec[];
