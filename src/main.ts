@@ -225,9 +225,12 @@ function bootstrap(): void {
   const setPaused = (next: boolean) => {
     paused = next;
     hud.setPauseMenu(paused, missions);
+    input.clearAll();
     if (paused) {
       input.releasePointerLock();
       sound.silenceContinuous();
+    } else if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
     }
   };
 

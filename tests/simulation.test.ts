@@ -3,6 +3,7 @@ import path from 'node:path';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
+import { InputManager } from '../src/core/input';
 import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
 import { createHumanRigController } from '../src/entities/humanRig';
@@ -593,5 +594,102 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       stepTraffic(traffic, blueprint.trafficNodes, [], 1 / 60, blueprint.colliders);
     }
     expect(Math.abs(tc.yaw - yawAtHit)).toBeGreaterThan(0.2);
+  });
+
+  it('prevents stuck movement keys on macOS Meta shortcuts, accent-hold keys, blur, and pause', () => {
+    const winListeners = new Map<string, Set<(e: unknown) => void>>();
+    const docListeners = new Map<string, Set<(e: unknown) => void>>();
+    const fakeWin = {
+      addEventListener: (t: string, fn: (e: unknown) => void) => {
+        if (!winListeners.has(t)) winListeners.set(t, new Set());
+        winListeners.get(t)!.add(fn);
+      },
+      removeEventListener: (t: string, fn: (e: unknown) => void) => winListeners.get(t)?.delete(fn),
+    };
+    const fakeDoc = {
+      hidden: false,
+      activeElement: null,
+      pointerLockElement: null,
+      addEventListener: (t: string, fn: (e: unknown) => void) => {
+        if (!docListeners.has(t)) docListeners.set(t, new Set());
+        docListeners.get(t)!.add(fn);
+      },
+      removeEventListener: (t: string, fn: (e: unknown) => void) => docListeners.get(t)?.delete(fn),
+    };
+    const fakeCanvas = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as HTMLCanvasElement;
+
+    const prevWin = (globalThis as unknown as { window?: unknown }).window;
+    const prevDoc = (globalThis as unknown as { document?: unknown }).document;
+    (globalThis as unknown as { window: unknown }).window = fakeWin;
+    (globalThis as unknown as { document: unknown }).document = fakeDoc;
+
+    try {
+      const input = new InputManager(fakeCanvas);
+      const fireWin = (type: string, ev: Record<string, unknown> = {}) => {
+        for (const fn of winListeners.get(type) ?? []) fn(ev);
+      };
+
+      // 1. Holding W/A prevents default (blocks macOS accent popup!) and registers movement
+      let prevented = false;
+      fireWin('keydown', {
+        code: 'KeyW',
+        shiftKey: true,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault: () => {
+          prevented = true;
+        },
+      });
+      expect(prevented).toBe(true);
+      expect(input.poll().forward).toBe(1);
+
+      // 2. Pressing macOS Command/Meta while holding W immediately clears held keys so W cannot stick!
+      fireWin('keydown', {
+        code: 'MetaLeft',
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        preventDefault: () => {},
+      });
+      expect(input.poll().forward).toBe(0);
+
+      // 3. Window focus regain or blur clears any stale keys
+      fireWin('keydown', {
+        code: 'KeyA',
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        preventDefault: () => {},
+      });
+      expect(input.poll().right).toBe(-1);
+      fireWin('focus', {});
+      expect(input.poll().right).toBe(0);
+
+      // 4. Visibility change (tab switch / Mission Control) clears stuck keys
+      fireWin('keydown', {
+        code: 'KeyD',
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        preventDefault: () => {},
+      });
+      expect(input.poll().right).toBe(1);
+      fakeDoc.hidden = true;
+      for (const fn of docListeners.get('visibilitychange') ?? []) fn({});
+      expect(input.poll().right).toBe(0);
+
+      input.dispose();
+    } finally {
+      (globalThis as unknown as { window?: unknown }).window = prevWin;
+      (globalThis as unknown as { document?: unknown }).document = prevDoc;
+    }
   });
 });

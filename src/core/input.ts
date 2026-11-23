@@ -20,6 +20,29 @@ export interface InputSnapshot {
   pausePressed: boolean;
 }
 
+const GAME_CONTROL_CODES = new Set([
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'KeyE',
+  'KeyF',
+  'KeyC',
+  'KeyT',
+  'KeyP',
+  'KeyL',
+  'KeyH',
+  'KeyM',
+  'KeyX',
+  'KeyU',
+  'Space',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'F5',
+]);
+
 export class InputManager {
   private keys = new Set<string>();
   private justPressed = new Set<string>();
@@ -32,9 +55,13 @@ export class InputManager {
   public pointerLocked = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
-    window.addEventListener('blur', this.onBlur);
+    window.addEventListener('keydown', this.onKeyDown, true);
+    window.addEventListener('keyup', this.onKeyUp, true);
+    window.addEventListener('blur', this.onClearAll);
+    window.addEventListener('focus', this.onClearAll);
+    window.addEventListener('pagehide', this.onClearAll);
+    window.addEventListener('compositionstart', this.onClearAll);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
 
     canvas.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
@@ -44,34 +71,76 @@ export class InputManager {
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
+  /** Immediately releases all held keys & mouse drag state (prevents stuck movement on pause/focus changes). */
+  public clearAll(): void {
+    this.keys.clear();
+    this.justPressed.clear();
+    this.dragging = false;
+  }
+
+  private syncModifierKeys(e: KeyboardEvent | MouseEvent): void {
+    // Reconcile Shift state in case a Shift keyup was dropped by the OS
+    if (!e.shiftKey) {
+      this.keys.delete('ShiftLeft');
+      this.keys.delete('ShiftRight');
+    }
+  }
+
   private onKeyDown = (e: KeyboardEvent): void => {
     const code = e.code;
+
+    // On macOS, holding Command/Meta (or Ctrl/Alt OS shortcuts) swallows subsequent keyup events for
+    // already-held movement keys (e.g. W/A/S/D), causing stuck movement! Clear held keys immediately.
     if (
-      code === 'Space' ||
-      code === 'ArrowUp' ||
-      code === 'ArrowDown' ||
-      code === 'ArrowLeft' ||
-      code === 'ArrowRight' ||
-      code === 'F5'
+      code === 'MetaLeft' ||
+      code === 'MetaRight' ||
+      e.metaKey ||
+      e.ctrlKey ||
+      e.altKey
     ) {
+      this.keys.clear();
+      return;
+    }
+
+    // Prevent macOS press-and-hold character accent popups on A/E/S/W and browser scrolling on Space/Arrows!
+    if (GAME_CONTROL_CODES.has(code)) {
       e.preventDefault();
     }
-    if (!this.keys.has(code)) {
+
+    this.syncModifierKeys(e);
+
+    if (!this.keys.has(code) && !e.repeat) {
       this.justPressed.add(code);
     }
     this.keys.add(code);
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
-    this.keys.delete(e.code);
+    const code = e.code;
+    // Releasing macOS Command key: any key released while Command was down never sent keyup, so clear all!
+    if (code === 'MetaLeft' || code === 'MetaRight') {
+      this.keys.clear();
+      return;
+    }
+    this.keys.delete(code);
+    this.syncModifierKeys(e);
   };
 
-  private onBlur = (): void => {
-    this.keys.clear();
-    this.dragging = false;
+  private onClearAll = (): void => {
+    this.clearAll();
+  };
+
+  private onVisibilityChange = (): void => {
+    if (document.hidden) {
+      this.clearAll();
+    }
   };
 
   private onMouseDown = (e: MouseEvent): void => {
+    this.syncModifierKeys(e);
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== this.canvas) {
+      document.activeElement.blur();
+    }
     if (e.button === 0 || e.button === 2) {
       this.dragging = true;
       this.lastX = e.clientX;
@@ -79,11 +148,13 @@ export class InputManager {
     }
   };
 
-  private onMouseUp = (): void => {
+  private onMouseUp = (e: MouseEvent): void => {
+    this.syncModifierKeys(e);
     this.dragging = false;
   };
 
   private onMouseMove = (e: MouseEvent): void => {
+    this.syncModifierKeys(e);
     if (this.pointerLocked) {
       this.mouseDX += e.movementX;
       this.mouseDY += e.movementY;
@@ -101,6 +172,9 @@ export class InputManager {
 
   private onPointerLockChange = (): void => {
     this.pointerLocked = document.pointerLockElement === this.canvas;
+    if (!this.pointerLocked) {
+      this.dragging = false;
+    }
   };
 
   public requestPointerLock(): void {
@@ -156,9 +230,13 @@ export class InputManager {
   }
 
   public dispose(): void {
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
-    window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('keydown', this.onKeyDown, true);
+    window.removeEventListener('keyup', this.onKeyUp, true);
+    window.removeEventListener('blur', this.onClearAll);
+    window.removeEventListener('focus', this.onClearAll);
+    window.removeEventListener('pagehide', this.onClearAll);
+    window.removeEventListener('compositionstart', this.onClearAll);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.canvas.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('mousemove', this.onMouseMove);
