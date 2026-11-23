@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createRng } from '../core/math';
 import {
   AVENUE_XS,
@@ -23,14 +24,22 @@ import type { CityBlueprint } from './types';
 export interface StreetPropsHandles {
   root: THREE.Group;
   attachGltfProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
-  update: (elapsed: number, nightFactor: number) => void;
+  update: (elapsed: number, nightFactor: number, focusX?: number, focusZ?: number) => void;
 }
 
 interface TrafficSignalCluster {
+  group: THREE.Object3D;
   redMat: THREE.MeshStandardMaterial;
   amberMat: THREE.MeshStandardMaterial;
   greenMat: THREE.MeshStandardMaterial;
   phaseOffset: number;
+}
+
+interface CulledPropEntry {
+  obj: THREE.Object3D;
+  x: number;
+  z: number;
+  maxDistSq: number;
 }
 
 interface SeagullAgent {
@@ -132,7 +141,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   const glowTex = createLightGlowTexture();
 
   const signals: TrafficSignalCluster[] = [];
-  const lightHalos: THREE.Sprite[] = [];
+  const culledProps: CulledPropEntry[] = [];
   const signMaterials: THREE.MeshStandardMaterial[] = [];
   const seagulls: SeagullAgent[] = [];
 
@@ -149,20 +158,26 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   //    - District-specific high-res 512px PBR sidewalk paving (Coastal Terrazzo, Coral Heights Travertine, Urban Concrete)
   //    - Slope-aligned concrete gutters, cast-iron storm drains, ADA yellow tactile curb ramps, & palm tree grates!
   const halfRoad = ROAD_WIDTH * 0.5;
-  const cornerR = 2.4;
 
-  const createTerrainBlockMeshes = (
+  // Collect all 64 city-block terrain-draped sidewalk slabs & granite curb skirts and merge by material
+  // (128 draw calls -> 4 single draw calls across the entire 9x9 metropolis!)
+  const topGeosByStyle: Record<SidewalkDistrictStyle, THREE.BufferGeometry[]> = {
+    coastal: [],
+    mediterranean: [],
+    urban: [],
+  };
+  const curbSkirtGeos: THREE.BufferGeometry[] = [];
+
+  const collectTerrainBlockGeos = (
     cx: number,
     cz: number,
     w: number,
     d: number,
-    topMat: THREE.MeshStandardMaterial,
-    curbMat: THREE.MeshStandardMaterial,
-  ): THREE.Group => {
-    const g = new THREE.Group();
+    style: SidewalkDistrictStyle,
+  ): void => {
     const segs = 8;
 
-    // Top paved sidewalk surface conforming vertex-by-vertex to rolling terrain
+    // Top paved sidewalk surface conforming vertex-by-vertex to rolling terrain (pre-baked into world space)
     const topGeo = new THREE.PlaneGeometry(w, d, segs, segs);
     topGeo.rotateX(-Math.PI * 0.5);
     const tPos = topGeo.attributes.position;
@@ -170,16 +185,13 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     for (let i = 0; i < tPos.count; i++) {
       const lx = tPos.getX(i);
       const lz = tPos.getZ(i);
-      tPos.setY(i, getTerrainHeight(cx + lx, cz + lz) + SIDEWALK_HEIGHT);
+      tPos.setXYZ(i, cx + lx, getTerrainHeight(cx + lx, cz + lz) + SIDEWALK_HEIGHT, cz + lz);
       tUv.setXY(i, lx / 2.4, lz / 2.4);
     }
     topGeo.computeVertexNormals();
-    const topMesh = new THREE.Mesh(topGeo, topMat);
-    topMesh.position.set(cx, 0, cz);
-    topMesh.receiveShadow = true;
-    g.add(topMesh);
+    topGeosByStyle[style].push(topGeo);
 
-    // 4-sided terrain-hugging granite curbstone skirt dropping 0.65m below road surface
+    // 4-sided terrain-hugging granite curbstone skirt dropping 0.55m below road surface
     const skirtVerts: number[] = [];
     const skirtUvs: number[] = [];
     const skirtIdx: number[] = [];
@@ -217,10 +229,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     skirtGeo.setAttribute('uv', new THREE.Float32BufferAttribute(skirtUvs, 2));
     skirtGeo.setIndex(skirtIdx);
     skirtGeo.computeVertexNormals();
-    const skirtMesh = new THREE.Mesh(skirtGeo, curbMat);
-    skirtMesh.receiveShadow = true;
-    g.add(skirtMesh);
-    return g;
+    curbSkirtGeos.push(skirtGeo);
   };
 
   const coastalPbr = createDistrictSidewalkPbr('coastal');
@@ -299,7 +308,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
             ? 'mediterranean'
             : 'urban';
 
-      root.add(createTerrainBlockMeshes(cx, cz, w, d, sidewalkTopMats[style], curbEdgeMat));
+      collectTerrainBlockGeos(cx, cz, w, d, style);
 
       // Cast-iron storm drain grates nestled into the avenue gutters (2 per block side)
       for (const side of [-1, 1]) {
@@ -345,7 +354,29 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       }
     }
   }
-  void cornerR;
+
+  // Merge all 64 city blocks into 4 single meshes (3 paving styles + 1 granite curb skirt)!
+  for (const style of ['coastal', 'mediterranean', 'urban'] as const) {
+    const list = topGeosByStyle[style];
+    if (list.length > 0) {
+      const merged = mergeGeometries(list, false);
+      for (const g of list) g.dispose();
+      if (merged) {
+        const m = new THREE.Mesh(merged, sidewalkTopMats[style]);
+        m.receiveShadow = true;
+        root.add(m);
+      }
+    }
+  }
+  if (curbSkirtGeos.length > 0) {
+    const mergedSkirt = mergeGeometries(curbSkirtGeos, false);
+    for (const g of curbSkirtGeos) g.dispose();
+    if (mergedSkirt) {
+      const m = new THREE.Mesh(mergedSkirt, curbEdgeMat);
+      m.receiveShadow = true;
+      root.add(m);
+    }
+  }
 
   // Batch tactile ADA pads, storm drain grates, & corner bollards into 3 single draw calls!
   const tactileGeo = new THREE.PlaneGeometry(1, 1);
@@ -404,47 +435,81 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     root.add(treeGrateInst);
   }
 
-  // 1b. Readable 3D Corner Street Name Signs at Every Intersection (crossed Avenue + Cross-Street blades!)
-  const streetBladeMatCache = new Map<string, THREE.MeshStandardMaterial>();
-  const getStreetBladeMat = (label: string, style: 'green' | 'coastal'): THREE.MeshStandardMaterial => {
-    const key = `${style}:${label}`;
-    let mat = streetBladeMatCache.get(key);
-    if (!mat) {
-      const c = document.createElement('canvas');
-      c.width = 256;
-      c.height = 64;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = style === 'coastal' ? '#0d5e66' : '#0f5c35';
-      ctx.fillRect(0, 0, 256, 64);
-      ctx.strokeStyle = style === 'coastal' ? '#ffd166' : '#ffffff';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(4, 4, 248, 56);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '900 24px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, 128, 33, 232);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 4;
-      mat = new THREE.MeshStandardMaterial({
-        map: tex,
-        roughness: 0.36,
-        metalness: 0.18,
-      });
-      streetBladeMatCache.set(key, mat);
-    }
-    return mat;
-  };
-
+  // 1b. Readable 3D Corner Street Name Signs at Every Intersection (Atlas-merged: 324 draws -> 3 total draws!)
   if (blueprint.streetSigns.length > 0) {
+    const ATLAS_COLS = 4;
+    const ATLAS_ROWS = 8;
+    const SLOT_W = 256;
+    const SLOT_H = 64;
+    const atlasCanvas = document.createElement('canvas');
+    atlasCanvas.width = ATLAS_COLS * SLOT_W;
+    atlasCanvas.height = ATLAS_ROWS * SLOT_H;
+    const aCtx = atlasCanvas.getContext('2d')!;
+    aCtx.fillStyle = '#0f5c35';
+    aCtx.fillRect(0, 0, atlasCanvas.width, atlasCanvas.height);
+
+    const slotMap = new Map<string, number>();
+    const ensureAtlasSlot = (label: string, style: 'green' | 'coastal'): number => {
+      const key = `${style}:${label}`;
+      const existing = slotMap.get(key);
+      if (existing !== undefined) return existing;
+      const idx = Math.min(ATLAS_COLS * ATLAS_ROWS - 1, slotMap.size);
+      slotMap.set(key, idx);
+      const col = idx % ATLAS_COLS;
+      const row = Math.floor(idx / ATLAS_COLS);
+      const ox = col * SLOT_W;
+      const oy = row * SLOT_H;
+      aCtx.fillStyle = style === 'coastal' ? '#0d5e66' : '#0f5c35';
+      aCtx.fillRect(ox, oy, SLOT_W, SLOT_H);
+      aCtx.strokeStyle = style === 'coastal' ? '#ffd166' : '#ffffff';
+      aCtx.lineWidth = 4;
+      aCtx.strokeRect(ox + 4, oy + 4, SLOT_W - 8, SLOT_H - 8);
+      aCtx.fillStyle = '#ffffff';
+      aCtx.font = '900 24px system-ui, sans-serif';
+      aCtx.textAlign = 'center';
+      aCtx.textBaseline = 'middle';
+      aCtx.fillText(label, ox + SLOT_W * 0.5, oy + SLOT_H * 0.52, SLOT_W - 24);
+      return idx;
+    };
+
     const signPostGeo = new THREE.CylinderGeometry(0.055, 0.065, 3.5, 8);
     signPostGeo.translate(0, 1.75, 0);
     const signPostInst = new THREE.InstancedMesh(signPostGeo, poleMat, blueprint.streetSigns.length);
-    signPostInst.castShadow = true;
+    signPostInst.castShadow = false;
 
-    const bladeGeo = new THREE.BoxGeometry(1.38, 0.3, 0.045);
-    const bladeEdgeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0ea, roughness: 0.35, metalness: 0.7 });
+    const bladeEdgeGeos: THREE.BufferGeometry[] = [];
+    const bladeFaceGeos: THREE.BufferGeometry[] = [];
+
+    const pushSignBlade = (x: number, y: number, z: number, rotY: number, slotIdx: number) => {
+      // Metallic backing plate
+      const edge = new THREE.BoxGeometry(1.38, 0.3, 0.04);
+      if (rotY !== 0) edge.rotateY(rotY);
+      edge.translate(x, y, z);
+      bladeEdgeGeos.push(edge);
+
+      // Front & back readable text face quads mapped to this street name's atlas UV slot
+      const col = slotIdx % ATLAS_COLS;
+      const row = Math.floor(slotIdx / ATLAS_COLS);
+      const u0 = col / ATLAS_COLS + 0.002;
+      const u1 = (col + 1) / ATLAS_COLS - 0.002;
+      const vTop = 1 - row / ATLAS_ROWS - 0.004;
+      const vBot = 1 - (row + 1) / ATLAS_ROWS + 0.004;
+
+      for (const side of [1, -1]) {
+        const quad = new THREE.PlaneGeometry(1.36, 0.28);
+        const uvAttr = quad.attributes.uv;
+        for (let vi = 0; vi < uvAttr.count; vi++) {
+          const u = uvAttr.getX(vi);
+          const v = uvAttr.getY(vi);
+          uvAttr.setXY(vi, u0 + u * (u1 - u0), vBot + v * (vTop - vBot));
+        }
+        if (side < 0) quad.rotateY(Math.PI);
+        quad.translate(0, 0, side * 0.023);
+        if (rotY !== 0) quad.rotateY(rotY);
+        quad.translate(x, y, z);
+        bladeFaceGeos.push(quad);
+      }
+    };
 
     blueprint.streetSigns.forEach((ss, idx) => {
       dummy.position.set(ss.x, ss.y, ss.z);
@@ -453,36 +518,33 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       dummy.updateMatrix();
       signPostInst.setMatrixAt(idx, dummy.matrix);
 
-      const aveMat = getStreetBladeMat(ss.avenueName, ss.style);
-      const stMat = getStreetBladeMat(ss.streetName, ss.style);
+      const aveSlot = ensureAtlasSlot(ss.avenueName, ss.style);
+      const stSlot = ensureAtlasSlot(ss.streetName, ss.style);
 
-      // Lower blade runs N-S along the Avenue
-      const aveBlade = new THREE.Mesh(bladeGeo, [
-        bladeEdgeMat,
-        bladeEdgeMat,
-        bladeEdgeMat,
-        bladeEdgeMat,
-        aveMat,
-        aveMat,
-      ]);
-      aveBlade.position.set(ss.x, ss.y + 3.06, ss.z);
-      aveBlade.rotation.y = Math.PI * 0.5;
-      root.add(aveBlade);
-
-      // Upper perpendicular blade runs E-W along the Cross-Street
-      const stBlade = new THREE.Mesh(bladeGeo, [
-        bladeEdgeMat,
-        bladeEdgeMat,
-        bladeEdgeMat,
-        bladeEdgeMat,
-        stMat,
-        stMat,
-      ]);
-      stBlade.position.set(ss.x, ss.y + 3.38, ss.z);
-      root.add(stBlade);
+      // Lower blade runs N-S along the Avenue; upper perpendicular blade runs E-W along the Cross-Street
+      pushSignBlade(ss.x, ss.y + 3.06, ss.z, Math.PI * 0.5, aveSlot);
+      pushSignBlade(ss.x, ss.y + 3.38, ss.z, 0, stSlot);
     });
     signPostInst.instanceMatrix.needsUpdate = true;
     root.add(signPostInst);
+
+    const atlasTex = new THREE.CanvasTexture(atlasCanvas);
+    atlasTex.colorSpace = THREE.SRGBColorSpace;
+    atlasTex.anisotropy = 4;
+    const bladeFaceMat = new THREE.MeshStandardMaterial({
+      map: atlasTex,
+      roughness: 0.36,
+      metalness: 0.16,
+    });
+    const bladeEdgeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0ea, roughness: 0.35, metalness: 0.7 });
+
+    const mergedFaces = mergeGeometries(bladeFaceGeos, false);
+    for (const g of bladeFaceGeos) g.dispose();
+    if (mergedFaces) root.add(new THREE.Mesh(mergedFaces, bladeFaceMat));
+
+    const mergedEdges = mergeGeometries(bladeEdgeGeos, false);
+    for (const g of bladeEdgeGeos) g.dispose();
+    if (mergedEdges) root.add(new THREE.Mesh(mergedEdges, bladeEdgeMat));
   }
 
   // 2. Live Cycling Intersection Traffic Signal Gantries (shared exact coords with blueprint.propObbs!)
@@ -494,10 +556,10 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       const amberMat = new THREE.MeshStandardMaterial({ color: 0x332406, emissive: 0xffb703, emissiveIntensity: 0.1 });
       const greenMat = new THREE.MeshStandardMaterial({ color: 0x063318, emissive: 0x22ff77, emissiveIntensity: 2.2 });
 
-      signals.push({ redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
-
       const gantry = new THREE.Group();
       gantry.position.set(sigSpec.x, sigSpec.y, sigSpec.z);
+
+      signals.push({ group: gantry, redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
 
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 6.4, 8), poleMat);
       post.position.y = 3.2;
@@ -534,6 +596,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       gantry.add(rLensB, aLensB, gLensB);
 
       fallbackSignalsRoot.add(gantry);
+      culledProps.push({ obj: gantry, x: sigSpec.x, z: sigSpec.z, maxDistSq: 175 * 175 });
   }
 
   // 3. Readable Neon Hotel & District Marquees (shared exact coords with blueprint.propObbs!)
@@ -718,24 +781,37 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     fallbackLoungersRoot.add(lounger);
   }
 
-  // 7. Additive Streetlamp Light Halos (creates real cinematic night atmosphere!)
-  for (const sl of blueprint.streetLights) {
-    const mat = new THREE.SpriteMaterial({
-      map: glowTex,
-      color: sl.color,
-      transparent: true,
-      opacity: 0.35,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const sprite = new THREE.Sprite(mat);
+  // 7. Additive Streetlamp Light Halos (batched into 1 single THREE.Points draw call instead of 350+ Sprites!)
+  const haloPositions = new Float32Array(blueprint.streetLights.length * 3);
+  const haloColors = new Float32Array(blueprint.streetLights.length * 3);
+  const haloTmpCol = new THREE.Color();
+  for (let i = 0; i < blueprint.streetLights.length; i++) {
+    const sl = blueprint.streetLights[i];
     const dx = Math.sin(sl.yaw) * 1.35;
     const dz = Math.cos(sl.yaw) * 1.35;
-    sprite.position.set(sl.x + dx, sl.y + 6.5, sl.z + dz);
-    sprite.scale.set(4.5, 4.5, 1);
-    root.add(sprite);
-    lightHalos.push(sprite);
+    haloPositions[i * 3 + 0] = sl.x + dx;
+    haloPositions[i * 3 + 1] = sl.y + 6.5;
+    haloPositions[i * 3 + 2] = sl.z + dz;
+    haloTmpCol.setHex(sl.color);
+    haloColors[i * 3 + 0] = haloTmpCol.r;
+    haloColors[i * 3 + 1] = haloTmpCol.g;
+    haloColors[i * 3 + 2] = haloTmpCol.b;
   }
+  const haloGeo = new THREE.BufferGeometry();
+  haloGeo.setAttribute('position', new THREE.BufferAttribute(haloPositions, 3));
+  haloGeo.setAttribute('color', new THREE.BufferAttribute(haloColors, 3));
+  const haloPointsMat = new THREE.PointsMaterial({
+    map: glowTex,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.35,
+    size: 5.5,
+    sizeAttenuation: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const haloPoints = new THREE.Points(haloGeo, haloPointsMat);
+  root.add(haloPoints);
 
   // 8. Coastal Seagulls soaring lazily above Sol Beach, South Pier, and Marina Cove
   const gullMat = new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.6 });
@@ -797,6 +873,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
             }
           });
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: lg.x, z: lg.z, maxDistSq: 135 * 135 });
         }
         fallbackLoungersRoot.visible = false;
       }
@@ -809,11 +886,12 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           inst.rotation.y = bc.yaw;
           inst.traverse((obj) => {
             if (obj instanceof THREE.Mesh) {
-              obj.castShadow = true;
+              obj.castShadow = false;
               obj.receiveShadow = true;
             }
           });
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: bc.x, z: bc.z, maxDistSq: 120 * 120 });
         }
         fallbackBenchesRoot.visible = false;
       }
@@ -825,11 +903,12 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           inst.position.set(hy.x, hy.y, hy.z);
           inst.traverse((obj) => {
             if (obj instanceof THREE.Mesh) {
-              obj.castShadow = true;
+              obj.castShadow = false;
               obj.receiveShadow = true;
             }
           });
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: hy.x, z: hy.z, maxDistSq: 105 * 105 });
         }
         fallbackHydrantsRoot.visible = false;
       }
@@ -841,11 +920,12 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           inst.position.set(pl.x, pl.y, pl.z);
           inst.traverse((obj) => {
             if (obj instanceof THREE.Mesh) {
-              obj.castShadow = true;
+              obj.castShadow = false;
               obj.receiveShadow = true;
             }
           });
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: pl.x, z: pl.z, maxDistSq: 145 * 145 });
         }
         fallbackPlantersRoot.visible = false;
       }
@@ -857,7 +937,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           inst.position.set(sc.x, sc.y, sc.z);
           inst.traverse((obj) => {
             if (!(obj instanceof THREE.Mesh)) return;
-            obj.castShadow = true;
+            obj.castShadow = false;
             obj.receiveShadow = true;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const cloned = mats.map((m) => {
@@ -871,6 +951,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
             obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
           });
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: sc.x, z: sc.z, maxDistSq: 145 * 145 });
         }
         fallbackCafesRoot.visible = false;
       }
@@ -884,7 +965,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           const geo = obj.geometry.clone();
           geo.applyMatrix4(obj.matrixWorld);
           const inst = new THREE.InstancedMesh(geo, obj.material, bollardMatrices.length);
-          inst.castShadow = true;
+          inst.castShadow = false;
           inst.receiveShadow = true;
           bollardMatrices.forEach((m, i) => inst.setMatrixAt(i, m));
           inst.instanceMatrix.needsUpdate = true;
@@ -907,7 +988,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           let greenMat: THREE.MeshStandardMaterial | null = null;
           inst.traverse((obj) => {
             if (!(obj instanceof THREE.Mesh)) return;
-            obj.castShadow = true;
+            obj.castShadow = false;
             obj.receiveShadow = true;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const cloned = mats.map((m) => {
@@ -929,37 +1010,43 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
             obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
           });
           if (redMat && amberMat && greenMat) {
-            signals.push({ redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
+            signals.push({ group: inst, redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
           }
           gltfStreetPropsRoot.add(inst);
+          culledProps.push({ obj: inst, x: sigSpec.x, z: sigSpec.z, maxDistSq: 175 * 175 });
         }
         fallbackSignalsRoot.visible = false;
       }
     },
-    update(elapsed: number, nightFactor: number) {
-      // Live traffic signal cycle (Green -> Amber -> Red)
+    update(elapsed: number, nightFactor: number, focusX = 0, focusZ = 0) {
+      // Distance-cull small street furniture & distant traffic signals beyond visual detail range!
+      for (let i = 0; i < culledProps.length; i++) {
+        const cp = culledProps[i];
+        const dx = cp.x - focusX;
+        const dz = cp.z - focusZ;
+        cp.obj.visible = dx * dx + dz * dz < cp.maxDistSq;
+      }
+
+      // Live traffic signal cycle (Green -> Amber -> Red) for nearby visible intersections
+      const boost = 1.4 + nightFactor * 1.6;
       for (const sig of signals) {
+        if (!sig.group.visible) continue;
         const cycle = (elapsed + sig.phaseOffset) % 14;
         const isGreen = cycle < 7;
         const isAmber = cycle >= 7 && cycle < 9;
         const isRed = cycle >= 9;
-        const boost = 1.4 + nightFactor * 1.6;
         sig.greenMat.emissiveIntensity = isGreen ? boost : 0.05;
         sig.amberMat.emissiveIntensity = isAmber ? boost : 0.05;
         sig.redMat.emissiveIntensity = isRed ? boost : 0.05;
       }
 
-      // Brighten neon hotel marquees, billboards & streetlamp halos dramatically at dusk/night
+      // Brighten neon hotel marquees, billboards & single-draw streetlamp halos dramatically at dusk/night
       const signGlow = 0.35 + nightFactor * 1.15;
       for (const sm of signMaterials) {
         sm.emissiveIntensity = signGlow;
       }
-      const haloOpacity = 0.14 + nightFactor * 0.65;
-      const haloScale = 3.2 + nightFactor * 3.8;
-      for (const sp of lightHalos) {
-        sp.material.opacity = haloOpacity;
-        sp.scale.set(haloScale, haloScale, 1);
-      }
+      haloPointsMat.opacity = 0.14 + nightFactor * 0.65;
+      haloPointsMat.size = 4.2 + nightFactor * 4.8;
 
       // Animate circling seagulls with gentle wing flaps & banked turns
       for (const gull of seagulls) {

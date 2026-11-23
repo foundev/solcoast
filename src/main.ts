@@ -122,7 +122,7 @@ async function bootstrap(): Promise<void> {
   renderer.toneMappingExposure = 0.96;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 2200);
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.25, 1250);
 
   // Build deterministic coastal Miami world + live PMREM reflections + street props
   const blueprint = createCityBlueprint();
@@ -700,8 +700,10 @@ async function bootstrap(): Promise<void> {
           skyRes.sunDirection,
           skyRes.sunColor,
           skyRes.fogColor,
+          pWorld.x,
+          pWorld.z,
         );
-        streetProps.update(elapsed, skyRes.nightFactor);
+        streetProps.update(elapsed, skyRes.nightFactor, pWorld.x, pWorld.z);
         for (const v of vehicles) {
           vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, false);
         }
@@ -1115,8 +1117,10 @@ async function bootstrap(): Promise<void> {
       skyRes.sunDirection,
       skyRes.sunColor,
       skyRes.fogColor,
+      player.x,
+      player.z,
     );
-    streetProps.update(elapsed, skyRes.nightFactor);
+    streetProps.update(elapsed, skyRes.nightFactor, player.x, player.z);
 
     for (const v of vehicles) {
       const occupied = activeVehicle !== null && activeVehicle.id === v.id;
@@ -1181,8 +1185,16 @@ async function bootstrap(): Promise<void> {
   const initVehicle = getActiveVehicle();
   focusVec.set(player.x, player.y, player.z);
   const initSky = sky.update(timeOfDayHours, 0, focusVec);
-  cityHandles.updateAnimation(0, initSky.nightFactor, initSky.sunDirection, initSky.sunColor, initSky.fogColor);
-  streetProps.update(0, initSky.nightFactor);
+  cityHandles.updateAnimation(
+    0,
+    initSky.nightFactor,
+    initSky.sunDirection,
+    initSky.sunColor,
+    initSky.fogColor,
+    player.x,
+    player.z,
+  );
+  streetProps.update(0, initSky.nightFactor, player.x, player.z);
   for (const v of vehicles) {
     vehicleMeshes.get(v.id)?.syncFromState(v, initSky.nightFactor, 0.016, initVehicle !== null && initVehicle.id === v.id);
   }

@@ -2777,6 +2777,16 @@ interface PbrSurfaceBinding {
   tintHex: number;
 }
 
+interface RoomLightSpec {
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  color: number;
+  intensity: number;
+  distance: number;
+  floor: number;
+}
+
 interface BuiltVenue {
   def: InteriorDef;
   group: THREE.Group;
@@ -2785,6 +2795,7 @@ interface BuiltVenue {
   fountainEffects: AnimatedFountainWater[];
   npcs: BuiltNpcHandle[];
   doors: BuiltDoorHandle[];
+  roomLights: RoomLightSpec[];
   danceFloorMat?: THREE.MeshStandardMaterial;
   lasers?: THREE.Mesh[];
   monolithMats?: THREE.MeshStandardMaterial[];
@@ -2960,6 +2971,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   group.rotation.y = anchor0.worldRotY;
   group.visible = true;
   const pbrBindings: PbrSurfaceBinding[] = [];
+  const roomLights: RoomLightSpec[] = [];
+  const cosAnchor = Math.cos(anchor0.worldRotY);
+  const sinAnchor = Math.sin(anchor0.worldRotY);
 
   const EXT_Z = -0.26;
   const getStoryExtH = (r: InteriorRoomDef): number =>
@@ -3116,25 +3130,24 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(barN, barS);
     }
 
-    // Distributed 2-point warm/moody room lighting for even, natural illumination without harsh black corners
+    // Record room light coordinates for the shared 6-light interior pool (eliminates 38 global PointLights!)
     const spreadX = rw > rd ? rw * 0.24 : 0;
     const spreadZ = rd >= rw ? rd * 0.24 : 0;
     for (const sign of [-1, 1]) {
-      const pt = new THREE.PointLight(
-        room.lightColor,
-        room.lightIntensity * 14,
-        Math.max(rw, rd) * 1.45,
-        1.35,
-      );
-      pt.position.set(cx + sign * spreadX, baseY + room.height - 0.75, cz + sign * spreadZ);
-      group.add(pt);
+      const lx = cx + sign * spreadX;
+      const ly = baseY + room.height - 0.75;
+      const lz = cz + sign * spreadZ;
+      roomLights.push({
+        worldX: anchor0.worldX + lx * cosAnchor + lz * sinAnchor,
+        worldY: anchor0.worldY + ly,
+        worldZ: anchor0.worldZ - lx * sinAnchor + lz * cosAnchor,
+        color: room.lightColor,
+        intensity: room.lightIntensity * 14,
+        distance: Math.max(rw, rd) * 1.45,
+        floor: rFloor,
+      });
     }
   }
-
-  // Venue-wide soft bounce fill
-  const primaryRoom = def.rooms[0];
-  const hemi = new THREE.HemisphereLight(primaryRoom.lightColor, 0x2a2834, primaryRoom.ambientIntensity);
-  group.add(hemi);
 
   // 2. Build all perimeter & multi-room partition walls with photographic PBR textures,
   //    architectural wainscoting, chair rail, baseboards, crown molding, wall sconces,
@@ -4420,6 +4433,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     fountainEffects,
     npcs,
     doors,
+    roomLights,
     danceFloorMat,
     lasers,
     monolithMats,
@@ -4432,6 +4446,18 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
   const venues = new Map<InteriorId, BuiltVenue>();
   const outdoorMarkersRoot = new THREE.Group();
   const storefronts: OutdoorStorefrontHandle[] = [];
+
+  // Shared fixed-size pool of 6 PointLights + 1 interior HemisphereLight so WebGL compiles a tiny
+  // constant light loop (6 instead of 38!) with zero shader recompiles on building entry/exit!
+  const LIGHT_POOL_SIZE = 6;
+  const lightPool: THREE.PointLight[] = [];
+  for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
+    const pt = new THREE.PointLight(0xfff1dc, 0, 28, 1.35);
+    scene.add(pt);
+    lightPool.push(pt);
+  }
+  const interiorHemi = new THREE.HemisphereLight(0xfff1dc, 0x2a2834, 0);
+  scene.add(interiorHemi);
 
   for (let i = 0; i < INTERIORS.length; i++) {
     const def = INTERIORS[i];
@@ -4571,14 +4597,57 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
 
       const exitPulse = 1 + Math.sin(elapsed * 3.6) * 0.1;
 
+      // Compute player world coordinates so both distance culling and the 6-light pool work seamlessly indoors & outdoors
+      let pWorldX = playerX;
+      let pWorldY = 1.6;
+      let pWorldZ = playerZ;
+      const activeVenue = activeId ? venues.get(activeId) : undefined;
+      if (activeVenue) {
+        const curFl = getFloorFromPlayerY(playerY, activeVenue.def);
+        const pw = interiorLocalToWorld(activeVenue.def, playerX, playerY, playerZ, curFl);
+        pWorldX = pw.x;
+        pWorldY = pw.y + 1.4;
+        pWorldZ = pw.z;
+      }
+
+      // Collect candidate interior room lights for the nearest 6 pooled PointLights
+      const candidateLights: { spec: RoomLightSpec; distSq: number }[] = [];
+
       for (const [vid, venue] of venues) {
         const isActive = vid === activeId;
-        // When outdoors, animate any venue within 95m of the player so looking through the windows from the street
-        // shows living staff patrols, bubbling fountains, pulsing dance floors, and guests moving inside!
-        if (!isActive) {
-          const distToEntrance = Math.hypot(playerX - venue.def.entranceX, playerZ - venue.def.entranceZ);
-          if (distToEntrance > 95) continue;
+        const distToEntrance = Math.hypot(pWorldX - venue.def.entranceX, pWorldZ - venue.def.entranceZ);
+
+        // Keep architectural exterior shells visible up to 460m, while culling dense indoor GLB props,
+        // rigged staff NPCs, and animated fountains beyond 75m outdoors!
+        const showShell = isActive || distToEntrance < 460;
+        const showInside = isActive || distToEntrance < 75;
+        venue.group.visible = showShell;
+        venue.propsRoot.visible = showInside;
+        for (const h of venue.npcs) {
+          h.root.visible = showInside;
         }
+        for (const fx of venue.fountainEffects) {
+          fx.group.visible = showInside;
+        }
+
+        if (isActive) {
+          for (const ls of venue.roomLights) {
+            const dx = ls.worldX - pWorldX;
+            const dy = (ls.worldY - pWorldY) * 2.2; // Strongly prioritize lights on the player's current floor
+            const dz = ls.worldZ - pWorldZ;
+            candidateLights.push({ spec: ls, distSq: dx * dx + dy * dy + dz * dz });
+          }
+        } else if (activeId === null && distToEntrance < 45) {
+          // Warm ground-floor peek-through glow when walking or cruising right past a storefront!
+          for (const ls of venue.roomLights) {
+            if (ls.floor !== 0) continue;
+            const dx = ls.worldX - pWorldX;
+            const dz = ls.worldZ - pWorldZ;
+            candidateLights.push({ spec: ls, distSq: dx * dx + dz * dz });
+          }
+        }
+
+        if (!showInside) continue;
 
         if (isActive) {
           venue.exitRing.visible = true;
@@ -4677,6 +4746,28 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
             handle.rig.update(dt, speedMps > 0.15 ? 2.4 : 0, false, true, elapsed + i);
           }
         }
+      }
+
+      // Position the fixed 6-light interior pool on the closest active/storefront rooms
+      candidateLights.sort((a, b) => a.distSq - b.distSq);
+      for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
+        const pt = lightPool[i];
+        const cand = candidateLights[i];
+        if (cand) {
+          pt.position.set(cand.spec.worldX, cand.spec.worldY, cand.spec.worldZ);
+          pt.color.setHex(cand.spec.color);
+          pt.intensity = cand.spec.intensity;
+          pt.distance = cand.spec.distance;
+        } else {
+          pt.intensity = 0;
+        }
+      }
+      if (activeVenue) {
+        const pr = activeVenue.def.rooms[0];
+        interiorHemi.color.setHex(pr.lightColor);
+        interiorHemi.intensity = pr.ambientIntensity;
+      } else {
+        interiorHemi.intensity = 0;
       }
     },
   };

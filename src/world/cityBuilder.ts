@@ -55,6 +55,8 @@ export interface CitySceneHandles {
     sunDir: THREE.Vector3,
     sunColor: THREE.Color,
     fogColor: THREE.Color,
+    focusX?: number,
+    focusZ?: number,
   ) => void;
 }
 
@@ -343,6 +345,61 @@ function buildArchedCauseway(
   return group;
 }
 
+interface BuiltBuildingLod {
+  group: THREE.Group;
+  detailGroup: THREE.Group;
+  shadowMeshes: THREE.Mesh[];
+  x: number;
+  z: number;
+  maxDistSq: number;
+  isShowcase: boolean;
+}
+
+interface SharedBuildingMaterials {
+  accentCache: Map<number, THREE.MeshStandardMaterial>;
+  neonCache: Map<number, THREE.MeshStandardMaterial>;
+  resortSlabMat: THREE.MeshStandardMaterial;
+  villaRoofMat: THREE.MeshStandardMaterial;
+  villaMidSlabMat: THREE.MeshStandardMaterial;
+  villaPoolMat: THREE.MeshPhysicalMaterial;
+}
+
+function pushMergedBox(
+  list: THREE.BufferGeometry[],
+  w: number,
+  h: number,
+  d: number,
+  x: number,
+  y: number,
+  z: number,
+  rx = 0,
+): void {
+  const g = new THREE.BoxGeometry(w, h, d);
+  if (rx !== 0) g.rotateX(rx);
+  g.translate(x, y, z);
+  list.push(g);
+}
+
+function addMergedGroup(
+  parent: THREE.Group,
+  geos: THREE.BufferGeometry[],
+  mat: THREE.Material,
+  castShadow = false,
+  receiveShadow = false,
+): THREE.Mesh | null {
+  if (geos.length === 0) return null;
+  const merged = geos.length === 1 ? geos[0] : mergeGeometries(geos, false);
+  if (geos.length > 1) {
+    for (const g of geos) g.dispose();
+  }
+  if (!merged) return null;
+  const mesh = new THREE.Mesh(merged, mat);
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = receiveShadow;
+  parent.add(mesh);
+  return mesh;
+}
+
 function buildBuildingMesh(
   b: BuildingSpec,
   facadeCache: Map<string, THREE.MeshStandardMaterial>,
@@ -351,9 +408,13 @@ function buildBuildingMesh(
   lobbyGlassMat: THREE.MeshPhysicalMaterial,
   lobbyInteriorMat: THREE.MeshStandardMaterial,
   hvacMat: THREE.MeshStandardMaterial,
-): THREE.Group {
+  shared: SharedBuildingMaterials,
+): { group: THREE.Group; detailGroup: THREE.Group; shadowMeshes: THREE.Mesh[] } {
   const group = new THREE.Group();
   group.position.set(b.x, b.baseY, b.z);
+  const detailGroup = new THREE.Group();
+  group.add(detailGroup);
+  const shadowMeshes: THREE.Mesh[] = [];
 
   // True architectural story height scaling (~3.5m per story so windows match 1.8m humans & 1.2m cars)
   const rx = Math.max(1, Math.round(b.width / 16));
@@ -392,6 +453,7 @@ function buildBuildingMesh(
     bowl.castShadow = true;
     bowl.receiveShadow = true;
     group.add(bowl);
+    shadowMeshes.push(bowl);
 
     // Panoramic dark concourse glass band
     const concourse = new THREE.Mesh(
@@ -399,7 +461,7 @@ function buildBuildingMesh(
       lobbyGlassMat,
     );
     concourse.position.y = 4.2;
-    group.add(concourse);
+    detailGroup.add(concourse);
 
     // Iconic cantilevered halo roof canopy + glowing neon stadium crown
     const roofRim = new THREE.Mesh(new THREE.TorusGeometry(outerR * 0.94, 2.3, 12, 32), bowlMat);
@@ -407,6 +469,7 @@ function buildBuildingMesh(
     roofRim.position.y = b.height * 0.78;
     roofRim.castShadow = true;
     group.add(roofRim);
+    shadowMeshes.push(roofRim);
 
     const innerDome = new THREE.Mesh(
       new THREE.CylinderGeometry(outerR * 0.68, outerR * 0.94, 3.8, 28),
@@ -423,18 +486,20 @@ function buildBuildingMesh(
     const lowerGlow = new THREE.Mesh(new THREE.TorusGeometry(outerR * 1.03, 0.3, 8, 36), neonPink);
     lowerGlow.rotation.x = Math.PI * 0.5;
     lowerGlow.position.y = 7.0;
-    group.add(lowerGlow);
+    detailGroup.add(lowerGlow);
 
-    // Architectural radial exterior ribs around the arena bowl
+    // Architectural radial exterior ribs merged into 1 draw call!
+    const ribGeos: THREE.BufferGeometry[] = [];
     for (let i = 0; i < 16; i++) {
       const ang = (i / 16) * Math.PI * 2;
-      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.85, b.height * 0.76, 1.8), bowlMat);
-      rib.position.set(Math.cos(ang) * outerR * 1.01, b.height * 0.38, Math.sin(ang) * outerR * 1.01);
-      rib.rotation.y = -ang;
-      group.add(rib);
+      const g = new THREE.BoxGeometry(0.85, b.height * 0.76, 1.8);
+      g.rotateY(-ang);
+      g.translate(Math.cos(ang) * outerR * 1.01, b.height * 0.38, Math.sin(ang) * outerR * 1.01);
+      ribGeos.push(g);
     }
+    addMergedGroup(detailGroup, ribGeos, bowlMat);
 
-    return group;
+    return { group, detailGroup, shadowMeshes };
   }
 
   let wallMat = facadeCache.get(key);
@@ -464,11 +529,22 @@ function buildBuildingMesh(
     facadeCache.set(key, wallMat);
   }
 
-  const accentMat = new THREE.MeshStandardMaterial({
-    color: b.accentColor,
-    roughness: 0.42,
-    metalness: 0.22,
-  });
+  let accentMat = shared.accentCache.get(b.accentColor);
+  if (!accentMat) {
+    accentMat = new THREE.MeshStandardMaterial({
+      color: b.accentColor,
+      roughness: 0.42,
+      metalness: 0.22,
+    });
+    shared.accentCache.set(b.accentColor, accentMat);
+  }
+
+  // Batched close-up detail geometry lists (slashing ~14 draws/building down to ~2-4 draws!)
+  const accentDetailGeos: THREE.BufferGeometry[] = [];
+  const glassDetailGeos: THREE.BufferGeometry[] = [];
+  const hvacDetailGeos: THREE.BufferGeometry[] = [];
+  const slabDetailGeos: THREE.BufferGeometry[] = [];
+  const neonDetailGeos: THREE.BufferGeometry[] = [];
 
   // Solid architectural concrete foundation plinth below y = 0 so buildings on sloped Sunset Hills &
   // Coconut Grove blocks embed cleanly into rolling terrain with ZERO floating downhill corners!
@@ -491,12 +567,14 @@ function buildBuildingMesh(
     mainMesh.castShadow = true;
     mainMesh.receiveShadow = true;
     group.add(mainMesh);
+    shadowMeshes.push(mainMesh);
   } else if (b.style === 'pavilion') {
     const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, b.height, b.depth), wallMat);
     mainMesh.position.y = b.height * 0.5;
     mainMesh.castShadow = true;
     mainMesh.receiveShadow = true;
     group.add(mainMesh);
+    shadowMeshes.push(mainMesh);
   } else {
     const lobbyH = Math.min(3.6, b.height * 0.45);
     const upperH = Math.max(1.0, b.height - lobbyH);
@@ -505,75 +583,61 @@ function buildBuildingMesh(
     mainMesh.castShadow = true;
     mainMesh.receiveShadow = true;
     group.add(mainMesh);
+    shadowMeshes.push(mainMesh);
 
-    // Recessed warm-lit ground-floor lobby interior core + corner structural columns + transparent glass curtain wall!
+    // Recessed warm-lit ground-floor lobby interior core (kept in silhouette group so distant towers don't float above ground!)
     const coreW = Math.max(1.8, b.width - 2.6);
     const coreD = Math.max(1.8, b.depth - 2.6);
     const lobbyCore = new THREE.Mesh(new THREE.BoxGeometry(coreW, lobbyH - 0.06, coreD), lobbyInteriorMat);
     lobbyCore.position.y = lobbyH * 0.5;
     group.add(lobbyCore);
 
+    // 4 corner structural columns + transparent glass curtain wall (merged into close-up detailGroup!)
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
-        const col = new THREE.Mesh(new THREE.BoxGeometry(0.44, lobbyH, 0.44), accentMat);
-        col.position.set(sx * (b.width * 0.5 - 0.32), lobbyH * 0.5, sz * (b.depth * 0.5 - 0.32));
-        group.add(col);
+        pushMergedBox(
+          accentDetailGeos,
+          0.44,
+          lobbyH,
+          0.44,
+          sx * (b.width * 0.5 - 0.32),
+          lobbyH * 0.5,
+          sz * (b.depth * 0.5 - 0.32),
+        );
       }
     }
-
-    const lobbyGlass = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width - 0.08, lobbyH - 0.04, b.depth - 0.08),
-      lobbyGlassMat,
-    );
-    lobbyGlass.position.y = lobbyH * 0.5;
-    group.add(lobbyGlass);
+    pushMergedBox(glassDetailGeos, b.width - 0.08, lobbyH - 0.04, b.depth - 0.08, 0, lobbyH * 0.5, 0);
   }
 
   if (b.style === 'art-deco') {
     // Classic Miami South Beach curved corner drum + eyebrow balconies + stepped penthouse
     const drumRadius = Math.min(b.width, b.depth) * 0.24;
     const cornerDrum = new THREE.Mesh(
-      new THREE.CylinderGeometry(drumRadius, drumRadius, b.height + 1.4, 16),
+      new THREE.CylinderGeometry(drumRadius, drumRadius, b.height + 1.4, 14),
       wallMat,
     );
     cornerDrum.position.set(b.width * 0.44, (b.height + 1.4) * 0.5, b.depth * 0.44);
     cornerDrum.castShadow = true;
     group.add(cornerDrum);
+    shadowMeshes.push(cornerDrum);
 
     const step = new THREE.Mesh(
       new THREE.BoxGeometry(b.width * 0.72, 2.8, b.depth * 0.72),
       accentMat,
     );
     step.position.y = b.height + 1.4;
-    step.castShadow = true;
     group.add(step);
 
-    // Classic horizontal Art Deco sun-visor eyebrows & shared lightweight glass balcony railings
+    // Classic horizontal Art Deco sun-visor eyebrows & glass balcony railings (merged!)
     for (let ey = 4.2; ey < b.height - 2; ey += 5.4) {
-      const visor = new THREE.Mesh(
-        new THREE.BoxGeometry(b.width + 1.35, 0.34, b.depth + 1.35),
-        accentMat,
-      );
-      visor.position.y = ey;
-      group.add(visor);
-
+      pushMergedBox(accentDetailGeos, b.width + 1.35, 0.34, b.depth + 1.35, 0, ey, 0);
       if (ey > 5.0) {
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(b.width + 1.26, 0.92, b.depth + 1.26),
-          lobbyGlassMat,
-        );
-        rail.position.y = ey + 0.62;
-        group.add(rail);
+        pushMergedBox(glassDetailGeos, b.width + 1.26, 0.92, b.depth + 1.26, 0, ey + 0.62, 0);
       }
     }
 
     // Ground-floor sloped boutique storefront canopy awning
-    const canopy = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 2.2, 0.18, b.depth + 2.2),
-      accentMat,
-    );
-    canopy.position.y = 3.7;
-    group.add(canopy);
+    pushMergedBox(accentDetailGeos, b.width + 2.2, 0.18, b.depth + 2.2, 0, 3.7, 0);
   } else if (b.style === 'skyscraper') {
     // Architectural setback tier + mechanical penthouse + spire
     const setback = new THREE.Mesh(
@@ -581,16 +645,10 @@ function buildBuildingMesh(
       wallMat,
     );
     setback.position.y = b.height + b.height * 0.09;
-    setback.castShadow = true;
     group.add(setback);
 
     const topY = b.height + b.height * 0.18;
-    const mech = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width * 0.42, 3.2, b.depth * 0.42),
-      hvacMat,
-    );
-    mech.position.y = topY + 1.6;
-    group.add(mech);
+    pushMergedBox(hvacDetailGeos, b.width * 0.42, 3.2, b.depth * 0.42, 0, topY + 1.6, 0);
 
     const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.34, 10, 8), accentMat);
     spire.position.y = topY + 8.0;
@@ -599,18 +657,19 @@ function buildBuildingMesh(
     // Sleek cantilevered modernist coastal villa roof + panoramic glass + turquoise pool!
     const roof = new THREE.Mesh(
       new THREE.BoxGeometry(b.width + 2.8, 0.65, b.depth + 2.8),
-      new THREE.MeshStandardMaterial({ color: 0xfbfaf7, roughness: 0.36 }),
+      shared.villaRoofMat,
     );
     roof.position.y = b.height + 0.32;
     roof.castShadow = true;
     group.add(roof);
+    shadowMeshes.push(roof);
 
     const midSlab = new THREE.Mesh(
       new THREE.BoxGeometry(b.width + 1.8, 0.42, b.depth + 1.8),
-      new THREE.MeshStandardMaterial({ color: 0xf4f2ec, roughness: 0.42 }),
+      shared.villaMidSlabMat,
     );
     midSlab.position.y = b.height * 0.52;
-    group.add(midSlab);
+    detailGroup.add(midSlab);
 
     const upperH = b.height * 0.44;
     const villaCore = new THREE.Mesh(
@@ -620,38 +679,30 @@ function buildBuildingMesh(
     villaCore.position.y = b.height * 0.75;
     group.add(villaCore);
 
-    const glass = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 0.12, upperH, b.depth + 0.12),
-      lobbyGlassMat,
-    );
-    glass.position.y = b.height * 0.75;
-    group.add(glass);
+    pushMergedBox(glassDetailGeos, b.width + 0.12, upperH, b.depth + 0.12, 0, b.height * 0.75, 0);
 
     // Backyard infinity pool deck
     const pool = new THREE.Mesh(
       new THREE.BoxGeometry(b.width * 0.55, 0.16, 4.4),
-      new THREE.MeshPhysicalMaterial({
-        color: 0x1fd8e8,
-        roughness: 0.08,
-        clearcoat: 1.0,
-        emissive: 0x0b7b8f,
-        emissiveIntensity: 0.35,
-      }),
+      shared.villaPoolMat,
     );
     pool.position.set(0, 0.08, b.depth * 0.5 + 3.2);
-    group.add(pool);
+    detailGroup.add(pool);
   } else if (b.style === 'warehouse-mural') {
-    // Wynwood industrial art gallery sawtooth skylight roof + steel overhang
+    // Wynwood industrial art gallery sawtooth skylight roof (merged into 1 draw call!)
     const ridgeCount = Math.max(2, Math.round(b.depth / 8));
     const ridgeDepth = b.depth / ridgeCount;
     for (let r = 0; r < ridgeCount; r++) {
-      const saw = new THREE.Mesh(
-        new THREE.BoxGeometry(b.width * 0.94, 1.5, ridgeDepth * 0.55),
-        hvacMat,
+      pushMergedBox(
+        hvacDetailGeos,
+        b.width * 0.94,
+        1.5,
+        ridgeDepth * 0.55,
+        0,
+        b.height + 0.65,
+        -b.depth * 0.5 + (r + 0.5) * ridgeDepth,
+        0.28,
       );
-      saw.position.set(0, b.height + 0.65, -b.depth * 0.5 + (r + 0.5) * ridgeDepth);
-      saw.rotation.x = 0.28;
-      group.add(saw);
     }
   } else if (b.style === 'mediterranean') {
     // Coral Heights / Little Havana hipped terracotta clay-tile roof + shaded stucco eaves
@@ -660,77 +711,55 @@ function buildBuildingMesh(
     roof.rotation.y = Math.PI * 0.25;
     roof.scale.set(b.width / Math.max(b.width, b.depth), 1, b.depth / Math.max(b.width, b.depth));
     roof.position.y = b.height + 1.8;
-    roof.castShadow = true;
     group.add(roof);
 
-    const eave = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 1.6, 0.35, b.depth + 1.6),
-      accentMat,
-    );
-    eave.position.y = b.height + 0.08;
-    group.add(eave);
+    pushMergedBox(accentDetailGeos, b.width + 1.6, 0.35, b.depth + 1.6, 0, b.height + 0.08, 0);
   } else if (b.style === 'resort-tower') {
-    // North Beach sleek cantilevered wave-balcony floor slabs + rooftop infinity lounge
-    const slabMat = new THREE.MeshStandardMaterial({ color: 0xf7fafe, roughness: 0.32, metalness: 0.08 });
+    // North Beach sleek cantilevered wave-balcony floor slabs + rooftop infinity lounge (merged!)
     for (let fy = 5.5; fy < b.height - 1.5; fy += 5.8) {
       const waveOff = Math.sin(fy * 0.45) * 0.9;
-      const balcony = new THREE.Mesh(
-        new THREE.BoxGeometry(b.width + 2.2 + waveOff, 0.36, b.depth + 2.2 - waveOff * 0.5),
-        slabMat,
-      );
-      balcony.position.y = fy;
-      group.add(balcony);
+      pushMergedBox(slabDetailGeos, b.width + 2.2 + waveOff, 0.36, b.depth + 2.2 - waveOff * 0.5, 0, fy, 0);
     }
     const phCore = new THREE.Mesh(
       new THREE.BoxGeometry(b.width * 0.44, 4.0, b.depth * 0.44),
       lobbyInteriorMat,
     );
     phCore.position.y = b.height + 2.05;
-    group.add(phCore);
-    const penthouse = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width * 0.62, 4.2, b.depth * 0.62),
-      lobbyGlassMat,
-    );
-    penthouse.position.y = b.height + 2.1;
-    group.add(penthouse);
-    const roofCap = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width * 0.72, 0.5, b.depth * 0.72),
-      slabMat,
-    );
-    roofCap.position.y = b.height + 4.35;
-    group.add(roofCap);
+    detailGroup.add(phCore);
+    pushMergedBox(glassDetailGeos, b.width * 0.62, 4.2, b.depth * 0.62, 0, b.height + 2.1, 0);
+    pushMergedBox(slabDetailGeos, b.width * 0.72, 0.5, b.depth * 0.72, 0, b.height + 4.35, 0);
   } else if (b.style === 'neon-club') {
-    // Rooftop HVAC box + sleek canopy entrance
-    const hvac = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.8, 2.8), hvacMat);
-    hvac.position.set(0, b.height + 0.9, 0);
-    group.add(hvac);
+    // Rooftop HVAC box
+    pushMergedBox(hvacDetailGeos, 3.5, 1.8, 2.8, 0, b.height + 0.9, 0);
   }
 
-  // Glowing Miami neon rooftop rim & vertical Art Deco fins
+  // Glowing Miami neon rooftop rim & vertical Art Deco fins (shared material by hex + merged!)
   if (b.neonColor !== undefined) {
-    const neonMat = new THREE.MeshStandardMaterial({
-      color: b.neonColor,
-      emissive: b.neonColor,
-      emissiveIntensity: 1.6,
-      roughness: 0.2,
-    });
-    neonMaterials.push(neonMat);
-
-    const rim = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 0.32, 0.34, b.depth + 0.32),
-      neonMat,
-    );
-    rim.position.y = b.height - 0.45;
-    group.add(rim);
-
-    if (b.hasRoofSign) {
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.4, b.height * 0.52, 1.2), neonMat);
-      fin.position.set(b.width * 0.5 + 0.22, b.height * 0.62, 0);
-      group.add(fin);
+    let neonMat = shared.neonCache.get(b.neonColor);
+    if (!neonMat) {
+      neonMat = new THREE.MeshStandardMaterial({
+        color: b.neonColor,
+        emissive: b.neonColor,
+        emissiveIntensity: 1.6,
+        roughness: 0.2,
+      });
+      shared.neonCache.set(b.neonColor, neonMat);
+      neonMaterials.push(neonMat);
     }
+
+    pushMergedBox(neonDetailGeos, b.width + 0.32, 0.34, b.depth + 0.32, 0, b.height - 0.45, 0);
+    if (b.hasRoofSign) {
+      pushMergedBox(neonDetailGeos, 0.4, b.height * 0.52, 1.2, b.width * 0.5 + 0.22, b.height * 0.62, 0);
+    }
+    addMergedGroup(group, neonDetailGeos, neonMat);
   }
 
-  return group;
+  addMergedGroup(detailGroup, accentDetailGeos, accentMat);
+  addMergedGroup(detailGroup, glassDetailGeos, lobbyGlassMat);
+  addMergedGroup(detailGroup, hvacDetailGeos, hvacMat);
+  addMergedGroup(detailGroup, slabDetailGeos, shared.resortSlabMat);
+
+  return { group, detailGroup, shadowMeshes };
 }
 
 function buildYachtMesh(length: number, accentColor: number): THREE.Group {
@@ -1095,6 +1124,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     geo.computeVertexNormals();
   };
 
+  const whiteStripeGeos: THREE.BufferGeometry[] = [];
+  const yellowStripeGeos: THREE.BufferGeometry[] = [];
+
   for (const road of blueprint.roads) {
     if (road.isBridge) continue;
     const dx = road.x2 - road.x1;
@@ -1139,7 +1171,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     mesh.receiveShadow = true;
     root.add(mesh);
 
-    // Painted double-yellow centerline & white shoulder decals draped smoothly over hills & valleys!
+    // Painted double-yellow centerline & white shoulder decals draped smoothly over hills & merged into 2 single draw calls!
     const lineOff = isKeySol ? 0.044 : 0.048;
     for (const side of [-1, 1]) {
       const shX = xm + (isHoriz ? 0 : side * (road.width * 0.5 - 0.65));
@@ -1147,20 +1179,20 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       const shGeo = new THREE.PlaneGeometry(isHoriz ? len : 0.22, isHoriz ? 0.22 : len, isHoriz ? segs : 1, isHoriz ? 1 : segs);
       shGeo.rotateX(-Math.PI * 0.5);
       drapeRibbonOnTerrain(shGeo, shX, shZ, lineOff, isKeySol);
-      const shoulder = new THREE.Mesh(shGeo, whiteLineMat);
-      shoulder.position.set(shX, 0, shZ);
-      roadMarkingsGroup.add(shoulder);
+      shGeo.translate(shX, 0, shZ);
+      whiteStripeGeos.push(shGeo);
 
       const csX = xm + (isHoriz ? 0 : side * 0.16);
       const csZ = zm + (isHoriz ? side * 0.16 : 0);
       const csGeo = new THREE.PlaneGeometry(isHoriz ? len : 0.14, isHoriz ? 0.14 : len, isHoriz ? segs : 1, isHoriz ? 1 : segs);
       csGeo.rotateX(-Math.PI * 0.5);
       drapeRibbonOnTerrain(csGeo, csX, csZ, lineOff, isKeySol);
-      const centerStripe = new THREE.Mesh(csGeo, yellowLineMat);
-      centerStripe.position.set(csX, 0, csZ);
-      roadMarkingsGroup.add(centerStripe);
+      csGeo.translate(csX, 0, csZ);
+      yellowStripeGeos.push(csGeo);
     }
   }
+  addMergedGroup(roadMarkingsGroup, whiteStripeGeos, whiteLineMat);
+  addMergedGroup(roadMarkingsGroup, yellowStripeGeos, yellowLineMat);
   roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
   root.add(roadMarkingsGroup);
 
@@ -1479,6 +1511,21 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   windowMaterials.push(lobbyInteriorMat);
   const hvacMat = new THREE.MeshStandardMaterial({ color: 0x7e8796, roughness: 0.75, metalness: 0.35 });
 
+  const sharedBuildingMats: SharedBuildingMaterials = {
+    accentCache: new Map<number, THREE.MeshStandardMaterial>(),
+    neonCache: new Map<number, THREE.MeshStandardMaterial>(),
+    resortSlabMat: new THREE.MeshStandardMaterial({ color: 0xf7fafe, roughness: 0.32, metalness: 0.08 }),
+    villaRoofMat: new THREE.MeshStandardMaterial({ color: 0xfbfaf7, roughness: 0.36 }),
+    villaMidSlabMat: new THREE.MeshStandardMaterial({ color: 0xf4f2ec, roughness: 0.42 }),
+    villaPoolMat: new THREE.MeshPhysicalMaterial({
+      color: 0x1fd8e8,
+      roughness: 0.08,
+      clearcoat: 1.0,
+      emissive: 0x0b7b8f,
+      emissiveIntensity: 0.35,
+    }),
+  };
+
   const SHOWCASE_BUILDING_MAP: Record<string, InteriorPropKind> = {
     'b-108': 'building_hotel_solaire',
     'b-89': 'building_club_neon',
@@ -1489,9 +1536,11 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   root.add(showcaseBuildingsRoot);
   let fallbackLighthouseMesh: THREE.Object3D | null = null;
   let fallbackLighthouseSpec: BuildingSpec | null = null;
+  let hasGltfLighthouse = false;
+  const buildingLods: BuiltBuildingLod[] = [];
 
   for (const b of blueprint.buildings) {
-    const mesh = buildBuildingMesh(
+    const built = buildBuildingMesh(
       b,
       facadeCache,
       neonMaterials,
@@ -1499,13 +1548,27 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       lobbyGlassMat,
       lobbyInteriorMat,
       hvacMat,
+      sharedBuildingMats,
     );
-    root.add(mesh);
-    if (b.id in SHOWCASE_BUILDING_MAP) {
-      mesh.visible = false;
+    root.add(built.group);
+    const isShowcase = b.id in SHOWCASE_BUILDING_MAP;
+    if (isShowcase) {
+      built.group.visible = false;
     }
+    const isTallSkyline =
+      b.style === 'skyscraper' || b.style === 'resort-tower' || b.style === 'stadium' || b.id === 'south-pier-lighthouse';
+    const maxDist = isTallSkyline ? 720 : 460;
+    buildingLods.push({
+      group: built.group,
+      detailGroup: built.detailGroup,
+      shadowMeshes: built.shadowMeshes,
+      x: b.x,
+      z: b.z,
+      maxDistSq: maxDist * maxDist,
+      isShowcase,
+    });
     if (b.id === 'south-pier-lighthouse') {
-      fallbackLighthouseMesh = mesh;
+      fallbackLighthouseMesh = built.group;
       fallbackLighthouseSpec = b;
     }
   }
@@ -1655,12 +1718,41 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     sunDir: THREE.Vector3,
     sunColor: THREE.Color,
     fogColor: THREE.Color,
+    focusX = 0,
+    focusZ = 0,
   ) => {
     waterUniforms.uTime.value = elapsed;
     waterUniforms.uSunDir.value.copy(sunDir);
     waterUniforms.uSunColor.value.copy(sunColor);
     waterUniforms.uFogColor.value.copy(fogColor);
     waterUniforms.uNightFactor.value = nightFactor;
+
+    // Dynamic building distance & LOD culling (~80% fewer draw calls & shadow checks across the 9x9 metropolis!)
+    const DETAIL_DIST_SQ = 148 * 148;
+    const SHADOW_DIST_SQ = 108 * 108;
+    for (let i = 0; i < buildingLods.length; i++) {
+      const bl = buildingLods[i];
+      if (bl.isShowcase) continue;
+      if (bl.group === fallbackLighthouseMesh && hasGltfLighthouse) {
+        continue;
+      }
+      const dx = bl.x - focusX;
+      const dz = bl.z - focusZ;
+      const dSq = dx * dx + dz * dz;
+      const visible = dSq < bl.maxDistSq;
+      bl.group.visible = visible;
+      if (visible) {
+        bl.detailGroup.visible = dSq < DETAIL_DIST_SQ;
+        const castSh = dSq < SHADOW_DIST_SQ;
+        for (let s = 0; s < bl.shadowMeshes.length; s++) {
+          bl.shadowMeshes[s].castShadow = castSh;
+        }
+      }
+    }
+    // Distance-cull Club Neon's rear VIP parking lot signage, wheel stops, & parked cars beyond 220m
+    const lotDx = 42 - focusX;
+    const lotDz = -64 - focusZ;
+    lotGroup.visible = lotDx * lotDx + lotDz * lotDz < 220 * 220;
 
     const neonIntensity = 0.65 + nightFactor * 2.1;
     for (const mat of neonMaterials) {
@@ -1842,6 +1934,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
         }
       });
       worldPropsGltfRoot.add(inst);
+      hasGltfLighthouse = true;
       if (fallbackLighthouseMesh) fallbackLighthouseMesh.visible = false;
       lighthouseBeacon.position.set(
         fallbackLighthouseSpec.x,
@@ -1866,7 +1959,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
         const geo = obj.geometry.clone();
         geo.applyMatrix4(obj.matrixWorld);
         const inst = new THREE.InstancedMesh(geo, mat, slCount);
-        inst.castShadow = !isGlow;
+        inst.castShadow = false; // Skinny 10cm lamp poles waste massive instanced shadow-map vertices across 9x9 grid
         inst.receiveShadow = true;
         blueprint.streetLights.forEach((sl, idx) => {
           tmpObj.position.set(sl.x, sl.y, sl.z);
