@@ -652,8 +652,11 @@ function styleUniformedStaff(
       }
     }
     if (waistBone) {
-      const bistroApron = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.44, 0.024), blackSuit);
-      bistroApron.position.set(0, -0.14, 0.13);
+      const bistroApron = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.145, 0.165, 0.42, 18, 1, false, -Math.PI * 0.42, Math.PI * 0.84),
+        blackSuit,
+      );
+      bistroApron.position.set(0, -0.14, 0.005);
       waistBone.add(bistroApron);
     }
   } else if (uniform === 'waiter') {
@@ -733,12 +736,18 @@ function styleUniformedStaff(
     }
     if (waistBone) {
       const apron = new THREE.Group();
-      const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.38, 0.025), whiteCloth);
-      skirt.position.set(0, -0.09, 0.13);
-      const bib = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.022), whiteCloth);
-      bib.position.set(0, 0.18, 0.125);
-      const sash = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.035, 0.24), whiteCloth);
-      sash.position.set(0, 0.09, 0.01);
+      const skirt = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.145, 0.185, 0.38, 20, 1, false, -Math.PI * 0.44, Math.PI * 0.88),
+        whiteCloth,
+      );
+      skirt.position.set(0, -0.09, 0.005);
+      const bib = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.118, 0.132, 0.19, 16, 1, false, -Math.PI * 0.28, Math.PI * 0.56),
+        whiteCloth,
+      );
+      bib.position.set(0, 0.18, 0.008);
+      const sash = new THREE.Mesh(new THREE.CylinderGeometry(0.142, 0.144, 0.036, 20), whiteCloth);
+      sash.position.set(0, 0.09, 0.004);
       apron.add(skirt, bib, sash);
       waistBone.add(apron);
     }
