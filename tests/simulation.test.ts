@@ -29,10 +29,13 @@ import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
 import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS, INTERIOR_TEXTURE_KEYS } from '../src/world/assets';
 import { createCityBlueprint } from '../src/world/cityData';
 import {
+  FLOOR_STRIDE_Y,
   INTERIOR_ORIGIN_Y,
   INTERIORS,
   findNearbyBuildingEntrance,
+  findNearbyInteriorElevator,
   findNearbyInteriorNpc,
+  getFloorFromPlayerY,
   getInteriorRoomAt,
   stepPlayerInInterior,
 } from '../src/world/interiors';
@@ -762,7 +765,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
 
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
-    expect(INTERIOR_PROP_KINDS.length).toBe(47);
+    expect(INTERIOR_PROP_KINDS.length).toBe(50);
     for (const kind of INTERIOR_PROP_KINDS) {
       const buf = fs.readFileSync(path.resolve(propsDir, `${kind}.glb`));
       expect(buf.byteLength, `${kind}.glb non-empty`).toBeGreaterThan(5_000);
@@ -777,45 +780,86 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     const hotel = INTERIORS.find((v) => v.id === 'hotel-solaire')!;
     expect(findNearbyBuildingEntrance(hotel.entranceX + 0.5, hotel.entranceZ)?.id).toBe('hotel-solaire');
     expect(findNearbyBuildingEntrance(0, 0)).toBeNull();
+    expect(hotel.elevators?.length).toBe(3);
+    expect(hotel.rooms.length).toBe(11);
 
-    // 3. Multi-room traversal: start in Grand Atrium, walk North past the Art Deco fountain into Penthouse Suite
+    // 3. Floor 0 (1F Lobby): start in Grand Marble Lobby, walk East into Ocean Cocktail Lounge
     const p = createInitialPlayerState(null);
-    p.x = 2.1;
-    p.y = INTERIOR_ORIGIN_Y;
-    p.z = hotel.spawnZ;
-    p.yaw = hotel.spawnYaw;
-    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('atrium');
-
-    for (let i = 0; i < 190; i++) {
-      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
-    }
-    expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y, 3);
-    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('suite');
-
-    // 4. Walk East through the Atrium -> Ocean Cocktail Lounge brass archway (z = 4.0)
     p.x = 6.0;
+    p.y = INTERIOR_ORIGIN_Y;
     p.z = 4.0;
+    p.yaw = hotel.spawnYaw;
+    expect(getFloorFromPlayerY(p.y)).toBe(0);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 0).id).toBe('atrium');
+    expect(findNearbyInteriorElevator(hotel, 0, 0, -2.4)?.floor).toBe(0);
+
     for (let i = 0; i < 120; i++) {
       stepPlayerInInterior(p, hotel, { forward: 0, right: 1, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
     }
-    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('lounge');
+    expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y, 3);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 0).id).toBe('lounge');
 
-    // 5. Walking into solid interior partition wall (x = 10 at z = 9.0, outside the z: 1.5..6.5 doorway) is blocked!
+    // 4. Walking into solid interior partition wall (x = 10 at z = 9.0, outside the z: 1.5..6.5 doorway) is blocked!
     p.x = 8.5;
     p.z = 9.0;
     for (let i = 0; i < 80; i++) {
       stepPlayerInInterior(p, hotel, { forward: 0, right: 1, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
     }
-    expect(p.x).toBeLessThanOrEqual(9.7);
+    expect(p.x).toBeLessThanOrEqual(9.75);
 
-    // 6. Standing at Ocean Cocktail Lounge mahogany bar reaches Bartender Mateo across the counter
-    expect(findNearbyInteriorNpc(hotel, 19.0, 2.6)?.id).toBe('solaire-bartender');
+    // 5. Standing at Ocean Cocktail Lounge mahogany bar reaches Bartender Mateo across the counter on Floor 0
+    expect(findNearbyInteriorNpc(hotel, 18.2, 2.6, 4.2, 0)?.id).toBe('solaire-bartender');
+    // And Floor 1 Housekeeper Rosa is NOT reachable on Floor 0!
+    expect(findNearbyInteriorNpc(hotel, -4.2, 1.6, 4.2, 0)).toBeNull();
 
-    // 7. Indoor NPC bodies stay solid (tight 60cm personal space)
-    const npc = hotel.npcs[2]; // Camila
+    // 6. Ride Elevator to Floor 1 (2F Guest Suites): corridor-2f -> suite-201 -> bath-201 + soaking tub collision!
+    const elev2F = hotel.elevators!.find((e) => e.floor === 1)!;
+    p.x = elev2F.spawnX;
+    p.y = INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y;
+    p.z = elev2F.spawnZ;
+    expect(getFloorFromPlayerY(p.y)).toBe(1);
+    expect(findNearbyInteriorElevator(hotel, 1, p.x, p.z)?.floor).toBe(1);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 1).id).toBe('corridor-2f');
+    expect(findNearbyInteriorNpc(hotel, -4.2, 1.6, 4.2, 1)?.id).toBe('solaire-housekeeper');
+
+    // Walk West down 2F corridor through the open Suite 201 doorway (z = 1.5)
+    p.x = -10.5;
+    p.z = 1.5;
+    for (let i = 0; i < 110; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 0, right: -1, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y, 3);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 1).id).toBe('suite-201');
+
+    // Walk North from Suite 201 through its en-suite bathroom doorway (x = -19.0) into Bath 201!
+    p.x = -19.0;
+    p.z = -2.2;
+    for (let i = 0; i < 140; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 1).id).toBe('bath-201');
+    // Stopped cleanly against the freestanding marble soaking tub at (-19.8, -8.6), NOT walking through it!
+    expect(p.z).toBeGreaterThanOrEqual(-8.6 + 0.65);
+
+    // 7. Ride Elevator to Floor 2 (3F Ocean Penthouse): foyer-ph -> ph-salon -> ph-master -> ph-spa!
+    const elev3F = hotel.elevators!.find((e) => e.floor === 2)!;
+    p.x = elev3F.spawnX;
+    p.y = INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y * 2;
+    p.z = elev3F.spawnZ;
+    expect(getFloorFromPlayerY(p.y)).toBe(2);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 2).id).toBe('foyer-ph');
+    for (let i = 0; i < 120; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y * 2, 3);
+    expect(getInteriorRoomAt(hotel, p.x, p.z, 2).id).toBe('ph-salon');
+
+    // 8. Indoor NPC bodies stay solid (tight 60cm personal space)
+    const npc = hotel.npcs.find((n) => n.id === 'solaire-bellhop')!;
     p.x = npc.x;
+    p.y = INTERIOR_ORIGIN_Y;
     p.z = npc.z + 1.4;
-    expect(findNearbyInteriorNpc(hotel, p.x, p.z)?.id).toBe(npc.id);
+    expect(findNearbyInteriorNpc(hotel, p.x, p.z, 4.2, 0)?.id).toBe(npc.id);
     for (let i = 0; i < 40; i++) {
       stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
     }

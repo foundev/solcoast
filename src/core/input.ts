@@ -18,6 +18,7 @@ export interface InputSnapshot {
   quickSavePressed: boolean;
   audioTogglePressed: boolean;
   pausePressed: boolean;
+  floorDigitPressed: 0 | 1 | 2 | 3;
 }
 
 const GAME_CONTROL_CODES = new Set([
@@ -35,6 +36,9 @@ const GAME_CONTROL_CODES = new Set([
   'KeyM',
   'KeyX',
   'KeyU',
+  'Digit1',
+  'Digit2',
+  'Digit3',
   'Space',
   'ArrowUp',
   'ArrowDown',
@@ -220,6 +224,13 @@ export class InputManager {
       quickSavePressed: this.justPressed.has('F5'),
       audioTogglePressed: this.justPressed.has('KeyU'),
       pausePressed: this.justPressed.has('Escape'),
+      floorDigitPressed: this.justPressed.has('Digit1')
+        ? 1
+        : this.justPressed.has('Digit2')
+          ? 2
+          : this.justPressed.has('Digit3')
+            ? 3
+            : 0,
     };
 
     this.justPressed.clear();

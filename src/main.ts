@@ -48,10 +48,13 @@ import {
   getGroundHeight,
 } from './world/cityData';
 import {
+  FLOOR_STRIDE_Y,
   INTERIOR_ORIGIN_Y,
   createInteriorSystem,
   findNearbyBuildingEntrance,
+  findNearbyInteriorElevator,
   findNearbyInteriorNpc,
+  getFloorFromPlayerY,
   getInteriorRoomAt,
   stepPlayerInInterior,
   type InteriorDef,
@@ -416,16 +419,50 @@ function bootstrap(): void {
     // ─── INDOOR BUILDING INTERIOR LOOP ───────────────────────────────────────────
     if (activeInterior) {
       const def = activeInterior;
-      const nearExit = distXZ(player.x, player.z, def.exitX, def.exitZ) <= 2.4;
-      const nearbyNpc = nearExit ? null : findNearbyInteriorNpc(def, player.x, player.z);
+      const currentFloor = getFloorFromPlayerY(player.y);
+      const nearExit = currentFloor === 0 && distXZ(player.x, player.z, def.exitX, def.exitZ) <= 2.4;
+      const nearbyElevator = nearExit ? null : findNearbyInteriorElevator(def, currentFloor, player.x, player.z);
+      const nearbyNpc =
+        nearExit || nearbyElevator ? null : findNearbyInteriorNpc(def, player.x, player.z, 4.2, currentFloor);
 
       let promptText: string | null = null;
       if (nearExit) {
         promptText = `Exit to ${def.districtLabel}`;
+      } else if (nearbyElevator && def.elevators && def.elevators.length > 1) {
+        const nextIdx = (def.elevators.findIndex((e) => e.floor === currentFloor) + 1) % def.elevators.length;
+        const nextFloor = def.elevators[nextIdx];
+        promptText = `Ride Elevator to ${nextFloor.floorLabel} (or press 1 / 2 / 3)`;
       } else if (nearbyNpc) {
         promptText = nearbyNpc.actionCost
           ? `Talk / Order from ${nearbyNpc.name} (${nearbyNpc.role}) — $${nearbyNpc.actionCost}`
           : `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
+      }
+
+      // Direct floor selection [1] / [2] / [3] when standing at an elevator!
+      if (
+        nearbyElevator &&
+        def.elevators &&
+        snap.floorDigitPressed > 0 &&
+        interiorTransitionCooldown <= 0
+      ) {
+        const dest = def.elevators.find((e) => e.floor === snap.floorDigitPressed - 1);
+        if (dest && dest.floor !== currentFloor) {
+          interiorTransitionCooldown = 0.35;
+          player.x = dest.spawnX;
+          player.y = INTERIOR_ORIGIN_Y + dest.floor * FLOOR_STRIDE_Y;
+          player.z = dest.spawnZ;
+          player.yaw = dest.spawnYaw;
+          player.vx = 0;
+          player.vy = 0;
+          player.vz = 0;
+          player.speed = 0;
+          player.grounded = true;
+          cameraCtrl.yaw = dest.spawnYaw;
+          cameraCtrl.snap();
+          sound.playChime('enter');
+          hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
+          hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
+        }
       }
 
       if (snap.interactPressed && interiorTransitionCooldown <= 0) {
@@ -453,6 +490,25 @@ function bootstrap(): void {
           sound.playChime('enter');
           hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
           persistNow(false);
+        } else if (nearbyElevator && def.elevators && def.elevators.length > 1) {
+          interactConsumed = true;
+          interiorTransitionCooldown = 0.35;
+          const nextIdx = (def.elevators.findIndex((e) => e.floor === currentFloor) + 1) % def.elevators.length;
+          const dest = def.elevators[nextIdx];
+          player.x = dest.spawnX;
+          player.y = INTERIOR_ORIGIN_Y + dest.floor * FLOOR_STRIDE_Y;
+          player.z = dest.spawnZ;
+          player.yaw = dest.spawnYaw;
+          player.vx = 0;
+          player.vy = 0;
+          player.vz = 0;
+          player.speed = 0;
+          player.grounded = true;
+          cameraCtrl.yaw = dest.spawnYaw;
+          cameraCtrl.snap();
+          sound.playChime('enter');
+          hud.showDistrictBanner(`${def.name} — ${dest.floorLabel}`);
+          hud.showToast(`Elevator arrived at ${dest.floorLabel}`, 'success');
         } else if (nearbyNpc) {
           interactConsumed = true;
           const count = npcTalkCounts.get(nearbyNpc.id) ?? 0;
@@ -488,7 +544,8 @@ function bootstrap(): void {
           dt,
         );
 
-        interiorSystem.update(elapsed, dt, activeInterior.id, player.x, player.z);
+        const updatedFloor = getFloorFromPlayerY(player.y);
+        interiorSystem.update(elapsed, dt, activeInterior.id, player.x, player.z, player.y);
         playerMesh.syncFromState(player, elapsed, dt, null, null, false);
         cameraCtrl.update(camera, dt, player, null, activeInterior);
         sound.updateDriving(false, 0, 0, 0, false);
@@ -500,7 +557,7 @@ function bootstrap(): void {
         }
 
         const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
-        const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z);
+        const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z, updatedFloor);
         hud.update({
           timeLabel: formatTimeLabel(timeOfDayHours),
           district: {
@@ -593,7 +650,11 @@ function bootstrap(): void {
         camera.updateProjectionMatrix();
         sound.playChime('enter');
         hud.showDistrictBanner(nearbyEntrance.name);
-        hud.showToast(`Entered ${nearbyEntrance.name} — explore all ${nearbyEntrance.rooms.length} rooms & talk to locals with [E]!`, 'success');
+        const elevHint =
+          nearbyEntrance.elevators && nearbyEntrance.elevators.length > 1
+            ? ` — ${nearbyEntrance.elevators.length} floors connected by brass elevator!`
+            : ` — explore all ${nearbyEntrance.rooms.length} rooms & talk to locals with [E]!`;
+        hud.showToast(`Entered ${nearbyEntrance.name}${elevHint}`, 'success');
       } else if (activeVehicle) {
         if (Math.abs(activeVehicle.speed) < 10) {
           const exitPos = computeSafeExitPosition(activeVehicle, blueprint.colliders);

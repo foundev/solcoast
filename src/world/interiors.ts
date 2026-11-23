@@ -36,6 +36,8 @@ export interface InteriorRoomDef {
   id: string;
   name: string;
   shortLabel: string;
+  /** Zero-indexed floor level (0 = 1F, 1 = 2F, 2 = 3F). Defaults to 0. */
+  floor?: number;
   minX: number;
   maxX: number;
   minZ: number;
@@ -72,6 +74,7 @@ export interface InteriorDoorwayDef {
   height: number;
   frameColor: number;
   accentNeon?: number;
+  floor?: number;
 }
 
 export interface InteriorPropPlacement {
@@ -83,6 +86,7 @@ export interface InteriorPropPlacement {
   scale?: number;
   /** If true, y is ceiling height and prop hangs downward from y */
   hangFromCeiling?: boolean;
+  floor?: number;
 }
 
 export interface InteriorNpcDef {
@@ -97,6 +101,20 @@ export interface InteriorNpcDef {
   actionCost?: number;
   actionToast?: string;
   dancing?: boolean;
+  floor?: number;
+}
+
+export interface InteriorElevatorDef {
+  floor: number;
+  floorLabel: string;
+  shortFloor: string;
+  /** Interactive call trigger position right in front of the brass elevator doors */
+  x: number;
+  z: number;
+  /** Player arrival spawn when stepping out of the elevator onto this floor */
+  spawnX: number;
+  spawnZ: number;
+  spawnYaw: number;
 }
 
 export interface StorefrontDef {
@@ -116,6 +134,11 @@ export interface InteriorPropObb {
   halfW: number;
   halfD: number;
   rotY: number;
+  floor?: number;
+}
+
+export interface InteriorAABB extends AABB {
+  floor?: number;
 }
 
 export interface InteriorDef {
@@ -136,8 +159,9 @@ export interface InteriorDef {
   maxZ: number;
   rooms: InteriorRoomDef[];
   doorways: InteriorDoorwayDef[];
+  elevators?: InteriorElevatorDef[];
   /** Auto-generated perimeter & interior partition walls (with doorway cutouts) */
-  walls: AABB[];
+  walls: InteriorAABB[];
   /** Auto-generated exact tight rotated 2D OBB colliders for every floor-standing 3D prop! */
   propColliders: InteriorPropObb[];
   spawnX: number;
@@ -146,12 +170,39 @@ export interface InteriorDef {
   exitX: number;
   exitZ: number;
   /** Exact architectural built-in colliders (bars, counters, DJ stage, sculpture plinths) */
-  colliders: AABB[];
+  colliders: InteriorAABB[];
   props: InteriorPropPlacement[];
   npcs: InteriorNpcDef[];
 }
 
 export const INTERIOR_ORIGIN_Y = -60;
+export const FLOOR_STRIDE_Y = 12;
+
+export function getFloorFromPlayerY(playerY: number): number {
+  return Math.max(0, Math.round((playerY - INTERIOR_ORIGIN_Y) / FLOOR_STRIDE_Y));
+}
+
+export function getInteriorFloorLabel(def: InteriorDef, floor: number): string | null {
+  const elev = def.elevators?.find((e) => e.floor === floor);
+  return elev ? elev.shortFloor : null;
+}
+
+export function findNearbyInteriorElevator(
+  def: InteriorDef,
+  floor: number,
+  x: number,
+  z: number,
+  maxRange = 2.6,
+): InteriorElevatorDef | null {
+  if (!def.elevators) return null;
+  for (const e of def.elevators) {
+    if (e.floor !== floor) continue;
+    if (distXZ(x, z, e.x, e.z) <= maxRange) {
+      return e;
+    }
+  }
+  return null;
+}
 
 interface WallSegment {
   axis: 'x' | 'z';
@@ -162,6 +213,7 @@ interface WallSegment {
   height: number;
   wallColor: number;
   room: InteriorRoomDef;
+  floor: number;
 }
 
 function subtractIntervals(
@@ -188,6 +240,7 @@ function subtractIntervals(
 function computeRoomWallSegments(rooms: InteriorRoomDef[], doorways: InteriorDoorwayDef[]): WallSegment[] {
   const segs: WallSegment[] = [];
   for (const r of rooms) {
+    const rFloor = r.floor ?? 0;
     const addEdge = (
       axis: 'x' | 'z',
       coord: number,
@@ -196,7 +249,7 @@ function computeRoomWallSegments(rooms: InteriorRoomDef[], doorways: InteriorDoo
       outwardSign: 1 | -1,
     ) => {
       const cuts = doorways
-        .filter((d) => d.axis === axis && Math.abs(d.coord - coord) < 0.05)
+        .filter((d) => (d.floor ?? 0) === rFloor && d.axis === axis && Math.abs(d.coord - coord) < 0.05)
         .map((d) => ({ min: Math.max(start, d.min), max: Math.min(end, d.max) }))
         .filter((c) => c.max > c.min + 0.05);
       for (const s of subtractIntervals(start, end, cuts)) {
@@ -209,6 +262,7 @@ function computeRoomWallSegments(rooms: InteriorRoomDef[], doorways: InteriorDoo
           height: r.height,
           wallColor: r.wallColor,
           room: r,
+          floor: rFloor,
         });
       }
     };
@@ -220,18 +274,18 @@ function computeRoomWallSegments(rooms: InteriorRoomDef[], doorways: InteriorDoo
   return segs;
 }
 
-function buildWallColliders(rooms: InteriorRoomDef[], doorways: InteriorDoorwayDef[]): AABB[] {
+function buildWallColliders(rooms: InteriorRoomDef[], doorways: InteriorDoorwayDef[]): InteriorAABB[] {
   const segs = computeRoomWallSegments(rooms, doorways);
   const thick = 0.28;
   return segs.map((s) => {
     if (s.axis === 'x') {
       const x0 = s.outwardSign > 0 ? s.coord : s.coord - thick;
       const x1 = s.outwardSign > 0 ? s.coord + thick : s.coord;
-      return { minX: x0, maxX: x1, minZ: s.start, maxZ: s.end, minY: 0, maxY: s.height };
+      return { minX: x0, maxX: x1, minZ: s.start, maxZ: s.end, minY: 0, maxY: s.height, floor: s.floor };
     }
     const z0 = s.outwardSign > 0 ? s.coord : s.coord - thick;
     const z1 = s.outwardSign > 0 ? s.coord + thick : s.coord;
-    return { minX: s.start, maxX: s.end, minZ: z0, maxZ: z1, minY: 0, maxY: s.height };
+    return { minX: s.start, maxX: s.end, minZ: z0, maxZ: z1, minY: 0, maxY: s.height, floor: s.floor };
   });
 }
 
@@ -259,7 +313,10 @@ const PROP_FOOTPRINTS: Partial<Record<InteriorPropKind, [number, number]>> = {
   gallery_bench: [1.10, 0.44],
   grand_piano: [1.44, 2.48],
   grandfather_clock: [0.58, 0.40],
+  hotel_elevator_doors: [2.70, 0.42],
   hotel_reception_desk: [4.95, 1.48],
+  hotel_soaking_tub: [2.00, 0.92],
+  hotel_vanity_sink: [2.10, 0.62],
   lounge_chair: [0.88, 1.02],
   metal_shelves: [2.26, 0.66],
   neon_sculpture_arch: [2.04, 2.04],
@@ -286,6 +343,7 @@ function buildPropColliders(props: InteriorPropPlacement[]): InteriorPropObb[] {
       halfW: fp[0] * sc * 0.5,
       halfD: fp[1] * sc * 0.5,
       rotY: p.rotY ?? 0,
+      floor: p.floor ?? 0,
     });
   }
   return out;
@@ -310,7 +368,7 @@ function makeVenue(
 }
 
 export const INTERIORS: InteriorDef[] = [
-  // ─── 1. HOTEL SOLAIRE (OCEAN DRIVE — 3-ROOM ART DECO RESORT) ─────────────────
+  // ─── 1. HOTEL SOLAIRE (OCEAN DRIVE — 3-FLOOR, 10-ROOM LUXURY ART DECO HOTEL) ──
   // Bolted flush onto real Art Deco building b-108 (box x:109.3..124.0, z:-59.6..-37.2)
   makeVenue({
     id: 'hotel-solaire',
@@ -325,7 +383,7 @@ export const INTERIORS: InteriorDef[] = [
       centerZ: -48.4,
       facingSignX: 1,
       signText: 'HOTEL SOLAIRE',
-      subtitle: 'OCEAN DRIVE · LOBBY · LOUNGE · SUITE',
+      subtitle: 'OCEAN DRIVE · 3 FLOORS · SUITES · PENTHOUSE',
       style: 'art-deco-hotel',
     },
     spawnX: 0,
@@ -333,16 +391,50 @@ export const INTERIORS: InteriorDef[] = [
     spawnYaw: 0,
     exitX: 0,
     exitZ: 11.2,
+    elevators: [
+      {
+        floor: 0,
+        floorLabel: '1F — Grand Lobby & Lounge',
+        shortFloor: '1F LOBBY',
+        x: 0,
+        z: -2.4,
+        spawnX: 0,
+        spawnZ: -1.7,
+        spawnYaw: Math.PI,
+      },
+      {
+        floor: 1,
+        floorLabel: '2F — Guest Suites (201–204)',
+        shortFloor: '2F SUITES',
+        x: 0,
+        z: -0.4,
+        spawnX: 0,
+        spawnZ: 0.4,
+        spawnYaw: Math.PI,
+      },
+      {
+        floor: 2,
+        floorLabel: '3F — The Ocean Penthouse',
+        shortFloor: '3F PENTHOUSE',
+        x: 0,
+        z: 8.4,
+        spawnX: 0,
+        spawnZ: 7.4,
+        spawnYaw: 0,
+      },
+    ],
     rooms: [
+      // ── FLOOR 0 (1F: GRAND LOBBY & OCEAN LOUNGE) ──
       {
         id: 'atrium',
-        name: 'Grand Marble Atrium',
-        shortLabel: 'ATRIUM',
+        name: '1F Grand Marble Lobby',
+        shortLabel: 'LOBBY',
+        floor: 0,
         minX: -10,
         maxX: 10,
-        minZ: -2,
+        minZ: -4,
         maxZ: 12,
-        height: 6.4,
+        height: 5.8,
         floorColorA: '#f5efe4',
         floorColorB: '#d9ccb6',
         floorMapTint: '#363c52',
@@ -351,7 +443,7 @@ export const INTERIORS: InteriorDef[] = [
         lightColor: 0xffdfb0,
         lightIntensity: 1.5,
         ambientIntensity: 0.9,
-        floorRoughness: 0.25,
+        floorRoughness: 0.24,
         floorPbr: 'marble',
         floorTint: 0xfff8ee,
         wallPbr: 'plaster',
@@ -363,10 +455,11 @@ export const INTERIORS: InteriorDef[] = [
       },
       {
         id: 'lounge',
-        name: 'Ocean Cocktail Lounge',
+        name: '1F Ocean Cocktail Lounge',
         shortLabel: 'BAR LOUNGE',
+        floor: 0,
         minX: 10,
-        maxX: 24,
+        maxX: 23,
         minZ: -4,
         maxZ: 10,
         height: 4.6,
@@ -388,118 +481,441 @@ export const INTERIORS: InteriorDef[] = [
         ceilingStyle: 'coffered',
         sconceColor: 0xffb866,
       },
+
+      // ── FLOOR 1 (2F: GUEST CORRIDOR + ENTERABLE SUITES 201 & 202 + EN-SUITE BATHS) ──
       {
-        id: 'suite',
-        name: 'Penthouse Ocean Suite',
-        shortLabel: 'VIP SUITE',
-        minX: -9,
-        maxX: 9,
-        minZ: -16,
-        maxZ: -2,
-        height: 4.4,
-        floorColorA: '#e8dfd2',
-        floorColorB: '#dfd4c4',
-        floorMapTint: '#3b374f',
-        wallColor: 0xf4eee6,
-        ceilingColor: 0xede6dc,
-        lightColor: 0xffd5a0,
+        id: 'corridor-2f',
+        name: '2F Guest Suites Corridor',
+        shortLabel: '2F HALL',
+        floor: 1,
+        minX: -12,
+        maxX: 12,
+        minZ: -2,
+        maxZ: 5,
+        height: 3.6,
+        floorColorA: '#6b2232',
+        floorColorB: '#591c2a',
+        floorMapTint: '#482636',
+        wallColor: 0xf4e8dc,
+        ceilingColor: 0xede4da,
+        lightColor: 0xffe0b2,
+        lightIntensity: 1.3,
+        ambientIntensity: 0.85,
+        floorRoughness: 0.82,
+        floorPbr: 'parquet',
+        floorTint: 0x997054,
+        wallPbr: 'plaster',
+        wallTint: 0xf6ebe0,
+        wainscotColor: 0x3d2417,
+        crownColor: 0xd9a84e,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffd28a,
+      },
+      {
+        id: 'suite-201',
+        name: 'Suite 201 — Ocean Breeze King',
+        shortLabel: 'SUITE 201',
+        floor: 1,
+        minX: -22,
+        maxX: -12,
+        minZ: -4,
+        maxZ: 6,
+        height: 3.6,
+        floorColorA: '#e4d8c6',
+        floorColorB: '#d9cbb6',
+        floorMapTint: '#3b3750',
+        wallColor: 0xf6efe6,
+        ceilingColor: 0xf0e9e0,
+        lightColor: 0xffe2ba,
+        lightIntensity: 1.35,
+        ambientIntensity: 0.88,
+        floorRoughness: 0.45,
+        floorPbr: 'parquet',
+        floorTint: 0xe6d2b8,
+        wallPbr: 'plaster',
+        wallTint: 0xf8f1e8,
+        wainscotColor: 0xd8c8b4,
+        crownColor: 0xd9a84e,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffe0ad,
+      },
+      {
+        id: 'bath-201',
+        name: 'Suite 201 — Marble Bath',
+        shortLabel: 'BATH 201',
+        floor: 1,
+        minX: -22,
+        maxX: -15,
+        minZ: -10,
+        maxZ: -4,
+        height: 3.4,
+        floorColorA: '#f2f0ec',
+        floorColorB: '#e4e1db',
+        floorMapTint: '#2b4752',
+        wallColor: 0xf4f7f9,
+        ceilingColor: 0xf5f7fa,
+        lightColor: 0xfff6ea,
+        lightIntensity: 1.45,
+        ambientIntensity: 0.92,
+        floorRoughness: 0.18,
+        floorPbr: 'marble',
+        floorTint: 0xffffff,
+        wallPbr: 'tile_white',
+        wallTint: 0xf7fafc,
+        crownColor: 0xd9a84e,
+        ceilingStyle: 'coffered',
+      },
+      {
+        id: 'suite-202',
+        name: 'Suite 202 — Art Deco Deluxe',
+        shortLabel: 'SUITE 202',
+        floor: 1,
+        minX: 12,
+        maxX: 22,
+        minZ: -4,
+        maxZ: 6,
+        height: 3.6,
+        floorColorA: '#dfd4c4',
+        floorColorB: '#d2c4b0',
+        floorMapTint: '#2d3f4d',
+        wallColor: 0xedf4f2,
+        ceilingColor: 0xedf2f0,
+        lightColor: 0xffe2ba,
+        lightIntensity: 1.35,
+        ambientIntensity: 0.88,
+        floorRoughness: 0.45,
+        floorPbr: 'parquet',
+        floorTint: 0xdfc9ae,
+        wallPbr: 'plaster',
+        wallTint: 0xeef5f2,
+        wainscotColor: 0x2c575c,
+        crownColor: 0xd9a84e,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffe0ad,
+      },
+      {
+        id: 'bath-202',
+        name: 'Suite 202 — Marble Bath',
+        shortLabel: 'BATH 202',
+        floor: 1,
+        minX: 15,
+        maxX: 22,
+        minZ: -10,
+        maxZ: -4,
+        height: 3.4,
+        floorColorA: '#f2f0ec',
+        floorColorB: '#e4e1db',
+        floorMapTint: '#2b4752',
+        wallColor: 0xf4f7f9,
+        ceilingColor: 0xf5f7fa,
+        lightColor: 0xfff6ea,
+        lightIntensity: 1.45,
+        ambientIntensity: 0.92,
+        floorRoughness: 0.18,
+        floorPbr: 'marble',
+        floorTint: 0xffffff,
+        wallPbr: 'tile_white',
+        wallTint: 0xf7fafc,
+        crownColor: 0xd9a84e,
+        ceilingStyle: 'coffered',
+      },
+
+      // ── FLOOR 2 (3F: THE OCEAN PENTHOUSE — FOYER, GRAND SALON, MASTER & SPA BATH) ──
+      {
+        id: 'foyer-ph',
+        name: '3F Penthouse Elevator Foyer',
+        shortLabel: 'PH FOYER',
+        floor: 2,
+        minX: -5,
+        maxX: 5,
+        minZ: 4,
+        maxZ: 10,
+        height: 4.2,
+        floorColorA: '#f5efe4',
+        floorColorB: '#dfd3c0',
+        floorMapTint: '#3e334a',
+        wallColor: 0xf6ece2,
+        ceilingColor: 0x241d2a,
+        lightColor: 0xffdfb4,
         lightIntensity: 1.35,
         ambientIntensity: 0.85,
-        floorRoughness: 0.65,
-        floorPbr: 'parquet',
-        floorTint: 0xe5d3bc,
+        floorRoughness: 0.2,
+        floorPbr: 'marble',
+        floorTint: 0xfff8ef,
         wallPbr: 'plaster',
-        wallTint: 0xf6efe6,
-        wainscotColor: 0xd6c7b4,
+        wallTint: 0xf7eee5,
+        wainscotColor: 0x3b2418,
+        crownColor: 0xe6bd68,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffd28a,
+      },
+      {
+        id: 'ph-salon',
+        name: '3F Penthouse Salon & Wet Bar',
+        shortLabel: 'PH SALON',
+        floor: 2,
+        minX: -12,
+        maxX: 12,
+        minZ: -8,
+        maxZ: 4,
+        height: 4.8,
+        floorColorA: '#ebe2d4',
+        floorColorB: '#ddd1be',
+        floorMapTint: '#44354c',
+        wallColor: 0xf7f0e8,
+        ceilingColor: 0x261f2e,
+        lightColor: 0xffd8a8,
+        lightIntensity: 1.5,
+        ambientIntensity: 0.9,
+        floorRoughness: 0.28,
+        floorPbr: 'marble',
+        floorTint: 0xfff8ee,
+        wallPbr: 'plaster',
+        wallTint: 0xf8f1e8,
+        wainscotColor: 0x382319,
+        crownColor: 0xe6bd68,
+        ceilingStyle: 'coffered',
+        sconceColor: 0xffd596,
+      },
+      {
+        id: 'ph-master',
+        name: '3F Penthouse Master Bedroom',
+        shortLabel: 'PH MASTER',
+        floor: 2,
+        minX: -22,
+        maxX: -12,
+        minZ: -8,
+        maxZ: 4,
+        height: 4.2,
+        floorColorA: '#e4d6c2',
+        floorColorB: '#d7c6ae',
+        floorMapTint: '#3b3248',
+        wallColor: 0xf5ece2,
+        ceilingColor: 0xede5dc,
+        lightColor: 0xffd9ad,
+        lightIntensity: 1.4,
+        ambientIntensity: 0.88,
+        floorRoughness: 0.42,
+        floorPbr: 'parquet',
+        floorTint: 0xe8d4ba,
+        wallPbr: 'plaster',
+        wallTint: 0xf7efe6,
+        wainscotColor: 0xd6c4ae,
         crownColor: 0xe6bd68,
         ceilingStyle: 'coffered',
         sconceColor: 0xffe0ad,
       },
+      {
+        id: 'ph-spa',
+        name: '3F Penthouse Marble Spa',
+        shortLabel: 'PH SPA',
+        floor: 2,
+        minX: -22,
+        maxX: -12,
+        minZ: 4,
+        maxZ: 10,
+        height: 3.6,
+        floorColorA: '#f5f2ec',
+        floorColorB: '#e6e1d8',
+        floorMapTint: '#2b4a52',
+        wallColor: 0xf5f8fa,
+        ceilingColor: 0xf5f7fa,
+        lightColor: 0xfff5e6,
+        lightIntensity: 1.5,
+        ambientIntensity: 0.92,
+        floorRoughness: 0.16,
+        floorPbr: 'marble',
+        floorTint: 0xfffdf8,
+        wallPbr: 'tile_white',
+        wallTint: 0xf8fafc,
+        crownColor: 0xe6bd68,
+        ceilingStyle: 'coffered',
+      },
     ],
     doorways: [
-      { axis: 'x', coord: 10, min: 1.5, max: 6.5, height: 3.8, frameColor: 0xd9a84e },
-      { axis: 'z', coord: -2, min: -2.8, max: 2.8, height: 3.8, frameColor: 0xd9a84e },
+      // Floor 0: Grand Lobby <-> Ocean Cocktail Lounge
+      { floor: 0, axis: 'x', coord: 10, min: 1.5, max: 6.5, height: 3.8, frameColor: 0xd9a84e },
+      // Floor 1: 2F Corridor <-> Suite 201 & Suite 202, plus Suite <-> En-Suite Baths
+      { floor: 1, axis: 'x', coord: -12, min: 0.1, max: 2.9, height: 2.9, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'x', coord: 12, min: 0.1, max: 2.9, height: 2.9, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'z', coord: -4, min: -20.4, max: -17.8, height: 2.6, frameColor: 0xd9a84e },
+      { floor: 1, axis: 'z', coord: -4, min: 17.8, max: 20.4, height: 2.6, frameColor: 0xd9a84e },
+      // Floor 2: Penthouse Foyer <-> Grand Salon <-> Master Bedroom <-> Spa Bath
+      { floor: 2, axis: 'z', coord: 4, min: -2.8, max: 2.8, height: 3.6, frameColor: 0xe6bd68 },
+      { floor: 2, axis: 'x', coord: -12, min: -4.2, max: -0.6, height: 3.4, frameColor: 0xe6bd68 },
+      { floor: 2, axis: 'z', coord: 4, min: -18.5, max: -15.5, height: 3.0, frameColor: 0xe6bd68 },
     ],
     colliders: [
-      // Ocean Cocktail Lounge mahogany bar counter (exact mesh bounds: 1.85x9.4 centered at 20.5, 2.9)
-      { minX: 19.58, maxX: 21.42, minZ: -1.8, maxZ: 7.6, minY: 0, maxY: 1.2 },
+      // Floor 0: Ocean Cocktail Lounge mahogany bar counter (exact mesh bounds: 1.8x9.2 centered at 19.8, 2.8)
+      { floor: 0, minX: 18.9, maxX: 20.7, minZ: -1.8, maxZ: 7.4, minY: 0, maxY: 1.2 },
+      // Floor 1: Suite 201 & 202 glass shower curbs/enclosures (walk-in glass partition panels)
+      { floor: 1, minX: -17.15, maxX: -17.0, minZ: -9.9, maxZ: -8.3, minY: 0, maxY: 2.4 },
+      { floor: 1, minX: 17.0, maxX: 17.15, minZ: -9.9, maxZ: -8.3, minY: 0, maxY: 2.4 },
+      // Floor 2: Penthouse Salon private wet bar counter (exact mesh bounds: 1.5x6.8 centered at 9.15, -2.0)
+      { floor: 2, minX: 8.4, maxX: 9.9, minZ: -5.4, maxZ: 1.4, minY: 0, maxY: 1.2 },
+      // Floor 2: Penthouse Spa glass rain shower partition
+      { floor: 2, minX: -16.25, maxX: -16.1, minZ: 8.1, maxZ: 9.9, minY: 0, maxY: 2.4 },
     ],
     props: [
-      // Grand Atrium — custom Blender Art Deco hero models (rotY=0 faces +Z lobby!) + Poly Haven furniture
-      { kind: 'hotel_reception_desk', x: -5.9, z: 2.4, rotY: 0, scale: 1.04 },
-      { kind: 'art_deco_fountain', x: 0, z: 4.2, scale: 1.0 },
-      { kind: 'grand_piano', x: 6.1, z: 1.5, rotY: -Math.PI * 0.25, scale: 1.05 },
-      { kind: 'chandelier', x: -3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
-      { kind: 'chandelier', x: 3.5, y: 6.4, z: 5.2, scale: 1.85, hangFromCeiling: true },
-      { kind: 'sofa_luxury', x: -6.2, z: 8.1, rotY: Math.PI, scale: 1.05 },
-      { kind: 'coffee_table', x: -6.2, z: 6.6, rotY: Math.PI * 0.5, scale: 1.1 },
-      { kind: 'lounge_chair', x: -4.1, z: 6.7, rotY: -Math.PI * 0.5, scale: 0.95 },
-      { kind: 'sofa_luxury', x: 6.2, z: 8.1, rotY: Math.PI, scale: 1.05 },
-      { kind: 'coffee_table', x: 6.2, z: 6.6, rotY: Math.PI * 0.5, scale: 1.1 },
-      { kind: 'armchair', x: 4.1, z: 6.7, rotY: Math.PI * 0.5, scale: 1.0 },
-      { kind: 'grandfather_clock', x: -9.3, z: -1.1, rotY: 0, scale: 1.1 },
-      { kind: 'console_table', x: 6.2, z: -1.3, rotY: 0, scale: 1.15 },
-      { kind: 'ornate_mirror', x: 6.2, y: 1.6, z: -1.85, rotY: 0, scale: 1.7 },
-      { kind: 'potted_plant_1', x: -3.4, z: 10.9, scale: 1.3 },
-      { kind: 'potted_plant_1', x: 3.4, z: 10.9, scale: 1.3 },
-      { kind: 'potted_plant_2', x: -3.6, z: -1.2, scale: 1.2 },
-      { kind: 'potted_plant_2', x: 3.6, z: -1.2, scale: 1.2 },
-      // Ocean Cocktail Lounge
-      { kind: 'bar_stool', x: 18.8, z: -0.6, scale: 1.1 },
-      { kind: 'bar_stool', x: 18.8, z: 1.4, scale: 1.1 },
-      { kind: 'bar_stool', x: 18.8, z: 3.4, scale: 1.1 },
-      { kind: 'bar_stool', x: 18.8, z: 5.4, scale: 1.1 },
-      { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 0.6, scale: 1.15 },
-      { kind: 'cocktail_bar_set', x: 20.4, y: 1.19, z: 4.4, rotY: 1.4, scale: 1.15 },
-      { kind: 'neon_palm_sign', x: 17.0, y: 2.1, z: -3.86, rotY: 0, scale: 1.15 },
-      { kind: 'cabinet', x: 23.3, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.15 },
-      { kind: 'cabinet', x: 23.3, z: 4.6, rotY: -Math.PI * 0.5, scale: 1.15 },
-      { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 0.2, rotY: Math.PI * 0.5, scale: 1.35 },
-      { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 1.5, rotY: Math.PI * 0.5, scale: 1.35 },
-      { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 4.0, rotY: Math.PI * 0.5, scale: 1.35 },
-      { kind: 'wine_bottles', x: 23.3, y: 0.78, z: 5.3, rotY: Math.PI * 0.5, scale: 1.35 },
-      { kind: 'wine_bottles', x: 20.4, y: 1.14, z: 2.2, rotY: Math.PI * 0.5, scale: 1.2 },
-      { kind: 'sofa_luxury', x: 14.0, z: -2.6, rotY: 0, scale: 1.05 },
-      { kind: 'coffee_table', x: 14.0, z: -1.1, rotY: Math.PI * 0.5, scale: 1.1 },
-      { kind: 'sofa_luxury', x: 14.0, z: 8.6, rotY: Math.PI, scale: 1.05 },
-      { kind: 'coffee_table', x: 14.0, z: 7.2, rotY: Math.PI * 0.5, scale: 1.1 },
-      { kind: 'potted_plant_1', x: 11.2, z: -2.8, scale: 1.15 },
-      { kind: 'potted_plant_2', x: 11.2, z: 8.8, scale: 1.15 },
-      { kind: 'pendant_lamp', x: 14.5, y: 4.6, z: 3.0, scale: 1.25, hangFromCeiling: true },
-      { kind: 'pendant_lamp', x: 19.6, y: 4.6, z: 1.0, scale: 1.1, hangFromCeiling: true },
-      { kind: 'pendant_lamp', x: 19.6, y: 4.6, z: 5.0, scale: 1.1, hangFromCeiling: true },
-      // Penthouse Ocean Suite
-      { kind: 'bed_suite', x: 0, z: -12.8, rotY: 0, scale: 1.35 },
-      { kind: 'lounge_chair', x: -6.8, z: -10.5, rotY: Math.PI * 0.35, scale: 1.05 },
-      { kind: 'armchair', x: -6.6, z: -8.3, rotY: Math.PI * 0.65, scale: 1.05 },
-      { kind: 'coffee_table', x: -5.1, z: -9.5, rotY: 0, scale: 1.0 },
-      { kind: 'display_shelves', x: -8.3, z: -5.2, rotY: Math.PI * 0.5, scale: 1.2 },
-      { kind: 'console_table', x: 7.4, z: -9.8, rotY: -Math.PI * 0.5, scale: 1.25 },
-      { kind: 'ornate_mirror', x: 8.8, y: 1.5, z: -9.8, rotY: -Math.PI * 0.5, scale: 1.8 },
-      { kind: 'cabinet', x: 6.4, z: -14.8, rotY: 0, scale: 1.1 },
-      { kind: 'potted_plant_1', x: -7.5, z: -14.6, scale: 1.2 },
-      { kind: 'potted_plant_2', x: 7.5, z: -4.2, scale: 1.2 },
-      { kind: 'chandelier', x: 0, y: 4.4, z: -8.6, scale: 1.35, hangFromCeiling: true },
+      // ── FLOOR 0: 1F GRAND MARBLE LOBBY ──
+      { floor: 0, kind: 'hotel_elevator_doors', x: 0, z: -3.76, rotY: 0, scale: 1.0 },
+      { floor: 0, kind: 'hotel_reception_desk', x: -6.2, z: -0.6, rotY: 0, scale: 1.04 },
+      { floor: 0, kind: 'art_deco_fountain', x: 0, z: 4.2, scale: 1.0 },
+      { floor: 0, kind: 'grand_piano', x: 6.4, z: -0.4, rotY: -Math.PI * 0.28, scale: 1.05 },
+      { floor: 0, kind: 'chandelier', x: -4.2, y: 5.8, z: 4.6, scale: 1.75, hangFromCeiling: true },
+      { floor: 0, kind: 'chandelier', x: 4.2, y: 5.8, z: 4.6, scale: 1.75, hangFromCeiling: true },
+      { floor: 0, kind: 'sofa_luxury', x: -6.2, z: 8.2, rotY: Math.PI, scale: 1.05 },
+      { floor: 0, kind: 'coffee_table', x: -6.2, z: 6.7, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'lounge_chair', x: -4.1, z: 6.8, rotY: -Math.PI * 0.5, scale: 0.95 },
+      { floor: 0, kind: 'sofa_luxury', x: 6.2, z: 8.2, rotY: Math.PI, scale: 1.05 },
+      { floor: 0, kind: 'coffee_table', x: 6.2, z: 6.7, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'armchair', x: 4.1, z: 6.8, rotY: Math.PI * 0.5, scale: 1.0 },
+      { floor: 0, kind: 'grandfather_clock', x: -9.3, z: 3.2, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'potted_plant_1', x: -3.4, z: 10.9, scale: 1.3 },
+      { floor: 0, kind: 'potted_plant_1', x: 3.4, z: 10.9, scale: 1.3 },
+      { floor: 0, kind: 'potted_plant_2', x: -2.2, z: -3.2, scale: 1.15 },
+      { floor: 0, kind: 'potted_plant_2', x: 2.2, z: -3.2, scale: 1.15 },
+
+      // ── FLOOR 0: 1F OCEAN COCKTAIL LOUNGE ──
+      { floor: 0, kind: 'bar_stool', x: 18.1, z: -0.6, scale: 1.1 },
+      { floor: 0, kind: 'bar_stool', x: 18.1, z: 1.4, scale: 1.1 },
+      { floor: 0, kind: 'bar_stool', x: 18.1, z: 3.4, scale: 1.1 },
+      { floor: 0, kind: 'bar_stool', x: 18.1, z: 5.4, scale: 1.1 },
+      { floor: 0, kind: 'cocktail_bar_set', x: 19.7, y: 1.19, z: 0.6, scale: 1.15 },
+      { floor: 0, kind: 'cocktail_bar_set', x: 19.7, y: 1.19, z: 4.4, rotY: 1.4, scale: 1.15 },
+      { floor: 0, kind: 'neon_palm_sign', x: 16.5, y: 2.1, z: -3.86, rotY: 0, scale: 1.15 },
+      { floor: 0, kind: 'cabinet', x: 22.3, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { floor: 0, kind: 'cabinet', x: 22.3, z: 4.6, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { floor: 0, kind: 'wine_bottles', x: 22.3, y: 0.78, z: 0.2, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 0, kind: 'wine_bottles', x: 22.3, y: 0.78, z: 1.5, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 0, kind: 'wine_bottles', x: 22.3, y: 0.78, z: 4.0, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 0, kind: 'wine_bottles', x: 22.3, y: 0.78, z: 5.3, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 0, kind: 'wine_bottles', x: 19.7, y: 1.14, z: 2.2, rotY: Math.PI * 0.5, scale: 1.2 },
+      { floor: 0, kind: 'sofa_luxury', x: 13.8, z: -2.6, rotY: 0, scale: 1.05 },
+      { floor: 0, kind: 'coffee_table', x: 13.8, z: -1.1, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'sofa_luxury', x: 13.8, z: 8.6, rotY: Math.PI, scale: 1.05 },
+      { floor: 0, kind: 'coffee_table', x: 13.8, z: 7.2, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 0, kind: 'potted_plant_1', x: 11.2, z: -2.8, scale: 1.15 },
+      { floor: 0, kind: 'potted_plant_2', x: 11.2, z: 8.8, scale: 1.15 },
+      { floor: 0, kind: 'pendant_lamp', x: 14.2, y: 4.6, z: 3.0, scale: 1.25, hangFromCeiling: true },
+      { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 1.0, scale: 1.1, hangFromCeiling: true },
+      { floor: 0, kind: 'pendant_lamp', x: 19.0, y: 4.6, z: 5.0, scale: 1.1, hangFromCeiling: true },
+
+      // ── FLOOR 1: 2F GUEST CORRIDOR ──
+      { floor: 1, kind: 'hotel_elevator_doors', x: 0, z: -1.76, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'console_table', x: 0, z: 4.42, rotY: Math.PI, scale: 1.1 },
+      { floor: 1, kind: 'ornate_mirror', x: 0, y: 1.55, z: 4.86, rotY: Math.PI, scale: 1.5 },
+      { floor: 1, kind: 'potted_plant_1', x: -2.2, z: -1.2, scale: 1.1 },
+      { floor: 1, kind: 'potted_plant_1', x: 2.2, z: -1.2, scale: 1.1 },
+      { floor: 1, kind: 'potted_plant_2', x: -10.8, z: -1.2, scale: 1.0 },
+      { floor: 1, kind: 'potted_plant_2', x: 10.8, z: -1.2, scale: 1.0 },
+      { floor: 1, kind: 'pendant_lamp', x: -6.2, y: 3.6, z: 1.5, scale: 1.0, hangFromCeiling: true },
+      { floor: 1, kind: 'pendant_lamp', x: 0, y: 3.6, z: 1.5, scale: 1.05, hangFromCeiling: true },
+      { floor: 1, kind: 'pendant_lamp', x: 6.2, y: 3.6, z: 1.5, scale: 1.0, hangFromCeiling: true },
+
+      // ── FLOOR 1: SUITE 201 — OCEAN BREEZE KING & MARBLE BATH ──
+      { floor: 1, kind: 'bed_suite', x: -20.5, z: 0.8, rotY: Math.PI * 0.5, scale: 1.25 },
+      { floor: 1, kind: 'console_table', x: -15.4, z: 5.2, rotY: Math.PI, scale: 1.1 },
+      { floor: 1, kind: 'dining_chair', x: -15.4, z: 4.1, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'ornate_mirror', x: -15.4, y: 1.55, z: 5.84, rotY: Math.PI, scale: 1.3 },
+      { floor: 1, kind: 'lounge_chair', x: -19.8, z: 4.6, rotY: Math.PI * 0.25, scale: 0.95 },
+      { floor: 1, kind: 'coffee_table', x: -18.4, z: 4.3, rotY: 0, scale: 0.9 },
+      { floor: 1, kind: 'cabinet', x: -13.1, z: -2.2, rotY: -Math.PI * 0.5, scale: 0.95 },
+      { floor: 1, kind: 'potted_plant_1', x: -21.0, z: -2.9, scale: 1.05 },
+      { floor: 1, kind: 'chandelier', x: -17.0, y: 3.6, z: 1.0, scale: 0.9, hangFromCeiling: true },
+      // Bath 201
+      { floor: 1, kind: 'hotel_soaking_tub', x: -19.8, z: -8.6, rotY: 0, scale: 1.0 },
+      { floor: 1, kind: 'hotel_vanity_sink', x: -15.45, z: -6.8, rotY: -Math.PI * 0.5, scale: 1.0 },
+      { floor: 1, kind: 'potted_plant_2', x: -21.2, z: -5.2, scale: 0.95 },
+
+      // ── FLOOR 1: SUITE 202 — ART DECO DELUXE & MARBLE BATH ──
+      { floor: 1, kind: 'bed_suite', x: 20.5, z: 0.8, rotY: -Math.PI * 0.5, scale: 1.25 },
+      { floor: 1, kind: 'bistro_table', x: 18.8, z: 4.4, scale: 0.82 },
+      { floor: 1, kind: 'armchair', x: 17.0, z: 4.4, rotY: Math.PI * 0.5, scale: 0.95 },
+      { floor: 1, kind: 'console_table', x: 14.8, z: 5.2, rotY: Math.PI, scale: 1.05 },
+      { floor: 1, kind: 'ornate_mirror', x: 14.8, y: 1.55, z: 5.84, rotY: Math.PI, scale: 1.3 },
+      { floor: 1, kind: 'cabinet', x: 13.1, z: -2.2, rotY: Math.PI * 0.5, scale: 0.95 },
+      { floor: 1, kind: 'potted_plant_1', x: 21.0, z: -2.9, scale: 1.05 },
+      { floor: 1, kind: 'chandelier', x: 17.0, y: 3.6, z: 1.0, scale: 0.9, hangFromCeiling: true },
+      // Bath 202
+      { floor: 1, kind: 'hotel_soaking_tub', x: 19.8, z: -8.6, rotY: Math.PI, scale: 1.0 },
+      { floor: 1, kind: 'hotel_vanity_sink', x: 15.45, z: -6.8, rotY: Math.PI * 0.5, scale: 1.0 },
+      { floor: 1, kind: 'potted_plant_2', x: 21.2, z: -5.2, scale: 0.95 },
+
+      // ── FLOOR 2: 3F PENTHOUSE FOYER, GRAND SALON, MASTER & SPA ──
+      { floor: 2, kind: 'hotel_elevator_doors', x: 0, z: 9.76, rotY: Math.PI, scale: 1.0 },
+      { floor: 2, kind: 'console_table', x: -4.2, z: 7.2, rotY: Math.PI * 0.5, scale: 1.1 },
+      { floor: 2, kind: 'ornate_mirror', x: -4.85, y: 1.6, z: 7.2, rotY: Math.PI * 0.5, scale: 1.5 },
+      { floor: 2, kind: 'potted_plant_1', x: -3.6, z: 5.0, scale: 1.2 },
+      { floor: 2, kind: 'potted_plant_1', x: 3.6, z: 5.0, scale: 1.2 },
+      { floor: 2, kind: 'chandelier', x: 0, y: 4.2, z: 7.0, scale: 1.1, hangFromCeiling: true },
+      // Penthouse Grand Salon & Private Wet Bar
+      { floor: 2, kind: 'sofa_luxury', x: -3.6, z: -1.8, rotY: Math.PI * 0.5, scale: 1.15 },
+      { floor: 2, kind: 'sofa_luxury', x: 3.6, z: -1.8, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { floor: 2, kind: 'coffee_table', x: 0, z: -1.8, rotY: 0, scale: 1.25 },
+      { floor: 2, kind: 'armchair', x: 0, z: -4.8, rotY: 0, scale: 1.05 },
+      { floor: 2, kind: 'bar_stool', x: 7.6, z: -4.2, scale: 1.1 },
+      { floor: 2, kind: 'bar_stool', x: 7.6, z: -2.0, scale: 1.1 },
+      { floor: 2, kind: 'bar_stool', x: 7.6, z: 0.2, scale: 1.1 },
+      { floor: 2, kind: 'cocktail_bar_set', x: 9.1, y: 1.19, z: -3.4, scale: 1.15 },
+      { floor: 2, kind: 'wine_bottles', x: 9.1, y: 1.14, z: -1.2, rotY: Math.PI * 0.5, scale: 1.3 },
+      { floor: 2, kind: 'cabinet', x: 11.4, z: -2.0, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { floor: 2, kind: 'wine_bottles', x: 11.4, y: 0.78, z: -2.6, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 2, kind: 'wine_bottles', x: 11.4, y: 0.78, z: -1.4, rotY: Math.PI * 0.5, scale: 1.35 },
+      { floor: 2, kind: 'potted_plant_2', x: -10.6, z: -6.6, scale: 1.3 },
+      { floor: 2, kind: 'potted_plant_2', x: -10.6, z: 2.6, scale: 1.2 },
+      { floor: 2, kind: 'chandelier', x: -4.2, y: 4.8, z: -2.0, scale: 1.45, hangFromCeiling: true },
+      { floor: 2, kind: 'chandelier', x: 4.2, y: 4.8, z: -2.0, scale: 1.45, hangFromCeiling: true },
+      // Penthouse Master Bedroom
+      { floor: 2, kind: 'bed_suite', x: -20.3, z: -1.8, rotY: Math.PI * 0.5, scale: 1.38 },
+      { floor: 2, kind: 'lounge_chair', x: -16.8, z: -5.8, rotY: Math.PI * 0.2, scale: 1.05 },
+      { floor: 2, kind: 'coffee_table', x: -15.3, z: -5.4, rotY: 0, scale: 0.95 },
+      { floor: 2, kind: 'console_table', x: -13.1, z: 2.0, rotY: -Math.PI * 0.5, scale: 1.15 },
+      { floor: 2, kind: 'ornate_mirror', x: -12.16, y: 1.6, z: 2.0, rotY: -Math.PI * 0.5, scale: 1.5 },
+      { floor: 2, kind: 'cabinet', x: -21.2, z: 2.0, rotY: Math.PI * 0.5, scale: 1.05 },
+      { floor: 2, kind: 'potted_plant_1', x: -20.8, z: -6.6, scale: 1.25 },
+      { floor: 2, kind: 'chandelier', x: -17.0, y: 4.2, z: -1.8, scale: 1.2, hangFromCeiling: true },
+      // Penthouse Marble Spa Bath
+      { floor: 2, kind: 'hotel_soaking_tub', x: -19.2, z: 8.2, rotY: 0, scale: 1.12 },
+      { floor: 2, kind: 'hotel_vanity_sink', x: -12.48, z: 7.0, rotY: -Math.PI * 0.5, scale: 1.08 },
+      { floor: 2, kind: 'potted_plant_1', x: -21.1, z: 5.2, scale: 1.15 },
+      { floor: 2, kind: 'potted_plant_2', x: -13.2, z: 5.0, scale: 1.0 },
     ],
     npcs: [
       {
         id: 'solaire-concierge',
         name: 'Elena',
-        role: 'Concierge',
-        x: -5.9,
-        z: 0.7,
+        role: 'Chief Concierge',
+        floor: 0,
+        x: -6.2,
+        z: -2.3,
         yaw: Math.PI,
         variantIndex: 13,
         lines: [
-          'Elena: "Welcome to Hotel Solaire! Explore the Ocean Cocktail Lounge to the east or our Penthouse Suite straight ahead."',
-          'Elena: "Take the Key Sol Spyder across the north causeway at golden hour — pure Miami magic."',
+          'Elena: "Welcome to Hotel Solaire! Take the brass elevator straight ahead to visit Guest Suites on Floor 2 or the Ocean Penthouse on Floor 3."',
+          'Elena: "Our Ocean Cocktail Lounge is open right through the east archway — Mateo mixes the finest mojitos on Ocean Drive."',
+        ],
+      },
+      {
+        id: 'solaire-bellhop',
+        name: 'Marco',
+        role: 'Bell Captain',
+        floor: 0,
+        x: 3.3,
+        z: 8.6,
+        yaw: -Math.PI * 0.35,
+        variantIndex: 22,
+        lines: [
+          'Marco: "Right this way! Step up to the brass elevator doors and press [E] or 1 / 2 / 3 to ride between floors."',
+          'Marco: "Suites 201 and 202 are freshly prepared on the 2nd floor, and the 3rd-floor Penthouse has panoramic ocean views."',
         ],
       },
       {
         id: 'solaire-bartender',
         name: 'Mateo',
         role: 'Master Mixologist',
-        x: 22.1,
+        floor: 0,
+        x: 21.4,
         z: 2.6,
         yaw: -Math.PI * 0.5,
         variantIndex: 18,
@@ -508,34 +924,54 @@ export const INTERIORS: InteriorDef[] = [
         lines: ['Mateo: "House special mojito? Mint fresh from Palm Plaza."'],
       },
       {
-        id: 'solaire-guest-1',
-        name: 'Camila',
-        role: 'Hotel Guest',
-        x: -2.4,
-        z: 7.2,
-        yaw: Math.PI * 0.65,
-        variantIndex: 25,
-        lines: ['Camila: "Love the Art Deco chandeliers in here. Heading over to Wynwood Gallery next!"'],
-      },
-      {
         id: 'solaire-guest-2',
         name: 'Devon',
         role: 'Lounge Guest',
-        x: 15.6,
-        z: 1.8,
+        floor: 0,
+        x: 13.8,
+        z: 0.4,
         yaw: Math.PI * 0.4,
         variantIndex: 32,
         lines: ['Devon: "Best cocktail lounge on Ocean Drive. Mateo never misses."'],
       },
       {
+        id: 'solaire-housekeeper',
+        name: 'Rosa',
+        role: 'Floor 2 Housekeeping',
+        floor: 1,
+        x: -4.2,
+        z: 1.6,
+        yaw: Math.PI * 0.35,
+        variantIndex: 39,
+        lines: [
+          'Rosa: "Suites 201 and 202 are both open to tour — each has a full marble soaking tub and rain shower!"',
+          'Rosa: "Suites 203 and 204 have Do Not Disturb signs out right now."',
+        ],
+      },
+      {
+        id: 'solaire-guest-1',
+        name: 'Camila',
+        role: 'Suite 202 Guest',
+        floor: 1,
+        x: 15.8,
+        z: 2.2,
+        yaw: -Math.PI * 0.35,
+        variantIndex: 25,
+        lines: ['Camila: "Love this Art Deco Deluxe suite! The freestanding soaking tub in the marble bath is heaven."'],
+      },
+      {
         id: 'solaire-suite-vip',
         name: 'Valery',
-        role: 'Penthouse Guest',
-        x: -3.0,
-        z: -8.4,
-        yaw: Math.PI * 0.2,
+        role: 'Penthouse VIP',
+        floor: 2,
+        x: 4.2,
+        z: -4.8,
+        yaw: -Math.PI * 0.35,
         variantIndex: 41,
-        lines: ['Valery: "Look at that sunset view from the Penthouse Suite — worth every penny."'],
+        lines: [
+          'Valery: "Look at that sunset over the Atlantic from the 3rd-floor Penthouse — worth every penny."',
+          'Valery: "Help yourself to the wet bar or check out the master bedroom and marble spa through the west arch."',
+        ],
       },
     ],
   }),
@@ -1178,16 +1614,18 @@ export const INTERIORS: InteriorDef[] = [
   }),
 ];
 
-/** Returns the specific room the point (x, z) is inside (or closest room if in a doorway). */
-export function getInteriorRoomAt(def: InteriorDef, x: number, z: number): InteriorRoomDef {
-  for (const r of def.rooms) {
+/** Returns the specific room the point (x, z) is inside on the given floor (or closest room on that floor). */
+export function getInteriorRoomAt(def: InteriorDef, x: number, z: number, floor = 0): InteriorRoomDef {
+  const candidates = def.rooms.filter((r) => (r.floor ?? 0) === floor);
+  const pool = candidates.length > 0 ? candidates : def.rooms;
+  for (const r of pool) {
     if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) {
       return r;
     }
   }
-  let best = def.rooms[0];
+  let best = pool[0];
   let bestDist = Infinity;
-  for (const r of def.rooms) {
+  for (const r of pool) {
     const cx = clamp(x, r.minX, r.maxX);
     const cz = clamp(z, r.minZ, r.maxZ);
     const d = Math.hypot(x - cx, z - cz);
@@ -1213,10 +1651,12 @@ export function findNearbyInteriorNpc(
   x: number,
   z: number,
   maxRange = 4.2,
+  floor = 0,
 ): InteriorNpcDef | null {
   let best: InteriorNpcDef | null = null;
   let bestDist = maxRange;
   for (const npc of def.npcs) {
+    if ((npc.floor ?? 0) !== floor) continue;
     const d = distXZ(x, z, npc.x, npc.z);
     if (d <= bestDist) {
       bestDist = d;
@@ -1226,8 +1666,15 @@ export function findNearbyInteriorNpc(
   return best;
 }
 
-function isPointInsideVenueFloor(def: InteriorDef, x: number, z: number, margin = 0.25): boolean {
+function isPointInsideVenueFloor(
+  def: InteriorDef,
+  x: number,
+  z: number,
+  margin = 0.25,
+  floor = 0,
+): boolean {
   for (const r of def.rooms) {
+    if ((r.floor ?? 0) !== floor) continue;
     if (x >= r.minX - margin && x <= r.maxX + margin && z >= r.minZ - margin && z <= r.maxZ + margin) {
       return true;
     }
@@ -1322,10 +1769,12 @@ export function stepPlayerInInterior(
 
   // Tight realistic human torso radius (28cm -> 56cm wide) so furniture never feels like an invisible forcefield!
   const radius = 0.28;
+  const floor = getFloorFromPlayerY(p.y);
 
-  // 2 passes resolve tight corners cleanly across walls, built-ins, and all individual 3D prop OBBs
+  // 2 passes resolve tight corners cleanly across walls, built-ins, and all individual 3D prop OBBs on this floor
   for (let pass = 0; pass < 2; pass++) {
     for (const wall of def.walls) {
+      if ((wall.floor ?? 0) !== floor) continue;
       const res = resolveCircleAABB(nextX, nextZ, radius, wall);
       if (res.hit) {
         nextX += res.dx;
@@ -1333,6 +1782,7 @@ export function stepPlayerInInterior(
       }
     }
     for (const box of def.colliders) {
+      if ((box.floor ?? 0) !== floor) continue;
       const res = resolveCircleAABB(nextX, nextZ, radius, box);
       if (res.hit) {
         nextX += res.dx;
@@ -1340,6 +1790,7 @@ export function stepPlayerInInterior(
       }
     }
     for (const obb of def.propColliders) {
+      if ((obb.floor ?? 0) !== floor) continue;
       const res = resolveCircleOBB(nextX, nextZ, radius, obb);
       if (res.hit) {
         nextX += res.dx;
@@ -1348,9 +1799,10 @@ export function stepPlayerInInterior(
     }
   }
 
-  // Solid indoor NPC bodies (tight natural 60cm personal space)
+  // Solid indoor NPC bodies on this floor (tight natural 60cm personal space)
   const npcMinDist = 0.6;
   for (const npc of def.npcs) {
+    if ((npc.floor ?? 0) !== floor) continue;
     const dx = nextX - npc.x;
     const dz = nextZ - npc.z;
     const d = Math.hypot(dx, dz);
@@ -1362,8 +1814,8 @@ export function stepPlayerInInterior(
     }
   }
 
-  // 4. Safety guard: never escape outside the union of room footprints
-  if (!isPointInsideVenueFloor(def, nextX, nextZ, 0.1)) {
+  // 4. Safety guard: never escape outside the union of room footprints on this floor
+  if (!isPointInsideVenueFloor(def, nextX, nextZ, 0.1, floor)) {
     nextX = prevX;
     nextZ = prevZ;
   }
@@ -1373,7 +1825,7 @@ export function stepPlayerInInterior(
   p.vx = (nextX - prevX) / safeDt;
   p.vz = (nextZ - prevZ) / safeDt;
 
-  const floorY = INTERIOR_ORIGIN_Y;
+  const floorY = INTERIOR_ORIGIN_Y + floor * FLOOR_STRIDE_Y;
   if (input.jump && p.grounded) {
     p.vy = 6.2;
     p.grounded = false;
@@ -1654,6 +2106,7 @@ interface BuiltVenue {
   lasers?: THREE.Mesh[];
   monolithMats?: THREE.MeshStandardMaterial[];
   exitRing: THREE.Mesh;
+  elevatorRings: THREE.Mesh[];
 }
 
 export interface InteriorSystemHandles {
@@ -1662,7 +2115,14 @@ export interface InteriorSystemHandles {
   attachGltfProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   applyPbrTextures: (texMap: InteriorTextureMap) => void;
   setActiveInterior: (id: InteriorId | null) => void;
-  update: (elapsed: number, dt: number, activeId: InteriorId | null, playerX: number, playerZ: number) => void;
+  update: (
+    elapsed: number,
+    dt: number,
+    activeId: InteriorId | null,
+    playerX: number,
+    playerZ: number,
+    playerY?: number,
+  ) => void;
 }
 
 function addAreaRug(
@@ -1673,18 +2133,118 @@ function addAreaRug(
   d: number,
   mainHex: number,
   borderHex: number,
+  baseY = 0,
 ): void {
   const outer = new THREE.Mesh(
     new THREE.BoxGeometry(w, 0.03, d),
     new THREE.MeshStandardMaterial({ color: borderHex, roughness: 0.92 }),
   );
-  outer.position.set(cx, 0.015, cz);
+  outer.position.set(cx, baseY + 0.015, cz);
   const inner = new THREE.Mesh(
     new THREE.BoxGeometry(w - 0.34, 0.016, d - 0.34),
     new THREE.MeshStandardMaterial({ color: mainHex, roughness: 0.95 }),
   );
-  inner.position.set(cx, 0.038, cz);
+  inner.position.set(cx, baseY + 0.038, cz);
   group.add(outer, inner);
+}
+
+function addRoomNumberPlaque(
+  group: THREE.Group,
+  x: number,
+  y: number,
+  z: number,
+  rotY: number,
+  roomNum: string,
+  subtitle = 'SUITE',
+): void {
+  const tex = createSignTexture(roomNum, subtitle, '#1d1410', '#ffe6a8', '#d9a84e');
+  const plaqueGroup = new THREE.Group();
+  plaqueGroup.position.set(x, y, z);
+  plaqueGroup.rotation.y = rotY;
+  const back = new THREE.Mesh(
+    new THREE.BoxGeometry(0.56, 0.3, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0xd9a84e, metalness: 0.88, roughness: 0.22 }),
+  );
+  const face = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.5, 0.24),
+    new THREE.MeshBasicMaterial({ map: tex }),
+  );
+  face.position.z = 0.025;
+  plaqueGroup.add(back, face);
+  group.add(plaqueGroup);
+}
+
+function addClosedHotelDoor(
+  group: THREE.Group,
+  x: number,
+  baseY: number,
+  z: number,
+  rotY: number,
+  roomNum: string,
+): void {
+  const doorGroup = new THREE.Group();
+  doorGroup.position.set(x, baseY, z);
+  doorGroup.rotation.y = rotY;
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x452617, roughness: 0.44, metalness: 0.1 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0xd9a84e, metalness: 0.88, roughness: 0.22 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.36, 2.48, 0.1), trimMat);
+  frame.position.set(0, 1.24, 0.05);
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.18, 2.38, 0.08), woodMat);
+  slab.position.set(0, 1.19, 0.09);
+  const panelTop = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.9, 0.03), trimMat);
+  panelTop.position.set(0, 1.72, 0.13);
+  const panelBot = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.8, 0.03), trimMat);
+  panelBot.position.set(0, 0.68, 0.13);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), trimMat);
+  knob.position.set(0.42, 1.05, 0.18);
+  doorGroup.add(frame, slab, panelTop, panelBot, knob);
+  group.add(doorGroup);
+  addRoomNumberPlaque(group, x, baseY + 1.88, z + (Math.cos(rotY) >= 0 ? 0.15 : -0.15), rotY, roomNum, 'DO NOT DISTURB');
+}
+
+function addGlassShower(
+  group: THREE.Group,
+  x: number,
+  baseY: number,
+  z: number,
+  w: number,
+  d: number,
+  glassSide: 'west' | 'east',
+): void {
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0xdaf6ff,
+    roughness: 0.06,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.34,
+  });
+  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0e8, metalness: 0.94, roughness: 0.16 });
+  const marbleCurbMat = new THREE.MeshStandardMaterial({ color: 0xeee9e0, roughness: 0.2 });
+
+  // Shower tray curb
+  const tray = new THREE.Mesh(new THREE.BoxGeometry(w, 0.09, d), marbleCurbMat);
+  tray.position.set(x, baseY + 0.045, z);
+  group.add(tray);
+
+  // Frameless tempered glass partition + chrome rail
+  const gx = glassSide === 'west' ? x - w * 0.5 + 0.03 : x + w * 0.5 - 0.03;
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.32, d), glassMat);
+  panel.position.set(gx, baseY + 1.25, z);
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, d), chromeMat);
+  topBar.position.set(gx, baseY + 2.41, z);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), chromeMat);
+  handle.position.set(gx, baseY + 1.15, z + d * 0.25);
+
+  // Overhead rain shower pipe & wide square chrome rain head!
+  const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 10), chromeMat);
+  riser.position.set(x, baseY + 1.72, z - d * 0.42);
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), chromeMat);
+  arm.rotation.x = Math.PI * 0.5;
+  arm.position.set(x, baseY + 2.42, z - d * 0.22);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 0.32), chromeMat);
+  head.position.set(x, baseY + 2.38, z);
+
+  group.add(panel, topBar, handle, riser, arm, head);
 }
 
 function addArchitecturalWindow(
@@ -1744,6 +2304,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
   // 1. Build every individual room's PBR floor, architectural ceiling structure, & multi-point lighting!
   for (const room of def.rooms) {
+    const baseY = (room.floor ?? 0) * FLOOR_STRIDE_Y;
     const rw = room.maxX - room.minX;
     const rd = room.maxZ - room.minZ;
     const cx = (room.minX + room.maxX) * 0.5;
@@ -1767,7 +2328,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(rw, rd), floorMat);
     floor.rotation.x = -Math.PI * 0.5;
-    floor.position.set(cx, 0, cz);
+    floor.position.set(cx, baseY, cz);
     group.add(floor);
 
     const ceil = new THREE.Mesh(
@@ -1775,7 +2336,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       new THREE.MeshStandardMaterial({ color: room.ceilingColor, roughness: 0.85 }),
     );
     ceil.rotation.x = Math.PI * 0.5;
-    ceil.position.set(cx, room.height, cz);
+    ceil.position.set(cx, baseY + room.height, cz);
     group.add(ceil);
 
     // Architectural Ceiling Structure tailored per room style!
@@ -1791,14 +2352,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       for (let i = 1; i < stepsX; i++) {
         const bx = room.minX + (i / stepsX) * rw;
         const beam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, rd - 0.36), beamMat);
-        beam.position.set(bx, room.height - 0.13, cz);
+        beam.position.set(bx, baseY + room.height - 0.13, cz);
         group.add(beam);
       }
       const stepsZ = Math.max(2, Math.round(rd / 4.5));
       for (let j = 1; j < stepsZ; j++) {
         const bz = room.minZ + (j / stepsZ) * rd;
         const beam = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.17, 0.26), beamMat);
-        beam.position.set(cx, room.height - 0.105, bz);
+        beam.position.set(cx, baseY + room.height - 0.105, bz);
         group.add(beam);
       }
     } else if (room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight') {
@@ -1807,14 +2368,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       for (let i = 1; i < count; i++) {
         const bz = room.minZ + (i / count) * rd;
         const rafter = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.22, 0.18), beamMat);
-        rafter.position.set(cx, room.height - 0.14, bz);
+        rafter.position.set(cx, baseY + room.height - 0.14, bz);
         group.add(rafter);
       }
     } else if (room.ceilingStyle === 'trusses') {
       // Exposed industrial black steel ceiling trusses
       for (let bz = room.minZ + 3.2; bz < room.maxZ - 2.0; bz += 4.5) {
         const truss = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.44, 0.34, 0.28), beamMat);
-        truss.position.set(cx, room.height - 0.38, bz);
+        truss.position.set(cx, baseY + room.height - 0.38, bz);
         group.add(truss);
       }
     } else if (room.ceilingStyle === 'gallery-track') {
@@ -1823,14 +2384,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const glowMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0 });
       for (const offset of [-0.26, 0.26]) {
         const rail = new THREE.Mesh(new THREE.BoxGeometry(rw - 2.4, 0.08, 0.1), railMat);
-        rail.position.set(cx, room.height - 0.18, cz + rd * offset);
+        rail.position.set(cx, baseY + room.height - 0.18, cz + rd * offset);
         group.add(rail);
         for (let sx = room.minX + 2.8; sx <= room.maxX - 2.8; sx += 3.2) {
           const spot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.18, 10), railMat);
-          spot.position.set(sx, room.height - 0.31, cz + rd * offset);
+          spot.position.set(sx, baseY + room.height - 0.31, cz + rd * offset);
           const bulb = new THREE.Mesh(new THREE.CircleGeometry(0.068, 10), glowMat);
           bulb.rotation.x = Math.PI * 0.5;
-          bulb.position.set(sx, room.height - 0.415, cz + rd * offset);
+          bulb.position.set(sx, baseY + room.height - 0.415, cz + rd * offset);
           group.add(spot, bulb);
         }
       }
@@ -1838,7 +2399,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       // Glowing perimeter neon ceiling cove strips
       const coveMat = new THREE.MeshBasicMaterial({ color: room.crownColor ?? 0xff2e93 });
       const barN = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.6, 0.07, 0.08), coveMat);
-      barN.position.set(cx, room.height - 0.24, room.minZ + 0.18);
+      barN.position.set(cx, baseY + room.height - 0.24, room.minZ + 0.18);
       const barS = barN.clone();
       barS.position.z = room.maxZ - 0.18;
       group.add(barN, barS);
@@ -1854,7 +2415,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         Math.max(rw, rd) * 1.45,
         1.35,
       );
-      pt.position.set(cx + sign * spreadX, room.height - 0.75, cz + sign * spreadZ);
+      pt.position.set(cx + sign * spreadX, baseY + room.height - 0.75, cz + sign * spreadZ);
       group.add(pt);
     }
   }
@@ -1875,6 +2436,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     if (len < 0.05) continue;
     const mid = (seg.start + seg.end) * 0.5;
     const room = seg.room;
+    const baseY = seg.floor * FLOOR_STRIDE_Y;
 
     const wallMat = new THREE.MeshStandardMaterial({ color: seg.wallColor, roughness: 0.82 });
     pbrBindings.push({
@@ -1887,10 +2449,10 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     const segGroup = new THREE.Group();
     if (seg.axis === 'x') {
-      segGroup.position.set(seg.coord, 0, mid);
+      segGroup.position.set(seg.coord, baseY, mid);
       segGroup.rotation.y = seg.outwardSign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5;
     } else {
-      segGroup.position.set(mid, 0, seg.coord);
+      segGroup.position.set(mid, baseY, seg.coord);
       segGroup.rotation.y = seg.outwardSign > 0 ? Math.PI : 0;
     }
 
@@ -1959,6 +2521,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
   // 3. Build architectural Doorway Archways, Frames & Upper Header Transoms (zero gaps to void!)
   for (const dw of def.doorways) {
+    const dwFloor = dw.floor ?? 0;
+    const baseY = dwFloor * FLOOR_STRIDE_Y;
     const span = dw.max - dw.min;
     const mid = (dw.min + dw.max) * 0.5;
     const frameMat = new THREE.MeshStandardMaterial({
@@ -1967,10 +2531,12 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       metalness: 0.65,
     });
 
-    const adjacentRooms = def.rooms.filter((r) =>
-      dw.axis === 'x'
-        ? Math.abs(r.minX - dw.coord) < 0.1 || Math.abs(r.maxX - dw.coord) < 0.1
-        : Math.abs(r.minZ - dw.coord) < 0.1 || Math.abs(r.maxZ - dw.coord) < 0.1,
+    const adjacentRooms = def.rooms.filter(
+      (r) =>
+        (r.floor ?? 0) === dwFloor &&
+        (dw.axis === 'x'
+          ? Math.abs(r.minX - dw.coord) < 0.1 || Math.abs(r.maxX - dw.coord) < 0.1
+          : Math.abs(r.minZ - dw.coord) < 0.1 || Math.abs(r.maxZ - dw.coord) < 0.1),
     );
     const maxH = Math.max(...adjacentRooms.map((r) => r.height), dw.height + 0.4);
     const headerH = Math.max(0.25, maxH - dw.height);
@@ -1985,19 +2551,19 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     );
 
     if (dw.axis === 'x') {
-      header.position.set(dw.coord, dw.height + headerH * 0.5, mid);
-      lintel.position.set(dw.coord, dw.height, mid);
+      header.position.set(dw.coord, baseY + dw.height + headerH * 0.5, mid);
+      lintel.position.set(dw.coord, baseY + dw.height, mid);
       for (const edgeZ of [dw.min, dw.max]) {
         const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.42, dw.height, 0.22), frameMat);
-        jamb.position.set(dw.coord, dw.height * 0.5, edgeZ);
+        jamb.position.set(dw.coord, baseY + dw.height * 0.5, edgeZ);
         group.add(jamb);
       }
     } else {
-      header.position.set(mid, dw.height + headerH * 0.5, dw.coord);
-      lintel.position.set(mid, dw.height, dw.coord);
+      header.position.set(mid, baseY + dw.height + headerH * 0.5, dw.coord);
+      lintel.position.set(mid, baseY + dw.height, dw.coord);
       for (const edgeX of [dw.min, dw.max]) {
         const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.22, dw.height, 0.42), frameMat);
-        jamb.position.set(edgeX, dw.height * 0.5, dw.coord);
+        jamb.position.set(edgeX, baseY + dw.height * 0.5, dw.coord);
         group.add(jamb);
       }
     }
@@ -2009,13 +2575,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         new THREE.BoxGeometry(dw.axis === 'z' ? span : 0.48, 0.08, dw.axis === 'x' ? span : 0.48),
         neonMat,
       );
-      strip.position.set(dw.axis === 'x' ? dw.coord : mid, dw.height - 0.08, dw.axis === 'x' ? mid : dw.coord);
+      strip.position.set(dw.axis === 'x' ? dw.coord : mid, baseY + dw.height - 0.08, dw.axis === 'x' ? mid : dw.coord);
       group.add(strip);
     }
   }
 
-  // 4. Illuminated Front Exit Double Doors + Glowing Green Exit Threshold Ring
-  const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ);
+  // 4. Illuminated Front Exit Double Doors + Glowing Green Exit Threshold Ring (Floor 0)
+  const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ, 0);
   const exitWallZ = exitRoom.maxZ;
   const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1e2a, roughness: 0.3, metalness: 0.7 });
   const exitDoorMesh = new THREE.Mesh(
@@ -2051,6 +2617,25 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   exitRing.position.set(def.exitX, 0.04, def.exitZ);
   group.add(exitRing);
 
+  // 4b. Glowing Cyan Elevator Call Rings on every elevator floor landing!
+  const elevatorRings: THREE.Mesh[] = [];
+  for (const elev of def.elevators ?? []) {
+    const eBaseY = elev.floor * FLOOR_STRIDE_Y;
+    const eRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.75, 1.08, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0x2cf3ff,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+      }),
+    );
+    eRing.rotation.x = -Math.PI * 0.5;
+    eRing.position.set(elev.x, eBaseY + 0.045, elev.z);
+    group.add(eRing);
+    elevatorRings.push(eRing);
+  }
+
   // 5. Coherent Room-Specific Architectural Setpieces (windows, rugs, feature walls, bars, kitchen hood!)
   let danceFloorMat: THREE.MeshStandardMaterial | undefined;
   let lasers: THREE.Mesh[] | undefined;
@@ -2061,36 +2646,50 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const marbleMat = new THREE.MeshStandardMaterial({ color: 0xf4eee6, roughness: 0.22, metalness: 0.08 });
 
   if (def.id === 'hotel-solaire') {
-    // Coherent Woven Area Rugs anchoring every seating & piano zone!
-    addAreaRug(group, -5.8, 7.4, 5.2, 3.8, 0x7b2839, 0xd9a84e); // West Atrium Lounge rug
-    addAreaRug(group, 5.8, 7.4, 5.2, 3.8, 0x7b2839, 0xd9a84e); // East Atrium Lounge rug
-    addAreaRug(group, 6.1, 1.5, 3.8, 3.8, 0x274c52, 0xd9a84e); // Grand Piano rug
-    addAreaRug(group, 0, -12.4, 5.8, 5.0, 0xdccbb4, 0x9e7d4b); // Penthouse Suite bed rug
+    const f1Y = FLOOR_STRIDE_Y;
+    const f2Y = FLOOR_STRIDE_Y * 2;
+    const sunsetTex = createSunsetOceanViewTexture();
 
-    // Check-In Feature Wall Behind Concierge Elena with Wood Slats & Brass "HOTEL SOLAIRE" Sign
-    const featureWall = new THREE.Mesh(new THREE.BoxGeometry(6.0, 4.4, 0.16), darkWoodMat);
-    featureWall.position.set(-5.9, 2.2, -1.88);
+    // ── FLOOR 0 (1F GRAND LOBBY & OCEAN LOUNGE) ──
+    addAreaRug(group, -5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
+    addAreaRug(group, 5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
+    addAreaRug(group, 6.4, -0.4, 3.8, 3.8, 0x274c52, 0xd9a84e, 0);
+
+    // Check-In Feature Wall directly behind Concierge Elena with Wood Slats & Brass "HOTEL SOLAIRE" Crest
+    const featureWall = new THREE.Mesh(new THREE.BoxGeometry(5.6, 4.4, 0.16), darkWoodMat);
+    featureWall.position.set(-6.2, 2.2, -3.88);
     const hotelCrest = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.6, 1.1),
+      new THREE.PlaneGeometry(4.4, 1.05),
       new THREE.MeshBasicMaterial({
-        map: createSignTexture('HOTEL SOLAIRE', 'EST. 1938 · OCEAN DRIVE', '#2b1a14', '#ffe6b0', '#d9a84e'),
+        map: createSignTexture('HOTEL SOLAIRE', 'EST. 1938 · CHECK-IN & CONCIERGE', '#2b1a14', '#ffe6b0', '#d9a84e'),
       }),
     );
-    hotelCrest.position.set(-5.9, 3.3, -1.75);
+    hotelCrest.position.set(-6.2, 3.3, -3.76);
     group.add(featureWall, hotelCrest);
 
-    // Tall Sunlit Ocean Drive Windows flanking the Atrium Front Entrance
+    // Elevator Directory Sign beside Floor 1 brass elevator doors
+    const dir1 = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.85),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('ELEVATOR', '1F LOBBY · 2F SUITES · 3F PENTHOUSE', '#171110', '#ffe6b0', '#2cf3ff'),
+      }),
+    );
+    dir1.position.set(2.35, 2.05, -3.88);
+    group.add(dir1);
+
+    // Tall Sunlit Ocean Drive Windows flanking the Lobby Front Entrance & Lounge South Wall
     addArchitecturalWindow(group, -6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
     addArchitecturalWindow(group, 6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
+    addArchitecturalWindow(group, 16.5, 2.4, 9.9, 4.6, 2.4, Math.PI, 0xd9a84e, 0xffd5a0, 3);
 
     // Ocean Cocktail Lounge Mahogany Bar Counter + Glowing Backlit Mirrored Liquor Wall!
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.2), darkWoodMat);
-    bar.position.set(20.5, 0.55, 2.9);
-    const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.1, 9.4), marbleMat);
-    barTop.position.set(20.5, 1.14, 2.9);
-    const barFootRail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 9.2, 8), goldMat);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.0), darkWoodMat);
+    bar.position.set(19.8, 0.55, 2.8);
+    const barTop = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 9.2), marbleMat);
+    barTop.position.set(19.8, 1.14, 2.8);
+    const barFootRail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 9.0, 8), goldMat);
     barFootRail.rotation.x = Math.PI * 0.5;
-    barFootRail.position.set(19.52, 0.22, 2.9);
+    barFootRail.position.set(18.85, 0.22, 2.8);
     group.add(bar, barTop, barFootRail);
 
     const backMirror = new THREE.Mesh(
@@ -2103,42 +2702,131 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         metalness: 0.85,
       }),
     );
-    backMirror.position.set(23.88, 2.3, 2.9);
+    backMirror.position.set(22.88, 2.3, 2.8);
     group.add(backMirror);
     for (const sy of [1.55, 2.2, 2.85]) {
       const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.06, 8.2), goldMat);
-      shelf.position.set(23.66, sy, 2.9);
+      shelf.position.set(22.66, sy, 2.8);
       group.add(shelf);
     }
 
-    // Penthouse Suite Panoramic Backlit Miami Ocean Sunset Window!
-    const sunsetTex = createSunsetOceanViewTexture();
-    const panoWindow = new THREE.Mesh(
-      new THREE.PlaneGeometry(14.5, 3.2),
-      new THREE.MeshBasicMaterial({ map: sunsetTex }),
-    );
-    panoWindow.position.set(0, 2.2, -15.88);
-    group.add(panoWindow);
-
-    for (const mx of [-7.25, -2.4, 2.4, 7.25]) {
-      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.3, 0.16), doorFrameMat);
-      mullion.position.set(mx, 2.2, -15.82);
-      group.add(mullion);
-    }
-
-    // Art Deco Accent Pillars in Grand Atrium
+    // Art Deco Marble Columns in Grand Lobby
     for (const [px, pz] of [
-      [-9.2, 5.0],
-      [9.2, 9.2],
+      [-9.2, -3.2],
+      [9.2, -3.2],
       [-9.2, 11.2],
       [9.2, 11.2],
     ]) {
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 6.4, 14), marbleMat);
-      col.position.set(px, 3.2, pz);
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 5.8, 14), marbleMat);
+      col.position.set(px, 2.9, pz);
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.36, 0.28, 14), goldMat);
-      cap.position.set(px, 6.1, pz);
+      cap.position.set(px, 5.55, pz);
       group.add(col, cap);
     }
+
+    // ── FLOOR 1 (2F GUEST CORRIDOR + SUITES 201 & 202 + EN-SUITE MARBLE BATHS) ──
+    addAreaRug(group, 0, 1.5, 22.4, 3.2, 0x732031, 0xd9a84e, f1Y); // Full-length hallway carpet runner
+    addAreaRug(group, -18.5, 0.8, 4.8, 4.4, 0xdccbb4, 0x9e7d4b, f1Y); // Suite 201 bedroom rug
+    addAreaRug(group, 18.5, 0.8, 4.8, 4.4, 0x2a5458, 0xd9a84e, f1Y); // Suite 202 bedroom rug
+
+    // Elevator Floor 2 Directory Plaque + Numbered Suite Plaques + Closed Doors 203 & 204!
+    const dir2 = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.72),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('FLOOR 2', '← 201 · SUITES 201–204 · 202 →', '#171110', '#ffe6b0', '#2cf3ff'),
+      }),
+    );
+    dir2.position.set(2.35, f1Y + 1.95, -1.88);
+    group.add(dir2);
+
+    addRoomNumberPlaque(group, -11.9, f1Y + 2.0, -0.35, Math.PI * 0.5, '201', 'OCEAN KING');
+    addRoomNumberPlaque(group, 11.9, f1Y + 2.0, -0.35, -Math.PI * 0.5, '202', 'DECO DELUXE');
+    addClosedHotelDoor(group, -6.2, f1Y, 4.92, Math.PI, '203');
+    addClosedHotelDoor(group, 6.2, f1Y, 4.92, Math.PI, '204');
+
+    // Framed coastal hotel art along 2F Corridor North Wall
+    for (const [ax, seed] of [
+      [-6.5, 0],
+      [6.5, 2],
+    ] as const) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.3, 0.07), darkWoodMat);
+      f.position.set(ax, f1Y + 2.0, -1.93);
+      const a = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.82, 1.12),
+        new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(seed) }),
+      );
+      a.position.set(ax, f1Y + 2.0, -1.86);
+      group.add(f, a);
+    }
+
+    // Sunlit Ocean Drive Windows in Suites 201 & 202
+    addArchitecturalWindow(group, -19.0, f1Y + 1.95, 5.9, 3.6, 2.0, Math.PI, 0xd9a84e, 0xffdfb8, 3);
+    addArchitecturalWindow(group, 19.0, f1Y + 1.95, 5.9, 3.6, 2.0, Math.PI, 0xd9a84e, 0xffdfb8, 3);
+
+    // En-Suite Walk-In Glass Rain Showers in Bath 201 & Bath 202!
+    addGlassShower(group, -16.1, f1Y, -9.1, 2.0, 1.6, 'west');
+    addGlassShower(group, 16.1, f1Y, -9.1, 2.0, 1.6, 'east');
+
+    // ── FLOOR 2 (3F THE OCEAN PENTHOUSE: FOYER, SALON, WET BAR, MASTER & SPA) ──
+    addAreaRug(group, 0, -2.0, 8.2, 6.2, 0x7b2839, 0xe6bd68, f2Y); // Penthouse Grand Salon rug
+    addAreaRug(group, -18.2, -1.8, 5.4, 5.2, 0xe2d2be, 0xb08a4e, f2Y); // Master Bedroom rug
+
+    // Penthouse Elevator Plaque
+    const dir3 = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.72),
+      new THREE.MeshBasicMaterial({
+        map: createSignTexture('PENTHOUSE 3F', 'PRIVATE RESIDENCE · ELEVATOR', '#171110', '#ffe6b0', '#2cf3ff'),
+      }),
+    );
+    dir3.position.set(-2.35, f2Y + 1.95, 9.88);
+    dir3.rotation.y = Math.PI;
+    group.add(dir3);
+
+    // Dramatic Panoramic Miami Ocean Sunset Glass Wall across Penthouse Salon & Master Bedroom!
+    const panoSalon = new THREE.Mesh(
+      new THREE.PlaneGeometry(21.4, 3.5),
+      new THREE.MeshBasicMaterial({ map: sunsetTex }),
+    );
+    panoSalon.position.set(0, f2Y + 2.35, -7.88);
+    group.add(panoSalon);
+    for (const mx of [-10.7, -5.3, 0, 5.3, 10.7]) {
+      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.6, 0.16), doorFrameMat);
+      mullion.position.set(mx, f2Y + 2.35, -7.82);
+      group.add(mullion);
+    }
+
+    const panoMaster = new THREE.Mesh(
+      new THREE.PlaneGeometry(8.2, 2.9),
+      new THREE.MeshBasicMaterial({ map: sunsetTex }),
+    );
+    panoMaster.position.set(-17.0, f2Y + 2.15, -7.88);
+    group.add(panoMaster);
+    for (const mx of [-21.1, -17.0, -12.9]) {
+      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.0, 0.16), doorFrameMat);
+      mullion.position.set(mx, f2Y + 2.15, -7.82);
+      group.add(mullion);
+    }
+
+    // Penthouse Private Wet Bar Counter & Glowing Back-Bar Mirror!
+    const phBar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 6.6), darkWoodMat);
+    phBar.position.set(9.15, f2Y + 0.55, -2.0);
+    const phBarTop = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.1, 6.8), marbleMat);
+    phBarTop.position.set(9.15, f2Y + 1.14, -2.0);
+    const phMirror = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 2.5, 5.8),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd296,
+        emissive: 0xffa04a,
+        emissiveIntensity: 0.4,
+        roughness: 0.1,
+        metalness: 0.85,
+      }),
+    );
+    phMirror.position.set(11.88, f2Y + 2.25, -2.0);
+    group.add(phBar, phBarTop, phMirror);
+
+    // Penthouse Spa Walk-In Glass Rain Shower!
+    addGlassShower(group, -15.2, f2Y, 9.0, 2.0, 1.8, 'west');
   } else if (def.id === 'club-neon') {
     // Velvet Entry Tunnel Carpet Runner + Glowing Neon Ribs!
     addAreaRug(group, 0, 14.4, 2.8, 7.8, 0x5c1138, 0xff2e93);
@@ -2381,7 +3069,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
               : null;
     if (!fStyle) continue;
     const fx = createFountainWaterEffect(fStyle, p.scale ?? 1.0);
-    fx.group.position.set(p.x, p.y ?? 0, p.z);
+    fx.group.position.set(p.x, (p.floor ?? 0) * FLOOR_STRIDE_Y + (p.y ?? 0), p.z);
     if (p.rotY) fx.group.rotation.y = p.rotY;
     group.add(fx.group);
     fountainEffects.push(fx);
@@ -2391,13 +3079,25 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const npcs: BuiltNpcHandle[] = [];
   for (const nDef of def.npcs) {
     const npcRoot = new THREE.Group();
-    npcRoot.position.set(nDef.x, 0, nDef.z);
+    npcRoot.position.set(nDef.x, (nDef.floor ?? 0) * FLOOR_STRIDE_Y, nDef.z);
     npcRoot.rotation.y = -nDef.yaw;
     group.add(npcRoot);
     npcs.push({ def: nDef, root: npcRoot, rig: null });
   }
 
-  return { def, group, propsRoot, pbrBindings, fountainEffects, npcs, danceFloorMat, lasers, monolithMats, exitRing };
+  return {
+    def,
+    group,
+    propsRoot,
+    pbrBindings,
+    fountainEffects,
+    npcs,
+    danceFloorMat,
+    lasers,
+    monolithMats,
+    exitRing,
+    elevatorRings,
+  };
 }
 
 export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles {
@@ -2455,13 +3155,13 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
     },
 
     attachGltfProps(propsMap) {
-      // Populate every indoor room with photorealistic CC0 3D furniture & prop GLBs!
+      // Populate every indoor room across all floors with photorealistic CC0 & Blender 3D furniture & prop GLBs!
       for (const venue of venues.values()) {
         for (const p of venue.def.props) {
           const src = propsMap.get(p.kind);
           if (!src) continue;
           const instance = src.clone(true);
-          instance.position.set(p.x, p.y ?? 0, p.z);
+          instance.position.set(p.x, (p.floor ?? 0) * FLOOR_STRIDE_Y + (p.y ?? 0), p.z);
           instance.rotation.y = p.rotY ?? 0;
           const sc = p.scale ?? 1.0;
           instance.scale.setScalar(sc);
@@ -2513,7 +3213,14 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
       }
     },
 
-    update(elapsed: number, dt: number, activeId: InteriorId | null, playerX: number, playerZ: number) {
+    update(
+      elapsed: number,
+      dt: number,
+      activeId: InteriorId | null,
+      playerX: number,
+      playerZ: number,
+      playerY = INTERIOR_ORIGIN_Y,
+    ) {
       if (activeId === null) {
         for (const sf of storefronts) {
           const s = 1 + Math.sin(elapsed * 3.0 + sf.phase) * 0.08;
@@ -2527,6 +3234,9 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
 
       const exitPulse = 1 + Math.sin(elapsed * 3.6) * 0.1;
       venue.exitRing.scale.set(exitPulse, exitPulse, 1);
+      for (const eRing of venue.elevatorRings) {
+        eRing.scale.set(exitPulse, exitPulse, 1);
+      }
 
       // Animate Club Neon pulsing LED floor & sweeping lasers
       if (venue.danceFloorMat) {
@@ -2555,21 +3265,23 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
         fx.update(elapsed);
       }
 
-      // Animate indoor NPCs & subtly turn them toward you when you approach to talk!
+      // Animate indoor NPCs & subtly turn them toward you when you approach on the SAME floor!
+      const playerFloor = getFloorFromPlayerY(playerY);
       for (let i = 0; i < venue.npcs.length; i++) {
         const handle = venue.npcs[i];
         if (!handle.rig) continue;
 
+        const npcFloor = handle.def.floor ?? 0;
         const dx = playerX - handle.def.x;
         const dz = playerZ - handle.def.z;
         const d = Math.hypot(dx, dz);
-        const targetYaw = d < 4.5 ? yawFromDir(dx, dz) : handle.def.yaw;
+        const targetYaw = npcFloor === playerFloor && d < 4.5 ? yawFromDir(dx, dz) : handle.def.yaw;
         const curYaw = -handle.root.rotation.y;
         const nextYaw = lerpAngle(curYaw, targetYaw, clamp(dt * 5.0, 0, 1));
         handle.root.rotation.y = -nextYaw;
 
         if (handle.def.dancing) {
-          handle.root.position.y = Math.abs(Math.sin(elapsed * 5.4 + i * 1.1)) * 0.08;
+          handle.root.position.y = npcFloor * FLOOR_STRIDE_Y + Math.abs(Math.sin(elapsed * 5.4 + i * 1.1)) * 0.08;
           handle.root.rotation.z = Math.sin(elapsed * 2.7 + i * 0.9) * 0.055;
           handle.rig.update(dt, 0.1, false, true, elapsed + i);
         } else {

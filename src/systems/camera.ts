@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clamp, forwardFromYaw, lerp, lerpAngle, wrapAngle } from '../core/math';
 import type { PlayerState } from '../entities/player';
 import type { VehicleState } from '../entities/vehicle';
-import { getInteriorRoomAt, type InteriorDef } from '../world/interiors';
+import { getFloorFromPlayerY, getInteriorRoomAt, type InteriorDef } from '../world/interiors';
 
 export type CameraMode = 'chase' | 'far' | 'hood';
 
@@ -117,8 +117,9 @@ export class CameraController {
       let pz = player.z - camFwd.z * horiz;
 
       if (activeInterior) {
-        const room = getInteriorRoomAt(activeInterior, player.x, player.z);
-        const camRoom = getInteriorRoomAt(activeInterior, px, pz);
+        const floor = getFloorFromPlayerY(player.y);
+        const room = getInteriorRoomAt(activeInterior, player.x, player.z, floor);
+        const camRoom = getInteriorRoomAt(activeInterior, px, pz, floor);
         const camInsideRoom =
           px >= camRoom.minX + 0.45 &&
           px <= camRoom.maxX - 0.45 &&

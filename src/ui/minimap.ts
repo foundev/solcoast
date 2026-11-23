@@ -2,7 +2,12 @@ import type { PlayerState } from '../entities/player';
 import type { TrafficCarState } from '../entities/traffic';
 import type { VehicleState } from '../entities/vehicle';
 import { CAUSEWAY, KEY_SOL_BOUNDS, SOUTH_PIER } from '../world/cityData';
-import { INTERIORS, type InteriorDef } from '../world/interiors';
+import {
+  INTERIORS,
+  getFloorFromPlayerY,
+  getInteriorFloorLabel,
+  type InteriorDef,
+} from '../world/interiors';
 import type { CityBlueprint } from '../world/types';
 import { MISSIONS, type MissionManager } from '../systems/missions';
 
@@ -112,21 +117,29 @@ export class MinimapRenderer {
     const s = this.size;
     const half = s * 0.5;
 
-    // Dedicated crisp Multi-Room Interior Floorplan Minimap when inside a building!
+    // Dedicated crisp Multi-Room & Multi-Floor Interior Floorplan Minimap when inside a building!
     if (activeInterior) {
       ctx.fillStyle = '#0c101b';
       ctx.fillRect(0, 0, s, s);
 
-      const spanX = activeInterior.maxX - activeInterior.minX;
-      const spanZ = activeInterior.maxZ - activeInterior.minZ;
-      const midX = (activeInterior.minX + activeInterior.maxX) * 0.5;
-      const midZ = (activeInterior.minZ + activeInterior.maxZ) * 0.5;
+      const floor = getFloorFromPlayerY(player.y);
+      const floorRooms = activeInterior.rooms.filter((r) => (r.floor ?? 0) === floor);
+      const roomsToDraw = floorRooms.length > 0 ? floorRooms : activeInterior.rooms;
+      const minX = Math.min(...roomsToDraw.map((r) => r.minX));
+      const maxX = Math.max(...roomsToDraw.map((r) => r.maxX));
+      const minZ = Math.min(...roomsToDraw.map((r) => r.minZ));
+      const maxZ = Math.max(...roomsToDraw.map((r) => r.maxZ));
+
+      const spanX = Math.max(4, maxX - minX);
+      const spanZ = Math.max(4, maxZ - minZ);
+      const midX = (minX + maxX) * 0.5;
+      const midZ = (minZ + maxZ) * 0.5;
       const roomScale = (s - 34) / Math.max(spanX, spanZ);
       const ix = (wx: number) => half + (wx - midX) * roomScale;
-      const iz = (wz: number) => half + 6 + (wz - midZ) * roomScale;
+      const iz = (wz: number) => half + 7 + (wz - midZ) * roomScale;
 
-      // 1. Each connected room shaded with its own distinct tint
-      for (const room of activeInterior.rooms) {
+      // 1. Each connected room on this floor shaded with its own distinct tint
+      for (const room of roomsToDraw) {
         ctx.fillStyle = room.floorMapTint;
         ctx.fillRect(
           ix(room.minX),
@@ -136,9 +149,10 @@ export class MinimapRenderer {
         );
       }
 
-      // 2. Built-in counters & individual rotated 3D furniture OBBs
+      // 2. Built-in counters & individual rotated 3D furniture OBBs on this floor
       ctx.fillStyle = 'rgba(200, 214, 238, 0.34)';
       for (const box of activeInterior.colliders) {
+        if ((box.floor ?? 0) !== floor) continue;
         ctx.fillRect(
           ix(box.minX),
           iz(box.minZ),
@@ -148,6 +162,7 @@ export class MinimapRenderer {
       }
       ctx.fillStyle = 'rgba(210, 224, 245, 0.28)';
       for (const obb of activeInterior.propColliders) {
+        if ((obb.floor ?? 0) !== floor) continue;
         ctx.save();
         ctx.translate(ix(obb.cx), iz(obb.cz));
         ctx.rotate(-obb.rotY);
@@ -160,31 +175,48 @@ export class MinimapRenderer {
         ctx.restore();
       }
 
-      // 3. Solid perimeter & interior partition walls (leaves open doorways visible!)
+      // 3. Solid perimeter & interior partition walls on this floor (leaves open doorways visible!)
       ctx.fillStyle = '#7cd0ff';
       for (const wall of activeInterior.walls) {
+        if ((wall.floor ?? 0) !== floor) continue;
         const wPx = Math.max(1.8, (wall.maxX - wall.minX) * roomScale);
         const hPx = Math.max(1.8, (wall.maxZ - wall.minZ) * roomScale);
         ctx.fillRect(ix(wall.minX), iz(wall.minZ), wPx, hPx);
       }
 
       // 4. Subtle room labels
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
       ctx.font = 'bold 7px system-ui';
       ctx.textAlign = 'center';
-      for (const room of activeInterior.rooms) {
+      for (const room of roomsToDraw) {
         const rcx = ix((room.minX + room.maxX) * 0.5);
         const rcz = iz((room.minZ + room.maxZ) * 0.5);
         ctx.fillText(room.shortLabel, rcx, rcz + 2);
       }
 
-      // 5. Exit door marker (mint green)
-      ctx.fillStyle = '#46f7b4';
-      ctx.fillRect(ix(activeInterior.exitX) - 7, iz(activeInterior.exitZ) - 3, 14, 6);
+      // 5. Exit door marker (mint green, Ground Floor only)
+      if (floor === 0) {
+        ctx.fillStyle = '#46f7b4';
+        ctx.fillRect(ix(activeInterior.exitX) - 7, iz(activeInterior.exitZ) - 3, 14, 6);
+      }
 
-      // 6. Indoor NPCs (gold dots)
+      // 5b. Elevator markers on this floor (bright cyan EL badge)
+      for (const elev of activeInterior.elevators ?? []) {
+        if (elev.floor !== floor) continue;
+        const ex = ix(elev.x);
+        const ez = iz(elev.z);
+        ctx.fillStyle = '#2cf3ff';
+        ctx.fillRect(ex - 7, ez - 5, 14, 10);
+        ctx.fillStyle = '#08121e';
+        ctx.font = 'bold 7px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('EL', ex, ez + 2.5);
+      }
+
+      // 6. Indoor NPCs on this floor (gold dots)
       ctx.fillStyle = '#ffd166';
       for (const npc of activeInterior.npcs) {
+        if ((npc.floor ?? 0) !== floor) continue;
         ctx.beginPath();
         ctx.arc(ix(npc.x), iz(npc.z), 3.3, 0, Math.PI * 2);
         ctx.fill();
@@ -204,10 +236,15 @@ export class MinimapRenderer {
       ctx.fill();
       ctx.restore();
 
-      ctx.fillStyle = 'rgba(255,255,255,0.88)';
-      ctx.font = 'bold 9px system-ui';
+      const floorLabel = getInteriorFloorLabel(activeInterior, floor);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = 'bold 8.5px system-ui';
       ctx.textAlign = 'center';
-      ctx.fillText(activeInterior.name.toUpperCase(), half, 12);
+      ctx.fillText(
+        floorLabel ? `${activeInterior.name.toUpperCase()} · ${floorLabel.toUpperCase()}` : activeInterior.name.toUpperCase(),
+        half,
+        12,
+      );
       return;
     }
 

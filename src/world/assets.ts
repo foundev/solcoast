@@ -60,7 +60,10 @@ export type InteriorPropKind =
   | 'building_hotel_solaire'
   | 'building_club_neon'
   | 'building_cafe_habana'
-  | 'building_wynwood_gallery';
+  | 'building_wynwood_gallery'
+  | 'hotel_elevator_doors'
+  | 'hotel_soaking_tub'
+  | 'hotel_vanity_sink';
 
 export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'sofa_luxury',
@@ -110,6 +113,9 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'building_club_neon',
   'building_cafe_habana',
   'building_wynwood_gallery',
+  'hotel_elevator_doors',
+  'hotel_soaking_tub',
+  'hotel_vanity_sink',
 ];
 
 export interface LoadedPbrTextures {
