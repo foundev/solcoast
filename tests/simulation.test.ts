@@ -327,6 +327,12 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       'boat_motorboat.glb',
       'boat_watertaxi.glb',
       'boat_cruiseship.glb',
+      'staff_concierge_f.glb',
+      'staff_security_m.glb',
+      'staff_bartender_m.glb',
+      'staff_waiter_m.glb',
+      'staff_bellhop_m.glb',
+      'staff_maid_f.glb',
     ];
     const dec = new TextDecoder();
     for (const file of requiredModels) {

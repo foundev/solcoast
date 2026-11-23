@@ -159,6 +159,7 @@ export interface LoadedGameAssets {
   boatGltfs: Partial<Record<BoatModelKind, GLTF>>;
   protagonistGltf: GLTF | null;
   pedestrianGltfs: GLTF[];
+  staffGltfs: Partial<Record<NpcUniformKind, GLTF>>;
   mocapClips: THREE.AnimationClip[];
   hdris: Partial<LoadedHdriSet>;
   textures: {
@@ -776,6 +777,12 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     av4,
     av6,
     av7,
+    staffConcierge,
+    staffSecurity,
+    staffBartender,
+    staffWaiter,
+    staffBellhop,
+    staffMaid,
     animIdle,
     animWalk,
     animWalk2,
@@ -812,6 +819,12 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     loadGltfSafe('/assets/models/avatar_4.glb'),
     loadGltfSafe('/assets/models/avatar_6.glb'),
     loadGltfSafe('/assets/models/avatar_7.glb'),
+    loadGltfSafe('/assets/models/staff_concierge_f.glb'),
+    loadGltfSafe('/assets/models/staff_security_m.glb'),
+    loadGltfSafe('/assets/models/staff_bartender_m.glb'),
+    loadGltfSafe('/assets/models/staff_waiter_m.glb'),
+    loadGltfSafe('/assets/models/staff_bellhop_m.glb'),
+    loadGltfSafe('/assets/models/staff_maid_f.glb'),
     loadGltfSafe('/assets/animations/anim_idle.glb'),
     loadGltfSafe('/assets/animations/anim_walk.glb'),
     loadGltfSafe('/assets/animations/anim_walk2.glb'),
@@ -850,6 +863,13 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
   if (boatCruiseship) boatGltfs.cruiseship = boatCruiseship;
 
   const pedestrianGltfs = [av1, av2, av3, av4, av6, av7].filter((g): g is GLTF => g !== null);
+  const staffGltfs: Partial<Record<NpcUniformKind, GLTF>> = {};
+  if (staffConcierge) staffGltfs.concierge = staffConcierge;
+  if (staffSecurity) staffGltfs.security = staffSecurity;
+  if (staffBartender) staffGltfs.bartender = staffBartender;
+  if (staffWaiter) staffGltfs.waiter = staffWaiter;
+  if (staffBellhop) staffGltfs.bellhop = staffBellhop;
+  if (staffMaid) staffGltfs.maid = staffMaid;
 
   const mocapClips: THREE.AnimationClip[] = [];
   const pushClip = (gltf: GLTF | null, canonicalName: string) => {
@@ -876,6 +896,7 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     isProtagonist: boolean,
     variantIndex = 0,
     uniform?: NpcUniformKind,
+    isDedicatedStaffGltf = false,
   ): ClonedPerson => {
     const cloned = SkeletonUtils.clone(gltf.scene);
     cloned.rotation.y = Math.PI; // Native +Z -> -Z forward
@@ -891,6 +912,22 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     });
     if (isProtagonist) {
       equipProtagonistStreetGear(cloned);
+    } else if (isDedicatedStaffGltf) {
+      // Dedicated Blender-tailored hotel staff GLB already has sculpted suit/uniform & sleeves!
+      // Apply subtle natural hair-color & height variation so two concierges or maids aren't identical twins.
+      const hairTints = [0xffffff, 0x4b2e1e, 0x8a5e36, 0x242024, 0x6e3a24, 0xc9a36a];
+      const tint = hairTints[Math.abs(variantIndex) % hairTints.length];
+      if (tint !== 0xffffff) {
+        cloned.traverse((obj) => {
+          if (obj instanceof THREE.Mesh && /hair/i.test(obj.name) && obj.material instanceof THREE.MeshStandardMaterial) {
+            const m = obj.material.clone();
+            m.color.setHex(tint);
+            obj.material = m;
+          }
+        });
+      }
+      const hSeed = ((Math.abs(variantIndex) * 29) % 9) / 8;
+      cloned.scale.setScalar(0.96 + hSeed * 0.06);
     } else if (uniform) {
       styleUniformedStaff(cloned, uniform, variantIndex);
     } else {
@@ -908,6 +945,7 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     boatGltfs,
     protagonistGltf,
     pedestrianGltfs,
+    staffGltfs,
     mocapClips,
     hdris: {
       ...(sunset ? { sunset } : {}),
@@ -926,23 +964,17 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
       return prepareAvatar(src, true, 0);
     },
     clonePedestrian(variantIndex = 0, uniform?: NpcUniformKind) {
-      if (pedestrianGltfs.length === 0 || mocapClips.length === 0) return null;
+      if (mocapClips.length === 0) return null;
       const idx = Math.abs(variantIndex);
-      // For uniformed hotel staff, pick ONLY silhouettes that match real suits/uniforms
-      // (av6 [idx 4] & av2 [idx 1] have full long-sleeve jackets + full trousers; av1 [0] & av3 [2] have dresses for maids!)
-      let chosenIdx = idx % pedestrianGltfs.length;
-      if (uniform && pedestrianGltfs.length >= 6) {
-        if (uniform === 'maid') {
-          chosenIdx = idx % 2 === 0 ? 0 : 2; // av1 / av3 tailored dress silhouette
-        } else if (uniform === 'concierge') {
-          chosenIdx = 4; // av6 clean full long-sleeve tailored suit silhouette (no beard/glasses)
-        } else {
-          // bellhop, bartender, waiter, security -> strictly long-sleeve jacket + full trousers (av2 / av6)
-          chosenIdx = idx % 2 === 0 ? 1 : 4;
-        }
+      if (uniform && staffGltfs[uniform]) {
+        return prepareAvatar(staffGltfs[uniform]!, false, idx, uniform, true);
       }
-      const gltf = pedestrianGltfs[chosenIdx];
-      return prepareAvatar(gltf, false, idx, uniform);
+      if (pedestrianGltfs.length === 0) return null;
+      // Fallback if dedicated staff GLB is absent: NEVER pick puffer-jacket av2 or cargo av6!
+      const gltf = uniform
+        ? pedestrianGltfs[uniform === 'maid' ? 2 : uniform === 'concierge' ? 5 : 3] ?? pedestrianGltfs[0]
+        : pedestrianGltfs[idx % pedestrianGltfs.length];
+      return prepareAvatar(gltf, false, idx, uniform, false);
     },
     cloneFerrari() {
       if (!ferrariGltf) return null;
