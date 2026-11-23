@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { InteriorPropKind, InteriorTextureMap, LoadedGameAssets } from './assets';
+import type { CarModelKind, InteriorPropKind, InteriorTextureMap, LoadedGameAssets } from './assets';
 import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
@@ -43,6 +43,7 @@ export interface CitySceneHandles {
   attachGltfFountains: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   attachShowcaseBuildings: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   attachWorldProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
+  attachParkedLotCars: (cloneCar: (kind: CarModelKind) => THREE.Group | null) => void;
   applyShowcaseTextures: (texMap: InteriorTextureMap) => void;
   setActiveInteriorBuilding: (interiorId: string | null) => void;
   hideFallbackYachts: () => void;
@@ -1781,6 +1782,234 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  // 13b. Club Neon Rear VIP Parking Lot & North Valet Courtyard (drivable tarmac, 20 painted stalls,
+  //      concrete wheel stops, floodlight poles, glowing VIP Parking entrance gantry & parked 3D club cars!)
+  const lotGroup = new THREE.Group();
+  const lotY = SIDEWALK_HEIGHT + 0.018;
+  const lotAsphaltMat = new THREE.MeshStandardMaterial({
+    color: 0x1b1e28,
+    roughness: 0.88,
+    metalness: 0.05,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const lotStripeMat = new THREE.MeshBasicMaterial({
+    color: 0xdce6f5,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const lotVipStripeMat = new THREE.MeshBasicMaterial({
+    color: 0x2cf3ff,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const lotStopMat = new THREE.MeshStandardMaterial({ color: 0xbec6d4, roughness: 0.72 });
+  const lotPoleMat = new THREE.MeshStandardMaterial({ color: 0x181c28, roughness: 0.35, metalness: 0.78 });
+  const lotFloodMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2dc,
+    emissive: 0xffe4b8,
+    emissiveIntensity: 1.4,
+    roughness: 0.2,
+  });
+  streetLampMaterials.push(lotFloodMat);
+  const lotNeonPinkMat = new THREE.MeshStandardMaterial({
+    color: 0xff2e93,
+    emissive: 0xff2e93,
+    emissiveIntensity: 1.8,
+    roughness: 0.2,
+  });
+  const lotNeonCyanMat = new THREE.MeshStandardMaterial({
+    color: 0x2cf3ff,
+    emissive: 0x2cf3ff,
+    emissiveIntensity: 1.8,
+    roughness: 0.2,
+  });
+  neonMaterials.push(lotNeonPinkMat, lotNeonCyanMat);
+
+  // Paved L-shaped VIP lot tarmac + East & North driveway curb-cut aprons connecting straight to the avenues!
+  for (const [w, d, cx, cz] of [
+    [22.0, 65.4, 50.0, -65.0], // Main East VIP Lot (X: 39..61, Z: -97.7..-32.3)
+    [10.2, 27.6, 34.4, -46.1], // Rear Main-Hall Valet Bay (X: 29.3..39.5, Z: -59.9..-32.3)
+    [37.4, 23.2, 20.6, -86.1], // North Valet Lot (X: 1.9..39.3, Z: -97.7..-74.5)
+    [3.0, 12.0, 61.5, -50.0], // East Avenue Driveway Apron (connects to X = 62 road curb!)
+    [12.0, 4.6, 22.0, -99.8], // North Street Driveway Apron (connects to Z = -102 road curb!)
+  ] as const) {
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(w, d), lotAsphaltMat);
+    pad.rotation.x = -Math.PI * 0.5;
+    pad.position.set(cx, lotY, cz);
+    pad.receiveShadow = true;
+    lotGroup.add(pad);
+  }
+
+  const addParkingStall = (cx: number, cz: number, horizontal: boolean, vip = false, stopSign: 1 | -1 = 1) => {
+    const sMat = vip ? lotVipStripeMat : lotStripeMat;
+    if (horizontal) {
+      // Stall oriented East-West (width 5.4m along X, bay width 3.4m along Z)
+      for (const dz of [-1.7, 1.7]) {
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 0.12), sMat);
+        line.rotation.x = -Math.PI * 0.5;
+        line.position.set(cx, lotY + 0.012, cz + dz);
+        lotGroup.add(line);
+      }
+      const stop = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 2.2), lotStopMat);
+      stop.position.set(cx + stopSign * 2.15, SIDEWALK_HEIGHT + 0.08, cz);
+      lotGroup.add(stop);
+    } else {
+      // Stall oriented North-South (width 3.4m along X, length 5.4m along Z)
+      for (const dx of [-1.7, 1.7]) {
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 5.4), sMat);
+        line.rotation.x = -Math.PI * 0.5;
+        line.position.set(cx + dx, lotY + 0.012, cz);
+        lotGroup.add(line);
+      }
+      const stop = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 0.24), lotStopMat);
+      stop.position.set(cx, SIDEWALK_HEIGHT + 0.08, cz + stopSign * 2.15);
+      lotGroup.add(stop);
+    }
+  };
+
+  // East perimeter row (facing West into drive aisle; stops on East side +1)
+  for (const sz of [-93.0, -87.0, -81.0, -75.0, -69.0, -63.0, -40.5, -36.5]) {
+    addParkingStall(56.6, sz, true, sz >= -75.0 && sz <= -63.0, 1);
+  }
+  // Building-side VIP row right behind Main Dance Hall's smoked windows (facing East; stops on West side -1)
+  for (const sz of [-57.0, -53.0, -49.0, -45.0, -41.0]) {
+    addParkingStall(33.4, sz, true, true, -1);
+  }
+  // North perimeter row (straddling North driveway at X: 16..28; stops on North side -1)
+  for (const sx of [6.0, 10.0, 32.0, 36.0, 40.0, 44.0]) {
+    addParkingStall(sx, -93.6, false, sx <= 10.0, -1);
+  }
+
+  // Painted "VIP PARKING" asphalt stencil in the main drive aisle
+  const vipCanvas = document.createElement('canvas');
+  vipCanvas.width = 512;
+  vipCanvas.height = 128;
+  const vCtx = vipCanvas.getContext('2d')!;
+  vCtx.clearRect(0, 0, 512, 128);
+  vCtx.fillStyle = 'rgba(44, 243, 255, 0.85)';
+  vCtx.font = 'bold 54px system-ui, sans-serif';
+  vCtx.textAlign = 'center';
+  vCtx.textBaseline = 'middle';
+  vCtx.fillText('VIP PARKING', 256, 64);
+  const vipTex = new THREE.CanvasTexture(vipCanvas);
+  vipTex.colorSpace = THREE.SRGBColorSpace;
+  const vipDecal = new THREE.Mesh(
+    new THREE.PlaneGeometry(6.8, 1.7),
+    new THREE.MeshBasicMaterial({ map: vipTex, transparent: true, depthWrite: false }),
+  );
+  vipDecal.rotation.x = -Math.PI * 0.5;
+  vipDecal.rotation.z = Math.PI * 0.5;
+  vipDecal.position.set(46.0, lotY + 0.018, -50.0);
+  lotGroup.add(vipDecal);
+
+  // 4 Tall Twin-Head Parking Lot Floodlight Poles with neon collar rings
+  for (const [lx, lz] of [
+    [47.5, -84.0],
+    [47.5, -64.0],
+    [47.5, -39.0],
+    [22.0, -78.5],
+  ] as const) {
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.7, 10), lotStopMat);
+    base.position.set(lx, SIDEWALK_HEIGHT + 0.35, lz);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 7.2, 10), lotPoleMat);
+    pole.position.set(lx, SIDEWALK_HEIGHT + 3.9, lz);
+    const crossArm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.14, 0.16), lotPoleMat);
+    crossArm.position.set(lx, SIDEWALK_HEIGHT + 7.4, lz);
+    const neonCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.25, 10), lotNeonCyanMat);
+    neonCollar.position.set(lx, SIDEWALK_HEIGHT + 6.9, lz);
+    for (const dx of [-1.05, 1.05]) {
+      const lampHead = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.14, 0.34), lotPoleMat);
+      lampHead.position.set(lx + dx, SIDEWALK_HEIGHT + 7.36, lz);
+      const lens = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.05, 0.26), lotFloodMat);
+      lens.position.set(lx + dx, SIDEWALK_HEIGHT + 7.27, lz);
+      lotGroup.add(lampHead, lens);
+    }
+    lotGroup.add(base, pole, crossArm, neonCollar);
+  }
+
+  // Glowing "CLUB NEON · VIP PARKING" Overhead Driveway Gantry Arch over the East entrance (X = 59.8, Z = -50)
+  for (const gz of [-56.4, -43.6]) {
+    const col = new THREE.Mesh(new THREE.BoxGeometry(0.42, 4.8, 0.42), lotPoleMat);
+    col.position.set(59.8, SIDEWALK_HEIGHT + 2.4, gz);
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.46, 4.4, 0.1), lotNeonPinkMat);
+    strip.position.set(59.8, SIDEWALK_HEIGHT + 2.4, gz);
+    lotGroup.add(col, strip);
+  }
+  const archBeam = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.15, 13.4), lotPoleMat);
+  archBeam.position.set(59.8, SIDEWALK_HEIGHT + 5.1, -50.0);
+  const archSignCanvas = document.createElement('canvas');
+  archSignCanvas.width = 512;
+  archSignCanvas.height = 96;
+  const aCtx = archSignCanvas.getContext('2d')!;
+  aCtx.fillStyle = '#0e0a1c';
+  aCtx.fillRect(0, 0, 512, 96);
+  aCtx.strokeStyle = '#2cf3ff';
+  aCtx.lineWidth = 6;
+  aCtx.strokeRect(5, 5, 502, 86);
+  aCtx.fillStyle = '#ffffff';
+  aCtx.font = 'bold 34px system-ui, sans-serif';
+  aCtx.textAlign = 'center';
+  aCtx.textBaseline = 'middle';
+  aCtx.fillText('CLUB NEON · VIP PARKING', 256, 48);
+  const archTex = new THREE.CanvasTexture(archSignCanvas);
+  archTex.colorSpace = THREE.SRGBColorSpace;
+  const archSignMat = new THREE.MeshBasicMaterial({ map: archTex });
+  for (const sx of [0.27, -0.27]) {
+    const signFace = new THREE.Mesh(new THREE.PlaneGeometry(11.6, 0.92), archSignMat);
+    signFace.rotation.y = sx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+    signFace.position.set(59.8 + sx, SIDEWALK_HEIGHT + 5.1, -50.0);
+    lotGroup.add(signFace);
+  }
+  const archNeonBottom = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.1, 13.4), lotNeonCyanMat);
+  archNeonBottom.position.set(59.8, SIDEWALK_HEIGHT + 4.48, -50.0);
+  lotGroup.add(archBeam, archNeonBottom);
+
+  const parkedLotCarsRoot = new THREE.Group();
+  lotGroup.add(parkedLotCarsRoot);
+  root.add(lotGroup);
+
+  const attachParkedLotCars = (cloneCar: (kind: CarModelKind) => THREE.Group | null) => {
+    const carGlassMat = new THREE.MeshPhysicalMaterial({
+      color: 0x0b1524,
+      roughness: 0.05,
+      metalness: 0.78,
+      transparent: true,
+      opacity: 0.82,
+      clearcoat: 1.0,
+    });
+    for (const pc of blueprint.parkedLotCars) {
+      const model = cloneCar(pc.modelKind);
+      if (!model) continue;
+      const paintMat = new THREE.MeshPhysicalMaterial({
+        color: pc.paintHex,
+        roughness: 0.18,
+        metalness: 0.55,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
+      });
+      model.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.castShadow = false;
+        obj.receiveShadow = true;
+        const matName = Array.isArray(obj.material) ? '' : (obj.material?.name ?? '').toLowerCase();
+        if (matName === 'paint' || matName.startsWith('body paint')) {
+          obj.material = paintMat;
+        } else if (matName.startsWith('glass') || matName.includes('tinted glass')) {
+          obj.material = carGlassMat;
+        }
+      });
+      const holder = new THREE.Group();
+      holder.position.set(pc.x, pc.y, pc.z);
+      holder.rotation.y = -pc.yaw;
+      holder.add(model);
+      parkedLotCarsRoot.add(holder);
+    }
+  };
+
   const setActiveInteriorBuilding = (_interiorId: string | null) => {
     // No building swapping needed: the 4 enterable buildings are unified 3D structures permanently visible in world space!
   };
@@ -1804,6 +2033,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     attachGltfFountains,
     attachShowcaseBuildings,
     attachWorldProps,
+    attachParkedLotCars,
     applyShowcaseTextures,
     setActiveInteriorBuilding,
     hideFallbackYachts,

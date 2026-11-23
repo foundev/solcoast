@@ -1567,12 +1567,42 @@ export const INTERIORS: InteriorDef[] = [
         ceilingStyle: 'neon-cove',
         sconceColor: 0xff46b8,
       },
+      {
+        id: 'afterhours-lounge',
+        name: 'After-Hours Bottle Lounge',
+        shortLabel: 'VIP BOOTHS',
+        minX: -25,
+        maxX: -12,
+        minZ: -21,
+        maxZ: -9,
+        height: 4.6,
+        floorColorA: '#120d22',
+        floorColorB: '#1c1432',
+        floorMapTint: '#2b1a44',
+        wallColor: 0x140e24,
+        ceilingColor: 0x090714,
+        lightColor: 0x2cf3ff,
+        lightIntensity: 1.35,
+        ambientIntensity: 0.52,
+        floorRoughness: 0.18,
+        floorMetalness: 0.2,
+        floorPbr: 'concrete',
+        floorTint: 0x221b38,
+        wallPbr: 'concrete',
+        wallTint: 0x221a3a,
+        wainscotColor: 0x110b1c,
+        crownColor: 0x2cf3ff,
+        ceilingStyle: 'neon-cove',
+        sconceColor: 0x2cf3ff,
+      },
     ],
     doorways: [
       { axis: 'z', coord: 10, min: -2.4, max: 2.4, height: 3.1, frameColor: 0x221636, accentNeon: 0xff2e93 },
       { axis: 'x', coord: -12, min: -3.5, max: 2.5, height: 3.6, frameColor: 0x1a1430, accentNeon: 0x2cf3ff },
+      { axis: 'z', coord: -9, min: -21.0, max: -17.0, height: 3.4, frameColor: 0x1a1430, accentNeon: 0x2cf3ff },
     ],
     windows: [
+      // Classic dark-tinted nightclub windows (heavily smoked mirror-tinted outside @ 0.78, clear smoked view out from inside @ 0.26!)
       {
         axis: 'z',
         coord: 19,
@@ -1582,10 +1612,10 @@ export const INTERIORS: InteriorDef[] = [
         topY: 2.95,
         frameColor: 0xff2e93,
         cols: 2,
-        tintColor: 0x62d8ff,
-        opacity: 0.22,
-        exteriorTintColor: 0x071828,
-        exteriorOpacity: 0.56,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
       },
       {
         axis: 'z',
@@ -1596,11 +1626,99 @@ export const INTERIORS: InteriorDef[] = [
         topY: 2.95,
         frameColor: 0xff2e93,
         cols: 2,
-        tintColor: 0x62d8ff,
-        opacity: 0.22,
-        exteriorTintColor: 0x071828,
-        exteriorOpacity: 0.56,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
       },
+      // Main Dance Hall front flanks facing Neon Strip
+      {
+        axis: 'z',
+        coord: 10,
+        min: -10.6,
+        max: -5.4,
+        sillY: 1.1,
+        topY: 4.6,
+        frameColor: 0x2cf3ff,
+        cols: 3,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      {
+        axis: 'z',
+        coord: 10,
+        min: 5.4,
+        max: 10.6,
+        sillY: 1.1,
+        topY: 4.6,
+        frameColor: 0xff2e93,
+        cols: 3,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      // Main Dance Hall south wall facing South cross-street
+      {
+        axis: 'x',
+        coord: 12,
+        min: -4.6,
+        max: 0.6,
+        sillY: 1.15,
+        topY: 4.6,
+        frameColor: 0x2cf3ff,
+        cols: 3,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      {
+        axis: 'x',
+        coord: 12,
+        min: 2.2,
+        max: 7.4,
+        sillY: 1.15,
+        topY: 4.6,
+        frameColor: 0xff2e93,
+        cols: 3,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      // Main Dance Hall rear windows flanking DJ Stage overlooking the Club Neon VIP Parking Lot!
+      {
+        axis: 'z',
+        coord: -12,
+        min: -10.8,
+        max: -6.4,
+        sillY: 1.1,
+        topY: 4.8,
+        frameColor: 0x2cf3ff,
+        cols: 2,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      {
+        axis: 'z',
+        coord: -12,
+        min: 6.4,
+        max: 10.8,
+        sillY: 1.1,
+        topY: 4.8,
+        frameColor: 0xff2e93,
+        cols: 2,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      // VIP Bar front & north tinted windows
       {
         axis: 'z',
         coord: 7,
@@ -1610,10 +1728,10 @@ export const INTERIORS: InteriorDef[] = [
         topY: 3.4,
         frameColor: 0x2cf3ff,
         cols: 3,
-        tintColor: 0x62d8ff,
-        opacity: 0.22,
-        exteriorTintColor: 0x071828,
-        exteriorOpacity: 0.54,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
       },
       {
         axis: 'x',
@@ -1622,12 +1740,41 @@ export const INTERIORS: InteriorDef[] = [
         max: 6.0,
         sillY: 0.9,
         topY: 3.4,
-        frameColor: 0x2cf3ff,
+        frameColor: 0xff2e93,
         cols: 2,
-        tintColor: 0x62d8ff,
-        opacity: 0.22,
-        exteriorTintColor: 0x071828,
-        exteriorOpacity: 0.54,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      // After-Hours Bottle Lounge panoramic tinted windows overlooking the VIP Parking Lot & North Valet Lot!
+      {
+        axis: 'z',
+        coord: -21,
+        min: -23.4,
+        max: -13.6,
+        sillY: 0.65,
+        topY: 3.75,
+        frameColor: 0x2cf3ff,
+        cols: 5,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
+      },
+      {
+        axis: 'x',
+        coord: -25,
+        min: -19.2,
+        max: -11.0,
+        sillY: 0.75,
+        topY: 3.75,
+        frameColor: 0xff2e93,
+        cols: 4,
+        tintColor: 0x203052,
+        opacity: 0.26,
+        exteriorTintColor: 0x060a14,
+        exteriorOpacity: 0.78,
       },
     ],
     colliders: [
@@ -1661,7 +1808,7 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'bar_stool', x: -19.6, z: 2.4, scale: 1.1 },
       { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: -3.8, scale: 1.15 },
       { kind: 'cocktail_bar_set', x: -21.2, y: 1.19, z: 2.1, rotY: 2.0, scale: 1.15 },
-      { kind: 'neon_palm_sign', x: -17.5, y: 2.1, z: -8.86, rotY: 0, scale: 1.3 },
+      { kind: 'neon_palm_sign', x: -15.6, y: 2.1, z: -8.86, rotY: 0, scale: 1.3 },
       { kind: 'metal_shelves', x: -24.3, z: -3.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'metal_shelves', x: -24.3, z: 1.2, rotY: Math.PI * 0.5, scale: 1.0 },
       { kind: 'wine_bottles', x: -21.2, y: 1.14, z: -2.5, rotY: Math.PI * 0.5, scale: 1.3 },
@@ -1675,6 +1822,19 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'pendant_lamp', x: -16.2, y: 4.4, z: -1.0, scale: 1.2, hangFromCeiling: true },
       { kind: 'pendant_lamp', x: -21.0, y: 4.4, z: -3.0, scale: 1.1, hangFromCeiling: true },
       { kind: 'pendant_lamp', x: -21.0, y: 4.4, z: 1.5, scale: 1.1, hangFromCeiling: true },
+      // After-Hours Bottle Lounge (overlooking the lit VIP Parking Lot!)
+      { kind: 'sofa_club', x: -14.8, z: -18.2, rotY: -Math.PI * 0.5, scale: 1.35 },
+      { kind: 'sofa_club', x: -14.8, z: -13.2, rotY: -Math.PI * 0.5, scale: 1.35 },
+      { kind: 'coffee_table', x: -16.5, z: -15.8, rotY: 0, scale: 1.15 },
+      { kind: 'wine_bottles', x: -16.5, y: 0.44, z: -15.8, scale: 1.3 },
+      { kind: 'sofa_club', x: -22.2, z: -18.2, rotY: Math.PI * 0.5, scale: 1.35 },
+      { kind: 'coffee_table', x: -20.5, z: -18.2, rotY: 0, scale: 1.05 },
+      { kind: 'wine_bottles', x: -20.5, y: 0.44, z: -18.2, scale: 1.25 },
+      { kind: 'armchair', x: -22.4, z: -13.2, rotY: Math.PI * 0.35, scale: 1.05 },
+      { kind: 'potted_plant_1', x: -13.2, z: -20.0, scale: 1.25 },
+      { kind: 'potted_plant_2', x: -23.8, z: -10.2, scale: 1.2 },
+      { kind: 'pendant_lamp', x: -18.5, y: 4.6, z: -15.5, scale: 1.3, hangFromCeiling: true },
+      { kind: 'pendant_lamp', x: -15.5, y: 4.6, z: -18.0, scale: 1.15, hangFromCeiling: true },
     ],
     npcs: [
       {
@@ -1744,6 +1904,21 @@ export const INTERIORS: InteriorDef[] = [
         yaw: -Math.PI * 0.4,
         variantIndex: 46,
         lines: ['Marcus: "Big drift meet happening over by Sol Coast Arena later tonight."'],
+      },
+      {
+        id: 'neon-vip-2',
+        name: 'Sienna',
+        role: 'Bottle Service Host',
+        x: -18.5,
+        z: -14.2,
+        yaw: Math.PI * 0.2,
+        variantIndex: 35,
+        actionCost: 40,
+        actionToast: 'Sienna brought a sparkler-lit Rosé Magnum to your After-Hours VIP Booth (-$40)!',
+        lines: [
+          'Sienna: "Welcome to the After-Hours Lounge — best view of the supercars out in the VIP parking lot!"',
+          'Sienna: "Love these smoked privacy windows — we can watch the whole Neon Strip from inside."',
+        ],
       },
     ],
   }),
@@ -3294,32 +3469,35 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     // Transparent Architectural Glass Pane(s) + 3D Casing bridging z = +0.04 (inside) to z = -0.30 (outside)!
     const winH = Math.max(0.2, win.topY - win.sillY);
     const winCY = (win.sillY + win.topY) * 0.5;
+    const isClubTint = def.id === 'club-neon' && win.exteriorOpacity !== undefined;
     const frameMat = new THREE.MeshStandardMaterial({
-      color: win.frameColor,
-      roughness: 0.32,
-      metalness: 0.55,
+      color: isClubTint ? 0x11131c : win.frameColor,
+      roughness: isClubTint ? 0.22 : 0.32,
+      metalness: isClubTint ? 0.85 : 0.55,
     });
 
     if (win.exteriorOpacity !== undefined) {
-      // Intentionally treated darker exterior-tinted window (e.g. Club Neon obsidian-cyan tint or Hotel bathroom privacy tint):
-      // Inward-facing clear pane + outward-facing treated tinted pane at the exact same window opening!
+      // Intentionally treated darker exterior-tinted window (e.g. Club Neon mirror-smoked privacy glass or Hotel bath tint):
+      // Inward-facing clear/smoked film pane + outward-facing high-gloss mirror-tinted privacy pane at the exact same opening!
       const inGlassMat = new THREE.MeshPhysicalMaterial({
         color: win.tintColor ?? 0xd8f0ff,
-        roughness: 0.04,
-        metalness: 0.08,
+        roughness: 0.05,
+        metalness: 0.12,
         transparent: true,
-        opacity: win.opacity ?? 0.2,
+        opacity: win.opacity ?? 0.22,
         clearcoat: 1.0,
         side: THREE.FrontSide,
         depthWrite: false,
       });
       const outGlassMat = new THREE.MeshPhysicalMaterial({
-        color: win.exteriorTintColor ?? 0x091d2e,
-        roughness: 0.05,
-        metalness: 0.36,
+        color: win.exteriorTintColor ?? 0x060a14,
+        roughness: isClubTint ? 0.04 : 0.06,
+        metalness: isClubTint ? 0.82 : 0.42,
         transparent: true,
         opacity: win.exteriorOpacity,
         clearcoat: 1.0,
+        clearcoatRoughness: 0.03,
+        envMapIntensity: isClubTint ? 2.2 : 1.3,
         side: THREE.FrontSide,
         depthWrite: false,
       });
@@ -3394,12 +3572,12 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         winSlotGroup.add(balcSlab, balcGlass, balcRail);
       }
     } else if (def.id === 'club-neon') {
-      const neonBorder = new THREE.Mesh(
-        new THREE.BoxGeometry(span + 0.28, 0.08, 0.08),
-        new THREE.MeshBasicMaterial({ color: win.frameColor }),
-      );
-      neonBorder.position.set(0, win.topY + 0.12, EXT_Z - 0.06);
-      winSlotGroup.add(neonBorder);
+      const neonMat = new THREE.MeshBasicMaterial({ color: win.frameColor });
+      const neonTop = new THREE.Mesh(new THREE.BoxGeometry(span + 0.28, 0.08, 0.08), neonMat);
+      neonTop.position.set(0, win.topY + 0.12, EXT_Z - 0.06);
+      const neonBot = new THREE.Mesh(new THREE.BoxGeometry(span + 0.28, 0.06, 0.08), neonMat);
+      neonBot.position.set(0, win.sillY - 0.1, EXT_Z - 0.06);
+      winSlotGroup.add(neonTop, neonBot);
     } else if (def.id === 'cafe-habana') {
       const awningMat = new THREE.MeshStandardMaterial({ color: 0xc25435, roughness: 0.7 });
       const awning = new THREE.Mesh(new THREE.BoxGeometry(span + 0.48, 0.14, 0.82), awningMat);
@@ -3618,18 +3796,51 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
   // 4. Illuminated Front Exit Transparent Glass Double Doors + Upper Wall Transom (Interior & Exterior!) + Glowing Exit Ring (Floor 0)
   const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1e2a, roughness: 0.3, metalness: 0.7 });
-  const exitGlassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xc8ebff,
-    roughness: 0.05,
-    metalness: 0.12,
-    transparent: true,
-    opacity: 0.22,
-    clearcoat: 1.0,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  });
-  const exitDoorMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), exitGlassMat);
-  exitDoorMesh.position.set(def.exitX, 1.4, exitWallZ + 0.13);
+  if (def.id === 'club-neon') {
+    // Classic smoked mirror-tinted double entrance doors matching Club Neon's exterior glazing
+    const clubDoorInMat = new THREE.MeshPhysicalMaterial({
+      color: 0x203052,
+      roughness: 0.05,
+      metalness: 0.12,
+      transparent: true,
+      opacity: 0.26,
+      clearcoat: 1.0,
+      side: THREE.FrontSide,
+      depthWrite: false,
+    });
+    const clubDoorOutMat = new THREE.MeshPhysicalMaterial({
+      color: 0x060a14,
+      roughness: 0.04,
+      metalness: 0.82,
+      transparent: true,
+      opacity: 0.78,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.03,
+      envMapIntensity: 2.2,
+      side: THREE.FrontSide,
+      depthWrite: false,
+    });
+    const exitDoorIn = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), clubDoorInMat);
+    exitDoorIn.rotation.y = Math.PI;
+    exitDoorIn.position.set(def.exitX, 1.4, exitWallZ + 0.09);
+    const exitDoorOut = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), clubDoorOutMat);
+    exitDoorOut.position.set(def.exitX, 1.4, exitWallZ + 0.17);
+    group.add(exitDoorIn, exitDoorOut);
+  } else {
+    const exitGlassMat = new THREE.MeshPhysicalMaterial({
+      color: 0xc8ebff,
+      roughness: 0.05,
+      metalness: 0.12,
+      transparent: true,
+      opacity: 0.22,
+      clearcoat: 1.0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const exitDoorMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), exitGlassMat);
+    exitDoorMesh.position.set(def.exitX, 1.4, exitWallZ + 0.13);
+    group.add(exitDoorMesh);
+  }
   for (const dx of [-1.6, 0, 1.6]) {
     const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.84, 0.36), doorFrameMat);
     stile.position.set(def.exitX + dx, 1.42, exitWallZ + 0.13);
@@ -3687,7 +3898,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   );
   exitSign.position.set(def.exitX, 3.22, exitWallZ - 0.08);
   exitSign.rotation.y = Math.PI;
-  group.add(exitDoorMesh, exitSign);
+  group.add(exitSign);
 
   const exitRing = new THREE.Mesh(
     new THREE.RingGeometry(0.85, 1.2, 28),
@@ -3935,10 +4146,27 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     // Penthouse Spa Walk-In Glass Rain Shower!
     addGlassShower(group, -15.2, f2Y, 9.0, 2.0, 1.8, 'west');
   } else if (def.id === 'club-neon') {
-    // Velvet Entry Tunnel Carpet Runner + Glowing Neon Ribs!
+    // Rooftop glowing neon halo crown above Main Dance Hall (y = 7.82m) & After-Hours Lounge (y = 4.82m)
+    const pinkHaloMat = new THREE.MeshBasicMaterial({ color: 0xff2e93 });
+    const cyanHaloMat = new THREE.MeshBasicMaterial({ color: 0x2cf3ff });
+    for (const [rw, rd, rx, ry, rz, mat] of [
+      [24.5, 0.14, 0, 7.9, 10.25, pinkHaloMat],
+      [24.5, 0.14, 0, 7.9, -12.25, cyanHaloMat],
+      [0.14, 22.5, 12.25, 7.9, -1.0, pinkHaloMat],
+      [0.14, 22.5, -12.25, 7.9, -1.0, cyanHaloMat],
+      [13.4, 0.14, -18.5, 4.9, -21.25, cyanHaloMat],
+      [0.14, 28.5, -25.25, 4.9, -7.0, pinkHaloMat],
+    ] as const) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(rw, 0.16, rd), mat);
+      strip.position.set(rx, ry, rz);
+      group.add(strip);
+    }
+
+    // Velvet Entry Tunnel Carpet Runner + VIP Lounge & After-Hours Rugs + Glowing Neon Ribs!
     addAreaRug(group, 0, 14.4, 2.8, 7.8, 0x5c1138, 0xff2e93);
     addAreaRug(group, -15.8, -6.2, 4.4, 3.6, 0x26113b, 0x2cf3ff);
     addAreaRug(group, -15.8, 4.6, 4.4, 3.4, 0x26113b, 0xff2e93);
+    addAreaRug(group, -18.5, -15.8, 8.8, 7.4, 0x1c1238, 0x2cf3ff);
 
     for (let z = 11.5; z <= 17.5; z += 2.0) {
       const col = z % 4 === 1.5 ? 0xff2e93 : 0x2cf3ff;

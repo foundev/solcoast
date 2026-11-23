@@ -159,6 +159,15 @@ export interface OutdoorMarqueeSpec {
   z: number;
 }
 
+export interface ParkedLotCarSpec {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  modelKind: 'gt' | 'spyder' | 'suv' | 'jdm' | 'coupe' | 'ev';
+  paintHex: number;
+}
+
 export interface TrafficNode {
   id: number;
   x: number;
@@ -189,6 +198,7 @@ export interface CityBlueprint {
   trafficSignals: OutdoorTrafficSignalSpec[];
   billboards: OutdoorBillboardSpec[];
   marquees: OutdoorMarqueeSpec[];
+  parkedLotCars: ParkedLotCarSpec[];
   trafficNodes: TrafficNode[];
   districts: Record<DistrictId, DistrictInfo>;
 }

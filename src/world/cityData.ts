@@ -16,6 +16,7 @@ import type {
   OutdoorPlanterSpec,
   OutdoorTrafficSignalSpec,
   PalmSpec,
+  ParkedLotCarSpec,
   RoadSegment,
   StreetLightSpec,
   TrafficNode,
@@ -719,10 +720,11 @@ export function createCityBlueprint(): CityBlueprint {
     { minX: 108.0, maxX: 122.0, minZ: -85.0, maxZ: -72.0, minY: 0, maxY: 16.0 },
     { minX: 102.0, maxX: 108.0, minZ: -47.0, maxZ: -40.0, minY: 0, maxY: 16.0 },
     { minX: 102.0, maxX: 108.0, minZ: -84.0, maxZ: -77.0, minY: 0, maxY: 16.0 },
-    // Club Neon (Neon Strip): Velvet Entry Foyer, Main Dance Hall & VIP Bar Wing
+    // Club Neon (Neon Strip): Velvet Entry Foyer, Main Dance Hall, VIP Bar Wing & After-Hours Glass Lounge
     clubMainCol,
     { minX: 7.2, maxX: 29.2, minZ: -60.4, maxZ: -36.4, minY: 0, maxY: 9.0 },
     { minX: 10.2, maxX: 26.2, minZ: -73.4, maxZ: -60.4, minY: 0, maxY: 5.5 },
+    { minX: 26.2, maxX: 38.2, minZ: -73.4, maxZ: -60.4, minY: 0, maxY: 5.5 },
     // Café Habana (Coral Heights): Espresso Bar + Roastery & Palm Conservatory Dining
     cafeMainCol,
     { minX: -272.9, maxX: -259.9, minZ: 16.4, maxZ: 30.4, minY: 0, maxY: 5.8 },
@@ -1189,6 +1191,31 @@ export function createCityBlueprint(): CityBlueprint {
   ];
   propObbs.push(...storefrontPropObbs);
 
+  // 10n. Club Neon Rear VIP Parking Lot & North Valet Lot: Parked 3D Nightclub Cars, Floodlight Poles & Entrance Arch!
+  const parkedLotCars: ParkedLotCarSpec[] = [
+    { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -87.0, yaw: -Math.PI * 0.5, modelKind: 'gt', paintHex: 0xff2e93 },
+    { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -75.0, yaw: -Math.PI * 0.5, modelKind: 'spyder', paintHex: 0x2cf3ff },
+    { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -63.0, yaw: -Math.PI * 0.5, modelKind: 'suv', paintHex: 0x161824 },
+    { x: 56.6, y: SIDEWALK_HEIGHT + 0.02, z: -36.5, yaw: -Math.PI * 0.5, modelKind: 'jdm', paintHex: 0xa855f7 },
+    { x: 33.4, y: SIDEWALK_HEIGHT + 0.02, z: -53.0, yaw: Math.PI * 0.5, modelKind: 'coupe', paintHex: 0xffcf5c },
+    { x: 33.4, y: SIDEWALK_HEIGHT + 0.02, z: -45.0, yaw: Math.PI * 0.5, modelKind: 'ev', paintHex: 0xe6edf5 },
+    { x: 10.0, y: SIDEWALK_HEIGHT + 0.02, z: -93.6, yaw: Math.PI, modelKind: 'gt', paintHex: 0x141a2b },
+  ];
+  for (const pc of parkedLotCars) {
+    propObbs.push({ cx: pc.x, cz: pc.z, halfW: 1.05, halfD: 2.35, rotY: pc.yaw });
+  }
+  // Parking lot floodlight poles & VIP Parking entrance arch columns
+  for (const [lx, lz] of [
+    [47.5, -84.0],
+    [47.5, -64.0],
+    [47.5, -39.0],
+    [22.0, -78.5],
+    [59.8, -56.4],
+    [59.8, -43.6],
+  ] as const) {
+    propObbs.push({ cx: lx, cz: lz, halfW: 0.24, halfD: 0.24, rotY: 0 });
+  }
+
   return {
     avenueXs: AVENUE_XS,
     streetZs: STREET_ZS,
@@ -1211,6 +1238,7 @@ export function createCityBlueprint(): CityBlueprint {
     trafficSignals,
     billboards,
     marquees,
+    parkedLotCars,
     trafficNodes,
     districts: DISTRICTS,
   };

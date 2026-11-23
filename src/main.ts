@@ -176,6 +176,7 @@ function bootstrap(): void {
     }
 
     trafficMeshes.attachGltfCars((kind) => assets.cloneCarModel(kind));
+    cityHandles.attachParkedLotCars((kind) => assets.cloneCarModel(kind));
     boatMeshes.attachGltfBoats((kind) => assets.cloneBoatModel(kind));
 
     const playerPerson = assets.cloneProtagonist();
