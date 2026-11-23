@@ -431,10 +431,12 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
  * - 7 studio optical mocap clips (Idle, 4 Walk variations, Run, Jump)
  * - Poly Haven Pure Sky CC0 HDRIs & photographic CC0 PBR textures
  */
+export const DRACO_DECODER_PATH = '/draco/';
+
 export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<LoadedGameAssets> {
   const gltfLoader = new GLTFLoader();
   const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath('/draco/');
+  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
   gltfLoader.setDRACOLoader(dracoLoader);
 
   const rgbeLoader = new RGBELoader();
@@ -644,13 +646,13 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
 }
 
 /**
- * Loads all 30 CC0 photorealistic PBR interior furniture & prop GLBs in parallel
+ * Loads all 40 CC0 & custom Blender PBR interior furniture & prop GLBs in parallel
  * without blocking initial outdoor world rendering.
  */
 export async function loadInteriorPropAssets(): Promise<Map<InteriorPropKind, THREE.Group>> {
   const gltfLoader = new GLTFLoader();
   const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath('/assets/draco/');
+  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
   gltfLoader.setDRACOLoader(dracoLoader);
 
   const loadOne = (kind: InteriorPropKind): Promise<[InteriorPropKind, THREE.Group | null]> =>

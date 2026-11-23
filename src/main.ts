@@ -183,11 +183,6 @@ function bootstrap(): void {
       interiorSystem.attachGltfNpcs((idx) => assets.clonePedestrian(idx));
     }
 
-    // Stream all 30 CC0 photorealistic PBR interior furniture & prop GLBs asynchronously
-    void loadInteriorPropAssets().then((propsMap) => {
-      interiorSystem.attachGltfProps(propsMap);
-    });
-
     const carCount = Object.keys(assets.carGltfs).length;
     const boatCount = Object.keys(assets.boatGltfs).length;
     if (carCount > 0 || boatCount > 0 || assets.protagonistGltf) {
@@ -195,6 +190,13 @@ function bootstrap(): void {
         `HD Assets Ready: ${carCount} car models, ${boatCount} boat & ship models, & 72 locals across 11 districts!`,
         'success',
       );
+    }
+  });
+
+  // Load all 40 CC0 & custom Blender interior furniture & hero GLBs in parallel immediately!
+  void loadInteriorPropAssets().then((propsMap) => {
+    if (propsMap.size > 0) {
+      interiorSystem.attachGltfProps(propsMap);
     }
   });
 

@@ -26,7 +26,7 @@ import {
   stepVehiclePhysics,
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
-import { INTERIOR_PROP_KINDS } from '../src/world/assets';
+import { DRACO_DECODER_PATH, INTERIOR_PROP_KINDS } from '../src/world/assets';
 import { createCityBlueprint } from '../src/world/cityData';
 import {
   INTERIOR_ORIGIN_Y,
@@ -747,7 +747,11 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
   });
 
   it('supports multi-room building interiors, valid 3D prop GLBs, doorway traversal, and solid wall/furniture/NPC collisions', () => {
-    // 1. All 40 CC0 & custom Blender interior furniture/hero GLBs exist, are valid binary glTF, and avoid slow transmission passes
+    // 1. Draco decoder files exist at DRACO_DECODER_PATH and all 40 CC0 + Blender interior GLBs are valid
+    const dracoDir = path.resolve(__dirname, '../public', DRACO_DECODER_PATH.replace(/^\/+/, ''));
+    expect(fs.readFileSync(path.resolve(dracoDir, 'draco_decoder.wasm')).byteLength).toBeGreaterThan(50_000);
+    expect(fs.readFileSync(path.resolve(dracoDir, 'draco_wasm_wrapper.js')).byteLength).toBeGreaterThan(10_000);
+
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
     expect(INTERIOR_PROP_KINDS.length).toBe(40);
