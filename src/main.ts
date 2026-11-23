@@ -1321,6 +1321,7 @@ async function bootstrap(): Promise<void> {
         snap.horn,
         activeVehicle.config.engineSound,
         activeVehicle.shiftTimer > 0,
+        clamp(Math.abs(activeVehicle.speed) / activeVehicle.config.maxSpeed, 0, 1),
       );
       lastPlayerStepIdx = Math.floor(player.walkPhase / Math.PI);
       wasPlayerGrounded = true;
