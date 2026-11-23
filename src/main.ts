@@ -875,7 +875,7 @@ async function bootstrap(): Promise<void> {
         player.fallRoll = 0;
         cameraCtrl.yaw = nearbyEntrance.spawnYaw;
         cameraCtrl.snap();
-        camera.far = 2200;
+        camera.far = 1250;
         camera.updateProjectionMatrix();
         sound.playChime('enter');
         hud.showDistrictBanner(nearbyEntrance.name);

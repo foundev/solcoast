@@ -71,10 +71,10 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 
 // Level architectural pads around the 4 enterable multi-room buildings & landmark flat parks/arena
 const TERRAIN_FLAT_PADS = [
-  { minX: 98, maxX: 132, minZ: -92, maxZ: -34 }, // Hotel Solaire
-  { minX: -8, maxX: 62, minZ: -102, maxZ: -28 }, // Club Neon + Rear VIP Parking Lot
-  { minX: -280, maxX: -246, minZ: -6, maxZ: 36 }, // Café Habana
-  { minX: -190, maxX: -150, minZ: -258, maxZ: -212 }, // Wynwood Art Gallery
+  { minX: 88, maxX: 136, minZ: -96, maxZ: -28 }, // Hotel Solaire
+  { minX: -16, maxX: 66, minZ: -104, maxZ: -24 }, // Club Neon + Rear VIP Parking Lot
+  { minX: -286, maxX: -236, minZ: -14, maxZ: 44 }, // Café Habana
+  { minX: -198, maxX: -142, minZ: -266, maxZ: -204 }, // Wynwood Art Gallery
   { minX: -12, maxX: 62, minZ: -12, maxZ: 62 }, // Palm Plaza Central Park
   { minX: -372, maxX: -298, minZ: -12, maxZ: 62 }, // Coral Park & Basketball Courts
   { minX: -372, maxX: -298, minZ: -282, maxZ: -208 }, // Sol Coast Stadium / Arena

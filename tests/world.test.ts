@@ -154,8 +154,14 @@ describe('Sol Coast World Blueprint', () => {
       });
       expect(attachedBuilding, `${venue.id} storefront must sit flush on a real building facade`).toBeDefined();
 
-      // Every room across every floor of the unified 3D venue (including exterior walls & balconies) must stay strictly off every street!
+      // Every room across every floor of the unified 3D venue (including exterior walls & balconies) must stay strictly off every street & on a flat terrain pad!
+      const lightsPerFloor = new Map<number, number>();
       for (const room of venue.rooms) {
+        const fl = room.floor ?? 0;
+        const rw = room.maxX - room.minX;
+        const rd = room.maxZ - room.minZ;
+        const roomLightCount = Math.max(rw, rd) > 12 ? 2 : 1;
+        lightsPerFloor.set(fl, (lightsPerFloor.get(fl) ?? 0) + roomLightCount);
         for (const [lx, lz] of [
           [room.minX - 1.2, room.minZ - 1.2],
           [room.maxX + 1.2, room.minZ - 1.2],
@@ -167,7 +173,14 @@ describe('Sol Coast World Blueprint', () => {
             isOnRoad(wp.x, wp.z),
             `${venue.id} room "${room.id}" corner (${wp.x.toFixed(1)}, ${wp.z.toFixed(1)}) must not protrude onto a road`,
           ).toBe(false);
+          expect(
+            getTerrainHeight(wp.x, wp.z),
+            `${venue.id} room "${room.id}" corner (${wp.x.toFixed(1)}, ${wp.z.toFixed(1)}) must sit on a level pad`,
+          ).toBe(0);
         }
+      }
+      for (const [fl, count] of lightsPerFloor) {
+        expect(count, `${venue.id} floor ${fl} lights must fit inside 8-light pool without swapping`).toBeLessThanOrEqual(8);
       }
 
       // Multi-room architecture: at least 3 distinct rooms, 2+ connecting doorways, rich 3D props, and 4+ NPCs

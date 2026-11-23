@@ -3014,7 +3014,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   });
 
   // 1. Build every individual room's PBR floor, architectural ceiling structure, exterior roof/terrace slabs & lighting!
-  for (const room of def.rooms) {
+  const maxVenueFloor = def.rooms.reduce((mx, r) => Math.max(mx, r.floor ?? 0), 0);
+  for (let roomIdx = 0; roomIdx < def.rooms.length; roomIdx++) {
+    const room = def.rooms[roomIdx];
     const rFloor = room.floor ?? 0;
     const baseY = getVisualFloorBaseY(rFloor);
     const storyExtH = getStoryExtH(room);
@@ -3022,6 +3024,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const rd = room.maxZ - room.minZ;
     const cx = (room.minX + room.maxX) * 0.5;
     const cz = (room.minZ + room.maxZ) * 0.5;
+    const slabStagger = roomIdx * 0.0025;
 
     const floorTex = createFloorTileTexture(room.floorColorA, room.floorColorB, 4);
     floorTex.repeat.set(Math.max(2, Math.round(rw / 3)), Math.max(2, Math.round(rd / 3)));
@@ -3043,17 +3046,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     floor.position.set(cx, baseY - 0.06, cz);
     group.add(floor);
 
-    // Exterior foundation plinth / inter-floor structural slab & upper roof / terrace deck slab
+    // Exterior foundation plinth / inter-floor structural slab & upper roof slab
+    // Staggered by 2.5mm per room & kept strictly below upper-story finished floors so slabs NEVER Z-fight or flash!
     const basePlinth = new THREE.Mesh(
-      new THREE.BoxGeometry(rw + 0.56, 0.16, rd + 0.56),
+      new THREE.BoxGeometry(rw + 0.56, 0.14, rd + 0.56),
       extStoneMat,
     );
-    basePlinth.position.set(cx, baseY - 0.11, cz);
+    basePlinth.position.set(cx, baseY - 0.13 - slabStagger, cz);
     const roofCap = new THREE.Mesh(
-      new THREE.BoxGeometry(rw + 0.62, 0.22, rd + 0.62),
+      new THREE.BoxGeometry(rw + 0.62, 0.2, rd + 0.62),
       extStoneMat,
     );
-    roofCap.position.set(cx, baseY + storyExtH + 0.11, cz);
+    const isTopStory = rFloor >= maxVenueFloor;
+    roofCap.position.set(
+      cx,
+      isTopStory ? baseY + storyExtH + 0.1 + slabStagger : baseY + storyExtH - 0.19 - slabStagger,
+      cz,
+    );
     group.add(basePlinth, roofCap);
 
     const ceil = new THREE.Mesh(
@@ -3130,10 +3139,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(barN, barS);
     }
 
-    // Record room light coordinates for the shared 6-light interior pool (eliminates 38 global PointLights!)
+    // Record room light coordinates for the shared 8-light floor-locked interior pool
+    // (Large halls > 12m get 2 distributed ceiling lights; compact rooms get 1 centered light so EVERY floor
+    //  fits 100% inside the 8-light pool with ZERO per-frame light swapping or flashing!)
+    const isLargeHall = Math.max(rw, rd) > 12;
+    const signs = isLargeHall ? [-1, 1] : [0];
     const spreadX = rw > rd ? rw * 0.24 : 0;
     const spreadZ = rd >= rw ? rd * 0.24 : 0;
-    for (const sign of [-1, 1]) {
+    const intensityMult = isLargeHall ? 14 : 18;
+    for (const sign of signs) {
       const lx = cx + sign * spreadX;
       const ly = baseY + room.height - 0.75;
       const lz = cz + sign * spreadZ;
@@ -3142,8 +3156,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         worldY: anchor0.worldY + ly,
         worldZ: anchor0.worldZ - lx * sinAnchor + lz * cosAnchor,
         color: room.lightColor,
-        intensity: room.lightIntensity * 14,
-        distance: Math.max(rw, rd) * 1.45,
+        intensity: room.lightIntensity * intensityMult,
+        distance: Math.max(rw, rd) * 1.65,
         floor: rFloor,
       });
     }
@@ -4447,9 +4461,9 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
   const outdoorMarkersRoot = new THREE.Group();
   const storefronts: OutdoorStorefrontHandle[] = [];
 
-  // Shared fixed-size pool of 6 PointLights + 1 interior HemisphereLight so WebGL compiles a tiny
-  // constant light loop (6 instead of 38!) with zero shader recompiles on building entry/exit!
-  const LIGHT_POOL_SIZE = 6;
+  // Shared fixed-size pool of 8 PointLights + 1 interior HemisphereLight so WebGL compiles a tiny
+  // constant light loop (8 instead of 38!) with zero shader recompiles & 100% floor-locked stability!
+  const LIGHT_POOL_SIZE = 8;
   const lightPool: THREE.PointLight[] = [];
   for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
     const pt = new THREE.PointLight(0xfff1dc, 0, 28, 1.35);
@@ -4597,21 +4611,21 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
 
       const exitPulse = 1 + Math.sin(elapsed * 3.6) * 0.1;
 
-      // Compute player world coordinates so both distance culling and the 6-light pool work seamlessly indoors & outdoors
+      // Compute player world coordinates & active floor for deterministic, rock-steady interior lighting
       let pWorldX = playerX;
-      let pWorldY = 1.6;
       let pWorldZ = playerZ;
+      let activeFloor = 0;
       const activeVenue = activeId ? venues.get(activeId) : undefined;
       if (activeVenue) {
-        const curFl = getFloorFromPlayerY(playerY, activeVenue.def);
-        const pw = interiorLocalToWorld(activeVenue.def, playerX, playerY, playerZ, curFl);
+        activeFloor = getFloorFromPlayerY(playerY, activeVenue.def);
+        const pw = interiorLocalToWorld(activeVenue.def, playerX, playerY, playerZ, activeFloor);
         pWorldX = pw.x;
-        pWorldY = pw.y + 1.4;
         pWorldZ = pw.z;
       }
 
-      // Collect candidate interior room lights for the nearest 6 pooled PointLights
-      const candidateLights: { spec: RoomLightSpec; distSq: number }[] = [];
+      // Track the single closest nearby venue outdoors for smooth window peek-through glow (no flashing swaps!)
+      let closestOutdoorVenue: BuiltVenue | null = null;
+      let closestOutdoorDist = 48;
 
       for (const [vid, venue] of venues) {
         const isActive = vid === activeId;
@@ -4630,21 +4644,9 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
           fx.group.visible = showInside;
         }
 
-        if (isActive) {
-          for (const ls of venue.roomLights) {
-            const dx = ls.worldX - pWorldX;
-            const dy = (ls.worldY - pWorldY) * 2.2; // Strongly prioritize lights on the player's current floor
-            const dz = ls.worldZ - pWorldZ;
-            candidateLights.push({ spec: ls, distSq: dx * dx + dy * dy + dz * dz });
-          }
-        } else if (activeId === null && distToEntrance < 45) {
-          // Warm ground-floor peek-through glow when walking or cruising right past a storefront!
-          for (const ls of venue.roomLights) {
-            if (ls.floor !== 0) continue;
-            const dx = ls.worldX - pWorldX;
-            const dz = ls.worldZ - pWorldZ;
-            candidateLights.push({ spec: ls, distSq: dx * dx + dz * dz });
-          }
+        if (activeId === null && distToEntrance < closestOutdoorDist) {
+          closestOutdoorDist = distToEntrance;
+          closestOutdoorVenue = venue;
         }
 
         if (!showInside) continue;
@@ -4748,16 +4750,26 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
         }
       }
 
-      // Position the fixed 6-light interior pool on the closest active/storefront rooms
-      candidateLights.sort((a, b) => a.distSq - b.distSq);
+      // Assign the fixed 8-light pool in deterministic floor-locked order (zero per-frame sorting or flashing!)
+      let assignedSpecs: RoomLightSpec[] = [];
+      let lightFade = 1.0;
+      if (activeVenue) {
+        assignedSpecs = activeVenue.roomLights.filter((ls) => ls.floor === activeFloor);
+      } else if (closestOutdoorVenue) {
+        assignedSpecs = closestOutdoorVenue.roomLights.filter((ls) => ls.floor === 0);
+        // Smooth distance fade (1.0 within 28m -> 0.0 at 48m) so approaching storefronts never snaps
+        const t = clamp((48 - closestOutdoorDist) / 20, 0, 1);
+        lightFade = t * t * (3 - 2 * t);
+      }
+
       for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
         const pt = lightPool[i];
-        const cand = candidateLights[i];
-        if (cand) {
-          pt.position.set(cand.spec.worldX, cand.spec.worldY, cand.spec.worldZ);
-          pt.color.setHex(cand.spec.color);
-          pt.intensity = cand.spec.intensity;
-          pt.distance = cand.spec.distance;
+        const spec = assignedSpecs[i];
+        if (spec && lightFade > 0.005) {
+          pt.position.set(spec.worldX, spec.worldY, spec.worldZ);
+          pt.color.setHex(spec.color);
+          pt.intensity = spec.intensity * lightFade;
+          pt.distance = spec.distance;
         } else {
           pt.intensity = 0;
         }
