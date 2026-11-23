@@ -2,6 +2,7 @@ import type { PlayerState } from '../entities/player';
 import type { TrafficCarState } from '../entities/traffic';
 import type { VehicleState } from '../entities/vehicle';
 import { CAUSEWAY, KEY_SOL_BOUNDS, SOUTH_PIER } from '../world/cityData';
+import { INTERIORS, type InteriorDef } from '../world/interiors';
 import type { CityBlueprint } from '../world/types';
 import { MISSIONS, type MissionManager } from '../systems/missions';
 
@@ -101,14 +102,85 @@ export class MinimapRenderer {
     vehicles: VehicleState[],
     traffic: TrafficCarState[],
     missions: MissionManager,
+    activeInterior?: InteriorDef | null,
   ): void {
     // Throttle 2D minimap redraws to every 2nd frame (~30 Hz) for near-zero CPU overhead
     this.frameSkip = (this.frameSkip + 1) % 2;
-    if (this.frameSkip !== 0 && this.staticMapCanvas) return;
+    if (this.frameSkip !== 0 && this.staticMapCanvas && !activeInterior) return;
 
     const ctx = this.ctx;
     const s = this.size;
     const half = s * 0.5;
+
+    // Dedicated crisp Interior Floorplan Minimap when inside a building!
+    if (activeInterior) {
+      ctx.fillStyle = '#0e1320';
+      ctx.fillRect(0, 0, s, s);
+      const roomScale = (s - 34) / Math.max(activeInterior.width, activeInterior.depth);
+      const ix = (wx: number) => half + wx * roomScale;
+      const iz = (wz: number) => half + wz * roomScale;
+
+      // Floor fill + room wall outline
+      ctx.fillStyle = '#20283d';
+      ctx.fillRect(
+        ix(-activeInterior.width * 0.5),
+        iz(-activeInterior.depth * 0.5),
+        activeInterior.width * roomScale,
+        activeInterior.depth * roomScale,
+      );
+      ctx.strokeStyle = '#6ec6ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        ix(-activeInterior.width * 0.5),
+        iz(-activeInterior.depth * 0.5),
+        activeInterior.width * roomScale,
+        activeInterior.depth * roomScale,
+      );
+
+      // Furniture / counter colliders
+      ctx.fillStyle = 'rgba(180, 198, 224, 0.35)';
+      for (const box of activeInterior.colliders) {
+        ctx.fillRect(
+          ix(box.minX),
+          iz(box.minZ),
+          (box.maxX - box.minX) * roomScale,
+          (box.maxZ - box.minZ) * roomScale,
+        );
+      }
+
+      // Exit door marker (mint green)
+      ctx.fillStyle = '#46f7b4';
+      ctx.fillRect(ix(activeInterior.exitX) - 7, iz(activeInterior.exitZ) - 3, 14, 6);
+
+      // Indoor NPCs (gold dots)
+      ctx.fillStyle = '#ffd166';
+      for (const npc of activeInterior.npcs) {
+        ctx.beginPath();
+        ctx.arc(ix(npc.x), iz(npc.z), 3.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Player arrow inside floorplan
+      ctx.save();
+      ctx.translate(ix(player.x), iz(player.z));
+      ctx.rotate(player.yaw);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(4.5, 4.5);
+      ctx.lineTo(0, 2);
+      ctx.lineTo(-4.5, 4.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(activeInterior.name.toUpperCase(), half, 12);
+      return;
+    }
+
     const scale = s / 420;
     const staticCanvas = this.ensureStaticMap(blueprint);
 
@@ -149,6 +221,17 @@ export class MinimapRenderer {
         ctx.arc(mp.mx, mp.my, 4.2, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+
+    // Enterable interior doorway markers (warm amber diamonds on minimap!)
+    ctx.fillStyle = '#ffb347';
+    for (const venue of INTERIORS) {
+      const vp = toMap(venue.entranceX, venue.entranceZ);
+      ctx.save();
+      ctx.translate(vp.mx, vp.my);
+      ctx.rotate(Math.PI * 0.25);
+      ctx.fillRect(-3.2, -3.2, 6.4, 6.4);
+      ctx.restore();
     }
 
     const target = missions.getCurrentTarget();

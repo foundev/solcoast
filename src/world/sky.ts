@@ -235,6 +235,23 @@ export class SkySystem {
     this.activeHdriKey = null; // Force immediate refresh on next update
   }
 
+  public setInteriorMode(active: boolean): void {
+    if (active) {
+      this.skyMesh.visible = false;
+      this.sunLight.visible = false;
+      this.hemiLight.visible = false;
+      this.scene.fog = null;
+      this.scene.background = new THREE.Color(0x090c14);
+      this.scene.environmentIntensity = 0.25;
+    } else {
+      this.sunLight.visible = true;
+      this.hemiLight.visible = true;
+      this.scene.fog = this.fog;
+      this.activeHdriKey = null; // Force immediate HDRI/sky restoration on next update
+      this.lastEnvHour = -999;
+    }
+  }
+
   public update(timeOfDayHours: number, elapsedSec: number, focusPos: THREE.Vector3): SkyUpdateResult {
     const h = ((timeOfDayHours % 24) + 24) % 24;
     const dayAngle = ((h - 6) / 12) * Math.PI;

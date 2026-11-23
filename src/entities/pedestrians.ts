@@ -376,6 +376,7 @@ export function stepPedestrians(
 }
 
 export interface PedestrianRenderer {
+  root: THREE.Group;
   attachGltfPeople: (clonePerson: (variantIndex: number) => ClonedPerson | null) => void;
   spawnPendingRagdolls: (peds: PedestrianState[], ragdollWorld: RagdollPhysicsWorld, focusX: number, focusZ: number) => void;
   syncFromState: (
@@ -431,6 +432,7 @@ export function createPedestrianMeshes(peds: PedestrianState[], scene: THREE.Sce
   let elapsedAccum = 0;
 
   return {
+    root: container,
     attachGltfPeople(clonePerson) {
       for (let i = 0; i < instances.length; i++) {
         const inst = instances[i];

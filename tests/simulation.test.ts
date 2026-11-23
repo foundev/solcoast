@@ -27,6 +27,13 @@ import {
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
 import { createCityBlueprint } from '../src/world/cityData';
+import {
+  INTERIOR_ORIGIN_Y,
+  INTERIORS,
+  findNearbyBuildingEntrance,
+  findNearbyInteriorNpc,
+  stepPlayerInInterior,
+} from '../src/world/interiors';
 
 describe('Driving, On-Foot & Traffic Simulation', () => {
   const blueprint = createCityBlueprint();
@@ -735,5 +742,47 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     // Head upright above Hips and feet tucked down in the pedal footwell
     expect(head.y).toBeGreaterThan(0.5);
     expect(lFoot.y).toBeLessThan(-0.3);
+  });
+
+  it('supports entering building interiors, finding indoor NPCs, and solid wall/furniture/NPC collisions', () => {
+    const hotel = INTERIORS.find((v) => v.id === 'hotel-solaire')!;
+    expect(findNearbyBuildingEntrance(hotel.entranceX + 0.5, hotel.entranceZ)?.id).toBe('hotel-solaire');
+    expect(findNearbyBuildingEntrance(0, 0)).toBeNull();
+
+    // Walk inside Hotel Solaire Lobby
+    const p = createInitialPlayerState(null);
+    p.x = hotel.spawnX;
+    p.y = INTERIOR_ORIGIN_Y;
+    p.z = hotel.spawnZ;
+    p.yaw = hotel.spawnYaw;
+
+    // Walking into the north wall must clamp cleanly inside the room
+    for (let i = 0; i < 180; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y, 3);
+    expect(p.z).toBeGreaterThanOrEqual(-hotel.depth * 0.5 + 0.5);
+
+    // Walking straight into the central fountain collider must stay outside it
+    const fountain = hotel.colliders[2];
+    p.x = 0;
+    p.z = 3.5;
+    for (let i = 0; i < 60; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.z).toBeGreaterThanOrEqual(fountain.maxZ + 0.4);
+
+    // Approaching an indoor NPC finds them for dialogue and prevents walking through them
+    const npc = hotel.npcs[2]; // Camila
+    p.x = npc.x;
+    p.z = npc.z + 1.4;
+    expect(findNearbyInteriorNpc(hotel, p.x, p.z)?.id).toBe(npc.id);
+    for (let i = 0; i < 40; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(Math.hypot(p.x - npc.x, p.z - npc.z)).toBeGreaterThanOrEqual(0.8);
+
+    // Standing right across the bar counter still reaches Bartender Mateo for ordering drinks
+    expect(findNearbyInteriorNpc(hotel, 6.4, -4.7)?.id).toBe('solaire-bartender');
   });
 });

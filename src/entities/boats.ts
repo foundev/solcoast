@@ -18,6 +18,7 @@ export interface BoatState {
 }
 
 export interface BoatFleetRenderer {
+  root: THREE.Group;
   attachGltfBoats: (cloneBoat: (kind: BoatModelKind) => THREE.Group | null) => void;
   update: (elapsed: number, dt: number, nightFactor: number) => void;
 }
@@ -308,6 +309,7 @@ export function createCoastalBoatMeshes(
   }
 
   return {
+    root: container,
     attachGltfBoats(cloneBoat) {
       let attachedAny = false;
       for (const h of handles) {

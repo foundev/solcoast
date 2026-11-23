@@ -305,6 +305,7 @@ export function stepTraffic(
 }
 
 export interface TrafficRenderer {
+  root: THREE.Group;
   attachGltfCars: (cloneCar: (kind: CarModelKind) => THREE.Group | null) => void;
   syncFromState: (cars: TrafficCarState[], nightFactor: number, focusX?: number, focusZ?: number) => void;
 }
@@ -418,6 +419,7 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
   scene.add(root);
 
   return {
+    root,
     attachGltfCars(cloneCar) {
       for (let i = 0; i < cars.length && i < groups.length; i++) {
         const c = cars[i];

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clamp, forwardFromYaw, lerp, lerpAngle, wrapAngle } from '../core/math';
 import type { PlayerState } from '../entities/player';
 import type { VehicleState } from '../entities/vehicle';
+import type { InteriorDef } from '../world/interiors';
 
 export type CameraMode = 'chase' | 'far' | 'hood';
 
@@ -45,6 +46,7 @@ export class CameraController {
     dt: number,
     player: PlayerState,
     activeVehicle: VehicleState | null,
+    activeInterior?: InteriorDef | null,
   ): void {
     const safeDt = clamp(dt, 0.001, 0.05);
     if (this.orbitCooldown > 0) {
@@ -98,21 +100,31 @@ export class CameraController {
         targetFov = 62 + clamp(speedAbs / 54, 0, 1) * 14;
       }
     } else {
-      // Smooth 3rd-person on-foot orbit camera
-      const dist = clamp(5.2 + this.zoomOffset * 0.65, 3.0, 9.5);
+      // Smooth 3rd-person on-foot orbit camera (tighter & wall-clamped inside building interiors!)
+      const dist = activeInterior
+        ? clamp(3.5 + this.zoomOffset * 0.35, 2.2, 5.2)
+        : clamp(5.2 + this.zoomOffset * 0.65, 3.0, 9.5);
       const horiz = Math.cos(this.pitch) * dist;
-      const height = Math.sin(this.pitch) * dist + 1.75;
+      const height = Math.sin(this.pitch) * dist + (activeInterior ? 1.55 : 1.75);
       const camFwd = forwardFromYaw(this.yaw);
 
-      desiredPos = new THREE.Vector3(
-        player.x - camFwd.x * horiz,
-        Math.max(player.y + height, player.y + 0.8),
-        player.z - camFwd.z * horiz,
-      );
+      let px = player.x - camFwd.x * horiz;
+      let py = Math.max(player.y + height, player.y + 0.8);
+      let pz = player.z - camFwd.z * horiz;
+
+      if (activeInterior) {
+        const padX = activeInterior.width * 0.5 - 0.65;
+        const padZ = activeInterior.depth * 0.5 - 0.65;
+        px = clamp(px, -padX, padX);
+        pz = clamp(pz, -padZ, padZ);
+        py = clamp(py, player.y + 0.9, player.y + activeInterior.height - 0.55);
+      }
+
+      desiredPos = new THREE.Vector3(px, py, pz);
       desiredLook = new THREE.Vector3(
-        player.x + camFwd.x * 2.2,
+        player.x + camFwd.x * (activeInterior ? 1.8 : 2.2),
         player.y + 1.45,
-        player.z + camFwd.z * 2.2,
+        player.z + camFwd.z * (activeInterior ? 1.8 : 2.2),
       );
       targetFov = player.sprinting ? 66 : 60;
     }

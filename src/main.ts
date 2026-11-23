@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 import { SoundEngine } from './core/audio';
 import { InputManager } from './core/input';
-import { clamp } from './core/math';
+import { clamp, distXZ } from './core/math';
 import { createCoastalBoatFleet, createCoastalBoatMeshes } from './entities/boats';
 import {
   createPedestrianMeshes,
@@ -47,7 +47,15 @@ import {
   getDistrictAt,
   getGroundHeight,
 } from './world/cityData';
-import { SkySystem, TIME_PRESETS } from './world/sky';
+import {
+  INTERIOR_ORIGIN_Y,
+  createInteriorSystem,
+  findNearbyBuildingEntrance,
+  findNearbyInteriorNpc,
+  stepPlayerInInterior,
+  type InteriorDef,
+} from './world/interiors';
+import { SkySystem, TIME_PRESETS, formatTimeLabel } from './world/sky';
 import { buildStreetProps } from './world/streetProps';
 import type { DistrictId } from './world/types';
 
@@ -77,6 +85,7 @@ function bootstrap(): void {
   const cityHandles = buildCityScene(scene, blueprint);
   const streetProps = buildStreetProps(scene, blueprint);
   const beaconRenderer = createMissionBeacons(scene);
+  const interiorSystem = createInteriorSystem(scene);
 
   // Create sculpted multi-station lofted modern vehicles
   const vehicles: VehicleState[] = DEFAULT_VEHICLES.map(createVehicleState);
@@ -170,6 +179,7 @@ function bootstrap(): void {
 
     if (assets.pedestrianGltfs.length > 0) {
       pedestrianMeshes.attachGltfPeople((idx) => assets.clonePedestrian(idx));
+      interiorSystem.attachGltfNpcs((idx) => assets.clonePedestrian(idx));
     }
 
     const carCount = Object.keys(assets.carGltfs).length;
@@ -194,12 +204,38 @@ function bootstrap(): void {
   let elapsed = 0;
   let autoSaveTimer = 0;
   let lastDistrictId: DistrictId = getDistrictAt(player.x, player.z).id;
+  let activeInterior: InteriorDef | null = null;
+  const npcTalkCounts = new Map<string, number>();
+
+  const setOutdoorVisible = (visible: boolean) => {
+    cityHandles.root.visible = visible;
+    streetProps.root.visible = visible;
+    trafficMeshes.root.visible = visible;
+    pedestrianMeshes.root.visible = visible;
+    boatMeshes.root.visible = visible;
+    beaconRenderer.root.visible = visible;
+    for (const vm of vehicleMeshes.values()) {
+      vm.root.visible = visible;
+    }
+  };
+
+  const getSaveSafePlayer = (): PlayerState => {
+    if (!activeInterior) return player;
+    return {
+      ...player,
+      x: activeInterior.entranceX,
+      y: getGroundHeight(activeInterior.entranceX, activeInterior.entranceZ),
+      z: activeInterior.entranceZ,
+      yaw: activeInterior.outdoorExitYaw,
+      vehicleId: null,
+    };
+  };
 
   const persistNow = (showBadge = true) => {
     const payload = serializeWorldState({
       cash,
       timeOfDayHours,
-      player,
+      player: getSaveSafePlayer(),
       vehicles,
       missions,
       discoveredDistricts,
@@ -243,7 +279,7 @@ function bootstrap(): void {
     const payload = serializeWorldState({
       cash,
       timeOfDayHours,
-      player,
+      player: getSaveSafePlayer(),
       vehicles,
       missions,
       discoveredDistricts,
@@ -357,6 +393,108 @@ function bootstrap(): void {
 
     cameraCtrl.applyLookInput(snap.mouseDX, snap.mouseDY, snap.wheelDelta);
 
+    // ─── INDOOR BUILDING INTERIOR LOOP ───────────────────────────────────────────
+    if (activeInterior) {
+      const def = activeInterior;
+      const nearExit = distXZ(player.x, player.z, def.exitX, def.exitZ) <= 2.4;
+      const nearbyNpc = nearExit ? null : findNearbyInteriorNpc(def, player.x, player.z);
+
+      let promptText: string | null = null;
+      if (nearExit) {
+        promptText = `Exit to ${def.districtLabel}`;
+      } else if (nearbyNpc) {
+        promptText = nearbyNpc.actionCost
+          ? `Talk / Order from ${nearbyNpc.name} (${nearbyNpc.role}) — $${nearbyNpc.actionCost}`
+          : `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
+      }
+
+      if (snap.interactPressed) {
+        if (nearExit) {
+          // Step back outside onto the city sidewalk!
+          activeInterior = null;
+          interiorSystem.setActiveInterior(null);
+          setOutdoorVisible(true);
+          sky.setInteriorMode(false);
+          player.x = def.entranceX;
+          player.y = getGroundHeight(def.entranceX, def.entranceZ);
+          player.z = def.entranceZ;
+          player.yaw = def.outdoorExitYaw;
+          player.vx = 0;
+          player.vy = 0;
+          player.vz = 0;
+          player.speed = 0;
+          player.grounded = true;
+          cameraCtrl.yaw = def.outdoorExitYaw;
+          sound.playChime('enter');
+          hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
+          persistNow(false);
+        } else if (nearbyNpc) {
+          const count = npcTalkCounts.get(nearbyNpc.id) ?? 0;
+          npcTalkCounts.set(nearbyNpc.id, count + 1);
+          if (nearbyNpc.actionCost && nearbyNpc.actionToast) {
+            if (cash >= nearbyNpc.actionCost) {
+              cash -= nearbyNpc.actionCost;
+              sound.playChime('paint');
+              hud.showToast(nearbyNpc.actionToast, 'success');
+              persistNow(false);
+            } else {
+              hud.showToast(`${nearbyNpc.name}: "Looks like you're short on cash ($${nearbyNpc.actionCost})."`, 'warn');
+            }
+          } else {
+            const line = nearbyNpc.lines[count % nearbyNpc.lines.length];
+            sound.playChime('checkpoint');
+            hud.showToast(line, 'info');
+          }
+        }
+      }
+
+      if (activeInterior) {
+        stepPlayerInInterior(
+          player,
+          activeInterior,
+          {
+            forward: snap.forward,
+            right: snap.right,
+            sprint: snap.sprint,
+            jump: snap.handbrakeOrJump,
+            cameraYaw: cameraCtrl.yaw,
+          },
+          dt,
+        );
+
+        interiorSystem.update(elapsed, dt, activeInterior.id, player.x, player.z);
+        playerMesh.syncFromState(player, elapsed, dt, null, null, false);
+        cameraCtrl.update(camera, dt, player, null, activeInterior);
+        sound.updateDriving(false, 0, 0, 0, false);
+
+        autoSaveTimer += dt;
+        if (autoSaveTimer >= 15) {
+          autoSaveTimer = 0;
+          persistNow(true);
+        }
+
+        const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
+        hud.update({
+          timeLabel: formatTimeLabel(timeOfDayHours),
+          district: { ...outdoorDistrict, name: activeInterior.name, tagline: activeInterior.districtLabel },
+          cash,
+          discoveredCount: discoveredDistricts.size,
+          player,
+          activeVehicle: null,
+          vehicles,
+          missions,
+          promptText,
+          fps: currentFps,
+          drawCalls: lastDrawCalls,
+        });
+        minimap.render(blueprint, player, vehicles, trafficCars, missions, activeInterior);
+
+        renderer.render(scene, camera);
+        lastDrawCalls = renderer.info.render.calls;
+        return;
+      }
+    }
+
     let activeVehicle = getActiveVehicle();
 
     if (activeVehicle) {
@@ -374,12 +512,16 @@ function bootstrap(): void {
     }
 
     const nearbyMission = missions.findNearbyStartBeacon(player.x, player.z);
+    const nearbyEntrance =
+      !activeVehicle && !player.rapierControlled ? findNearbyBuildingEntrance(player.x, player.z) : null;
     const nearbyCar = activeVehicle ? null : findNearestVehicle(player.x, player.z, vehicles);
 
     let promptText: string | null = null;
     if (nearbyMission) {
       const doneTag = missions.completedIds.has(nearbyMission.id) ? ' (Replay)' : '';
       promptText = `Start Mission: ${nearbyMission.title}${doneTag} — $${nearbyMission.rewardCash.toLocaleString()}`;
+    } else if (nearbyEntrance) {
+      promptText = `Enter ${nearbyEntrance.name}`;
     } else if (!activeVehicle && nearbyCar) {
       promptText = `Enter ${nearbyCar.vehicle.name}`;
     } else if (activeVehicle && Math.abs(activeVehicle.speed) < 3.5) {
@@ -393,6 +535,30 @@ function bootstrap(): void {
           sound.playChime('checkpoint');
           hud.showToast(`Mission Started: ${started.title} — ${started.description}`, 'success');
         }
+      } else if (nearbyEntrance) {
+        // Step inside the building interior!
+        activeInterior = nearbyEntrance;
+        setOutdoorVisible(false);
+        sky.setInteriorMode(true);
+        interiorSystem.setActiveInterior(nearbyEntrance.id);
+        player.vehicleId = null;
+        player.x = nearbyEntrance.spawnX;
+        player.y = INTERIOR_ORIGIN_Y;
+        player.z = nearbyEntrance.spawnZ;
+        player.yaw = nearbyEntrance.spawnYaw;
+        player.vx = 0;
+        player.vy = 0;
+        player.vz = 0;
+        player.speed = 0;
+        player.grounded = true;
+        player.ragdollMode = 'normal';
+        player.ragdollTimer = 0;
+        player.fallPitch = 0;
+        player.fallRoll = 0;
+        cameraCtrl.yaw = nearbyEntrance.spawnYaw;
+        sound.playChime('enter');
+        hud.showDistrictBanner(nearbyEntrance.name);
+        hud.showToast(`Entered ${nearbyEntrance.name} — explore or talk to locals with [E]!`, 'success');
       } else if (activeVehicle) {
         if (Math.abs(activeVehicle.speed) < 10) {
           const exitPos = computeSafeExitPosition(activeVehicle, blueprint.colliders);
@@ -640,6 +806,7 @@ function bootstrap(): void {
     pedestrianMeshes.syncFromState(pedestrians, dt, player.x, player.z, ragdollWorld);
     boatMeshes.update(elapsed, dt, skyRes.nightFactor);
     beaconRenderer.update(elapsed, missions);
+    interiorSystem.update(elapsed, dt, null, player.x, player.z);
 
     cameraCtrl.update(camera, dt, player, activeVehicle);
 

@@ -16,6 +16,7 @@ import {
   isDeepWater,
   isOnRoad,
 } from '../src/world/cityData';
+import { INTERIORS } from '../src/world/interiors';
 
 describe('Sol Coast World Blueprint', () => {
   const blueprint = createCityBlueprint();
@@ -99,6 +100,23 @@ describe('Sol Coast World Blueprint', () => {
           expect(resolveCircleAABB(step.x, step.z, 1.0, box).hit, `mission ${m.id} step "${step.label}" inside collider`).toBe(false);
         }
       }
+    }
+  });
+
+  it('places every enterable building doorway on dry sidewalk clear of building colliders', () => {
+    expect(INTERIORS.length).toBeGreaterThanOrEqual(4);
+    for (const venue of INTERIORS) {
+      expect(isDeepWater(venue.entranceX, venue.entranceZ), `${venue.id} entrance in water`).toBe(false);
+      for (const box of blueprint.colliders) {
+        expect(
+          resolveCircleAABB(venue.entranceX, venue.entranceZ, 0.8, box).hit,
+          `${venue.id} entrance overlapping building collider`,
+        ).toBe(false);
+      }
+      // Verify interior spawn & exit are cleanly inside room bounds
+      expect(Math.abs(venue.spawnX)).toBeLessThan(venue.width * 0.5 - 1);
+      expect(Math.abs(venue.spawnZ)).toBeLessThan(venue.depth * 0.5 - 1);
+      expect(venue.npcs.length).toBeGreaterThanOrEqual(3);
     }
   });
 });

@@ -12,6 +12,7 @@ import { createLightGlowTexture } from './postfx';
 import type { CityBlueprint } from './types';
 
 export interface StreetPropsHandles {
+  root: THREE.Group;
   update: (elapsed: number, nightFactor: number) => void;
 }
 
@@ -522,6 +523,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   scene.add(root);
 
   return {
+    root,
     update(elapsed: number, nightFactor: number) {
       // Live traffic signal cycle (Green -> Amber -> Red)
       for (const sig of signals) {

@@ -355,6 +355,7 @@ export class MissionManager {
 }
 
 export interface MissionBeaconRenderer {
+  root: THREE.Group;
   update: (elapsed: number, manager: MissionManager) => void;
 }
 
@@ -414,6 +415,7 @@ export function createMissionBeacons(scene: THREE.Scene): MissionBeaconRenderer 
   scene.add(root);
 
   return {
+    root,
     update(elapsed: number, manager: MissionManager) {
       const pulse = 1 + Math.sin(elapsed * 3.5) * 0.1;
       for (const item of startBeacons) {
