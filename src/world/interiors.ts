@@ -1539,7 +1539,6 @@ function buildArchitecturalStorefront(def: InteriorDef, index: number): OutdoorS
   const sf = def.storefront;
   const gy = getGroundHeight(def.entranceX, def.entranceZ);
   const group = new THREE.Group();
-  // Position right on the actual building facade wall!
   // Local +Z faces outward onto the sidewalk; local X runs along the building facade
   group.position.set(sf.wallX, gy, sf.centerZ);
   group.rotation.y = sf.facingSignX === 1 ? Math.PI * 0.5 : -Math.PI * 0.5;
@@ -1564,165 +1563,54 @@ function buildArchitecturalStorefront(def: InteriorDef, index: number): OutdoorS
     metalness: sf.style === 'cuban-cafe' ? 0.15 : 0.72,
   });
 
-  // 1. Deep architectural portal surround bolted flush against the building facade
-  const surround = new THREE.Mesh(new THREE.BoxGeometry(8.4, 4.4, 0.5), frameMat);
-  surround.position.set(0, 2.2, 0.2);
-  group.add(surround);
+  // Crisp illuminated architectural marquee signage mounted cleanly on each bespoke Blender showcase facade!
+  const signSpec =
+    sf.style === 'art-deco-hotel'
+      ? { y: 5.55, z: 2.95, w: 6.4, h: 1.35 }
+      : sf.style === 'neon-club'
+        ? { y: 12.6, z: 0.95, w: 11.2, h: 2.3 }
+        : sf.style === 'cuban-cafe'
+          ? { y: 4.95, z: 0.65, w: 7.2, h: 1.25 }
+          : { y: 6.95, z: 3.35, w: 8.4, h: 1.45 };
 
-  // 2. Warm/neon glowing recessed interior glass double doors + flanking showcase windows!
-  const doorGlowColor =
-    sf.style === 'neon-club'
-      ? 0xc62cff
-      : sf.style === 'modern-gallery'
-        ? 0xfff8eb
-        : 0xffd596;
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: doorGlowColor,
-    emissive: doorGlowColor,
-    emissiveIntensity: sf.style === 'neon-club' ? 0.85 : 0.72,
-    roughness: 0.12,
-    metalness: 0.2,
-  });
-
-  // Double doors (center)
-  for (const sx of [-0.72, 0.72]) {
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.32, 2.75, 0.08), glassMat);
-    leaf.position.set(sx, 1.45, 0.45);
-    group.add(leaf);
-
-    // Metallic door mullions & handles
-    const handle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.03, 0.55, 8),
-      new THREE.MeshStandardMaterial({ color: 0xf4d078, metalness: 0.9, roughness: 0.2 }),
-    );
-    handle.position.set(sx > 0 ? 0.18 : -0.18, 1.25, 0.54);
-    group.add(handle);
-  }
-  const doorDivider = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.85, 0.14), frameMat);
-  doorDivider.position.set(0, 1.45, 0.48);
-  group.add(doorDivider);
-
-  // Flanking lit storefront windows (left & right of doors)
-  for (const wx of [-2.8, 2.8]) {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.2, 0.08), glassMat);
-    win.position.set(wx, 1.75, 0.45);
-    group.add(win);
-  }
-
-  // 3. Projecting Marquee Canopy / Striped Awning + Illuminated Signboard!
-  const canopyDepth = sf.style === 'art-deco-hotel' ? 2.5 : sf.style === 'cuban-cafe' ? 2.1 : 1.9;
-  const canopyMat = new THREE.MeshStandardMaterial({
-    color:
-      sf.style === 'cuban-cafe'
-        ? 0xc44b2c
-        : sf.style === 'art-deco-hotel'
-          ? 0x261d2e
-          : 0x161822,
-    roughness: 0.45,
-    metalness: sf.style === 'cuban-cafe' ? 0.1 : 0.55,
-  });
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.42, canopyDepth), canopyMat);
-  canopy.position.set(0, 3.6, canopyDepth * 0.5 + 0.1);
-  group.add(canopy);
-
-  // Illuminated venue sign right on front of the marquee!
+  const signBack = new THREE.Mesh(new THREE.BoxGeometry(signSpec.w + 0.24, signSpec.h + 0.18, 0.22), frameMat);
+  signBack.position.set(0, signSpec.y, signSpec.z - 0.14);
   const signMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(6.8, 1.45),
+    new THREE.PlaneGeometry(signSpec.w, signSpec.h),
     new THREE.MeshBasicMaterial({ map: signTex }),
   );
-  signMesh.position.set(0, 4.35, canopyDepth + 0.15);
-  group.add(signMesh);
+  signMesh.position.set(0, signSpec.y, signSpec.z);
+  group.add(signBack, signMesh);
 
-  const signBack = new THREE.Mesh(new THREE.BoxGeometry(7.0, 1.6, 0.24), frameMat);
-  signBack.position.set(0, 4.35, canopyDepth - 0.02);
-  group.add(signBack);
-
-  // 4. Venue-specific streetfront architectural flair!
+  // Real Poly Haven 3D sidewalk accents framing each bespoke Blender showcase entrance!
   if (sf.style === 'art-deco-hotel') {
-    // Red velvet entrance runner carpet out onto Ocean Drive sidewalk
-    const carpet = new THREE.Mesh(
-      new THREE.BoxGeometry(2.6, 0.04, 3.4),
-      new THREE.MeshStandardMaterial({ color: 0x8f1a2d, roughness: 0.85 }),
-    );
-    carpet.position.set(0, 0.02, 2.0);
-    group.add(carpet);
-
-    // Gold canopy trim tubes
-    const neonTrim = new THREE.Mesh(
-      new THREE.BoxGeometry(8.7, 0.1, 0.12),
-      new THREE.MeshBasicMaterial({ color: 0xff6ca8 }),
-    );
-    neonTrim.position.set(0, 3.45, canopyDepth + 0.14);
-    group.add(neonTrim);
-
     propMountSlots.push(
-      { kind: 'potted_plant_1', pos: new THREE.Vector3(-2.0, 0, 1.5), rotY: 0, scale: 1.35 },
-      { kind: 'potted_plant_1', pos: new THREE.Vector3(2.0, 0, 1.5), rotY: 0.8, scale: 1.35 },
+      { kind: 'potted_plant_1', pos: new THREE.Vector3(-2.1, 0, 1.8), rotY: 0, scale: 1.35 },
+      { kind: 'potted_plant_1', pos: new THREE.Vector3(2.1, 0, 1.8), rotY: 0.9, scale: 1.35 },
     );
   } else if (sf.style === 'neon-club') {
-    // Pulsing hot-pink & cyan neon portal frame
-    const pinkBar = new THREE.Mesh(
-      new THREE.BoxGeometry(8.7, 0.12, 0.14),
-      new THREE.MeshBasicMaterial({ color: 0xff2e93 }),
-    );
-    pinkBar.position.set(0, 3.55, canopyDepth + 0.14);
-    group.add(pinkBar);
-
-    const cyanMat = new THREE.MeshBasicMaterial({ color: 0x2cf3ff });
-    for (const sx of [-1.65, 1.65]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2, 0.1), cyanMat);
-      post.position.set(sx, 1.6, 0.56);
-      group.add(post);
-
-      // Velvet-rope VIP stanchions on the sidewalk
-      const stanchion = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.16, 0.95, 10),
-        new THREE.MeshStandardMaterial({ color: 0xe6c366, metalness: 0.9, roughness: 0.2 }),
-      );
-      stanchion.position.set(sx * 1.15, 0.48, 2.4);
-      group.add(stanchion);
-
-      const rope = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.03, 0.03, 1.7, 8),
-        new THREE.MeshStandardMaterial({ color: 0xb81845, roughness: 0.7 }),
-      );
-      rope.rotation.x = Math.PI * 0.5;
-      rope.position.set(sx * 1.15, 0.76, 1.55);
-      group.add(rope);
-    }
-  } else if (sf.style === 'cuban-cafe') {
-    // Striped terracotta & cream awning accents
-    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xf7ebd4, roughness: 0.6 });
-    for (let x = -3.5; x <= 3.5; x += 1.4) {
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.44, canopyDepth + 0.04), stripeMat);
-      stripe.position.set(x, 3.6, canopyDepth * 0.5 + 0.1);
-      group.add(stripe);
-    }
     propMountSlots.push(
-      { kind: 'chalkboard', pos: new THREE.Vector3(-2.3, 0, 1.5), rotY: 0.35, scale: 1.05 },
-      { kind: 'potted_plant_2', pos: new THREE.Vector3(2.2, 0, 1.4), rotY: 0, scale: 1.2 },
+      { kind: 'potted_plant_2', pos: new THREE.Vector3(-3.0, 0, 1.4), rotY: 0, scale: 1.2 },
+      { kind: 'potted_plant_2', pos: new THREE.Vector3(3.0, 0, 1.4), rotY: 1.4, scale: 1.2 },
+    );
+  } else if (sf.style === 'cuban-cafe') {
+    propMountSlots.push(
+      { kind: 'chalkboard', pos: new THREE.Vector3(-2.2, 0, 1.7), rotY: 0.35, scale: 1.05 },
+      { kind: 'potted_plant_1', pos: new THREE.Vector3(2.3, 0, 1.6), rotY: 0.4, scale: 1.25 },
+      { kind: 'bistro_table', pos: new THREE.Vector3(4.8, 0, 1.8), rotY: 0, scale: 0.85 },
+      { kind: 'dining_chair', pos: new THREE.Vector3(3.8, 0, 1.8), rotY: Math.PI * 0.5, scale: 1.0 },
+      { kind: 'dining_chair', pos: new THREE.Vector3(5.8, 0, 1.8), rotY: -Math.PI * 0.5, scale: 1.0 },
+      { kind: 'bistro_table', pos: new THREE.Vector3(-4.8, 0, 1.8), rotY: 0, scale: 0.85 },
+      { kind: 'dining_chair', pos: new THREE.Vector3(-5.8, 0, 1.8), rotY: Math.PI * 0.5, scale: 1.0 },
     );
   } else {
-    // Sleek modern gallery architectural step & accent light bar
-    const step = new THREE.Mesh(
-      new THREE.BoxGeometry(5.2, 0.1, 2.2),
-      new THREE.MeshStandardMaterial({ color: 0xd8dce4, roughness: 0.45 }),
-    );
-    step.position.set(0, 0.05, 1.3);
-    group.add(step);
-    const bar = new THREE.Mesh(
-      new THREE.BoxGeometry(7.2, 0.08, 0.1),
-      new THREE.MeshBasicMaterial({ color: 0xffcf5c }),
-    );
-    bar.position.set(0, 3.4, canopyDepth + 0.14);
-    group.add(bar);
     propMountSlots.push(
-      { kind: 'potted_plant_1', pos: new THREE.Vector3(-2.6, 0, 1.4), rotY: 0, scale: 1.2 },
-      { kind: 'potted_plant_1', pos: new THREE.Vector3(2.6, 0, 1.4), rotY: 1.1, scale: 1.2 },
+      { kind: 'potted_plant_1', pos: new THREE.Vector3(-3.2, 0, 1.6), rotY: 0, scale: 1.3 },
+      { kind: 'potted_plant_1', pos: new THREE.Vector3(3.2, 0, 1.6), rotY: 1.1, scale: 1.3 },
     );
   }
 
-  // 5. Crisp glowing doorway threshold ring right in front of the double doors
+  // Crisp glowing doorway threshold ring right in front of the double doors
   const thresholdRing = new THREE.Mesh(
     new THREE.RingGeometry(0.85, 1.18, 28),
     new THREE.MeshBasicMaterial({

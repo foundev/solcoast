@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { InteriorPropKind, LoadedGameAssets } from './assets';
+import type { InteriorPropKind, InteriorTextureKey, InteriorTextureMap, LoadedGameAssets } from './assets';
 import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
@@ -41,6 +41,8 @@ export interface CitySceneHandles {
   palmCrowns: { group: THREE.Group; phase: number }[];
   applyPhotoTextures: (textures: LoadedGameAssets['textures']) => void;
   attachGltfFountains: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
+  attachShowcaseBuildings: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
+  applyShowcaseTextures: (texMap: InteriorTextureMap) => void;
   hideFallbackYachts: () => void;
   updateAnimation: (
     elapsed: number,
@@ -1305,8 +1307,22 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   });
   const hvacMat = new THREE.MeshStandardMaterial({ color: 0x7e8796, roughness: 0.75, metalness: 0.35 });
 
+  const SHOWCASE_BUILDING_MAP: Record<string, InteriorPropKind> = {
+    'b-108': 'building_hotel_solaire',
+    'b-89': 'building_club_neon',
+    'b-30': 'building_cafe_habana',
+    'b-43': 'building_wynwood_gallery',
+  };
+  const showcaseFallbacks = new Map<string, { spec: BuildingSpec; mesh: THREE.Object3D }>();
+  const showcaseBuildingsRoot = new THREE.Group();
+  root.add(showcaseBuildingsRoot);
+
   for (const b of blueprint.buildings) {
-    root.add(buildBuildingMesh(b, facadeCache, neonMaterials, windowMaterials, lobbyGlassMat, hvacMat));
+    const mesh = buildBuildingMesh(b, facadeCache, neonMaterials, windowMaterials, lobbyGlassMat, hvacMat);
+    root.add(mesh);
+    if (b.id in SHOWCASE_BUILDING_MAP) {
+      showcaseFallbacks.set(b.id, { spec: b, mesh });
+    }
   }
 
   // 12. Instanced Feathered-Frond Palm Trees (~1,275 meshes -> 2 InstancedMesh draw calls!)
@@ -1557,6 +1573,67 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  let cachedShowcaseTexMap: InteriorTextureMap | null = null;
+  const showcasePbrMaterials: { mat: THREE.MeshStandardMaterial; key: InteriorTextureKey }[] = [];
+
+  const bindShowcaseTextures = (texMap: InteriorTextureMap) => {
+    for (const entry of showcasePbrMaterials) {
+      const pbr = texMap[entry.key];
+      if (!pbr) continue;
+      entry.mat.map = pbr.map;
+      entry.mat.normalMap = pbr.normalMap;
+      entry.mat.normalScale = new THREE.Vector2(0.85, 0.85);
+      entry.mat.roughnessMap = pbr.roughnessMap;
+      entry.mat.needsUpdate = true;
+    }
+  };
+
+  const attachShowcaseBuildings = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
+    for (const [bid, kind] of Object.entries(SHOWCASE_BUILDING_MAP)) {
+      const fb = showcaseFallbacks.get(bid);
+      const src = propsMap.get(kind);
+      if (!fb || !src) continue;
+
+      const inst = src.clone(true);
+      inst.position.set(fb.spec.x, fb.spec.baseY, fb.spec.z);
+
+      inst.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!(m instanceof THREE.MeshStandardMaterial)) continue;
+          const n = m.name || '';
+          if (n.startsWith('PBR_Plaster_')) showcasePbrMaterials.push({ mat: m, key: 'plaster' });
+          else if (n.startsWith('PBR_Marble_')) showcasePbrMaterials.push({ mat: m, key: 'marble' });
+          else if (n.startsWith('PBR_Concrete_')) showcasePbrMaterials.push({ mat: m, key: 'concrete' });
+          else if (n.startsWith('PBR_Terracotta_')) showcasePbrMaterials.push({ mat: m, key: 'terracotta' });
+          else if (n.startsWith('PBR_Parquet_')) showcasePbrMaterials.push({ mat: m, key: 'parquet' });
+          else if (n.startsWith('PBR_Brick_')) showcasePbrMaterials.push({ mat: m, key: 'brick' });
+
+          if (n.startsWith('Neon_')) {
+            neonMaterials.push(m);
+          } else if (n.startsWith('Glass_')) {
+            windowMaterials.push(m);
+          }
+        }
+      });
+
+      showcaseBuildingsRoot.add(inst);
+      fb.mesh.visible = false;
+    }
+
+    if (cachedShowcaseTexMap) {
+      bindShowcaseTextures(cachedShowcaseTexMap);
+    }
+  };
+
+  const applyShowcaseTextures = (texMap: InteriorTextureMap) => {
+    cachedShowcaseTexMap = texMap;
+    bindShowcaseTextures(texMap);
+  };
+
   const hideFallbackYachts = () => {
     for (const y of yachts) {
       y.group.visible = false;
@@ -1574,6 +1651,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     palmCrowns,
     applyPhotoTextures,
     attachGltfFountains,
+    attachShowcaseBuildings,
+    applyShowcaseTextures,
     hideFallbackYachts,
     updateAnimation,
   };
