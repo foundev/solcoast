@@ -6,9 +6,11 @@ import {
   lerp,
   lerpAngle,
   resolveCircleAABB,
+  resolveCircleOBB,
   rightFromYaw,
   yawFromDir,
   type AABB,
+  type OBB2D,
 } from '../core/math';
 import {
   applyCarHitToHuman,
@@ -130,6 +132,7 @@ export function stepPlayerOnFoot(
   vehicles: VehicleState[],
   trafficCars: TrafficCarState[] = [],
   pedestrians: PedestrianState[] = [],
+  propObbs: OBB2D[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   p.lastImpactSpeed = 0;
@@ -183,9 +186,16 @@ export function stepPlayerOnFoot(
   let nextX = p.x + desiredVx * safeDt;
   let nextZ = p.z + desiredVz * safeDt;
 
-  const radius = 0.46;
+  const radius = 0.34;
   for (const box of colliders) {
     const res = resolveCircleAABB(nextX, nextZ, radius, box);
+    if (res.hit) {
+      nextX += res.dx;
+      nextZ += res.dz;
+    }
+  }
+  for (const obb of propObbs) {
+    const res = resolveCircleOBB(nextX, nextZ, radius, obb);
     if (res.hit) {
       nextX += res.dx;
       nextZ += res.dz;
@@ -225,6 +235,13 @@ export function stepPlayerOnFoot(
 
     for (const box of colliders) {
       const res = resolveCircleAABB(p.x, p.z, radius, box);
+      if (res.hit) {
+        p.x += res.dx;
+        p.z += res.dz;
+      }
+    }
+    for (const obb of propObbs) {
+      const res = resolveCircleOBB(p.x, p.z, radius, obb);
       if (res.hit) {
         p.x += res.dx;
         p.z += res.dz;

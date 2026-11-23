@@ -1,4 +1,4 @@
-import { clamp, forwardFromYaw, resolveCircleAABB, rightFromYaw, type AABB } from './math';
+import { clamp, forwardFromYaw, resolveCircleAABB, rightFromYaw, type AABB, type OBB2D } from './math';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 
 export type HumanRagdollMode = 'normal' | 'stumble' | 'airborne' | 'downed' | 'recovering';
@@ -288,6 +288,25 @@ export function resolveCarVsBuildingSAT(car: RigidCarBody, box: AABB): CarCollis
     halfLength: (box.maxZ - box.minZ) * 0.5,
   };
   return resolveCarVsCarSAT(car, staticWall);
+}
+
+/**
+ * Exact 2D SAT Oriented-Car vs. Rotated World Prop OBB collision solver
+ * (palms, streetlamps, benches, planters, lifeguard towers, hydrants, bollards, cafés!).
+ */
+export function resolveCarVsObbSAT(car: RigidCarBody, obb: OBB2D): CarCollisionContact {
+  const staticProp: RigidCarBody = {
+    x: obb.cx,
+    z: obb.cz,
+    vx: 0,
+    vz: 0,
+    yaw: -obb.rotY,
+    yawRate: 0,
+    mass: 0, // Infinite mass static obstacle
+    halfWidth: obb.halfW,
+    halfLength: obb.halfD,
+  };
+  return resolveCarVsCarSAT(car, staticProp);
 }
 
 export interface ObbHitResult {

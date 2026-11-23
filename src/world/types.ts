@@ -1,4 +1,4 @@
-import type { AABB } from '../core/math';
+import type { AABB, OBB2D } from '../core/math';
 
 export type DistrictId =
   | 'ocean-drive'
@@ -90,6 +90,75 @@ export interface BeachPropSpec {
   yaw: number;
 }
 
+export interface OutdoorBenchSpec {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+export interface OutdoorPlanterSpec {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface OutdoorCafeSetSpec {
+  x: number;
+  y: number;
+  z: number;
+  color: number;
+}
+
+export interface OutdoorHydrantSpec {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface OutdoorLoungerSpec {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  color: number;
+}
+
+export interface OutdoorBollardSpec {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface OutdoorTrafficSignalSpec {
+  x: number;
+  y: number;
+  z: number;
+  phaseOffset: number;
+}
+
+export interface OutdoorBillboardSpec {
+  headline: string;
+  sub: string;
+  a: string;
+  b: string;
+  badge: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+export interface OutdoorMarqueeSpec {
+  title: string;
+  sub: string;
+  bg: string;
+  fg: string;
+  acc: string;
+  x: number;
+  z: number;
+}
+
 export interface TrafficNode {
   id: number;
   x: number;
@@ -105,10 +174,21 @@ export interface CityBlueprint {
   roads: RoadSegment[];
   buildings: BuildingSpec[];
   colliders: AABB[];
+  /** Tight rotated 2D OBB colliders for EVERY outdoor street, park, beach, pier & storefront prop! */
+  propObbs: OBB2D[];
   palms: PalmSpec[];
   streetLights: StreetLightSpec[];
   yachts: YachtSpec[];
   beachProps: BeachPropSpec[];
+  benches: OutdoorBenchSpec[];
+  planters: OutdoorPlanterSpec[];
+  sidewalkCafes: OutdoorCafeSetSpec[];
+  hydrants: OutdoorHydrantSpec[];
+  loungers: OutdoorLoungerSpec[];
+  bollards: OutdoorBollardSpec[];
+  trafficSignals: OutdoorTrafficSignalSpec[];
+  billboards: OutdoorBillboardSpec[];
+  marquees: OutdoorMarqueeSpec[];
   trafficNodes: TrafficNode[];
   districts: Record<DistrictId, DistrictInfo>;
 }

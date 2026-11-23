@@ -6,9 +6,11 @@ import {
   lerp,
   lerpAngle,
   resolveCircleAABB,
+  resolveCircleOBB,
   rightFromYaw,
   yawFromDir,
   type AABB,
+  type OBB2D,
 } from '../core/math';
 import { createHumanRigController, type HumanRigController } from '../entities/humanRig';
 import type { FootMoveInput, PlayerState } from '../entities/player';
@@ -160,12 +162,7 @@ export interface StorefrontDef {
   style: 'art-deco-hotel' | 'neon-club' | 'cuban-cafe' | 'modern-gallery';
 }
 
-export interface InteriorPropObb {
-  cx: number;
-  cz: number;
-  halfW: number;
-  halfD: number;
-  rotY: number;
+export interface InteriorPropObb extends OBB2D {
   floor?: number;
 }
 
@@ -1999,55 +1996,6 @@ function isPointInsideVenueFloor(
     }
   }
   return false;
-}
-
-function resolveCircleOBB(
-  px: number,
-  pz: number,
-  radius: number,
-  obb: InteriorPropObb,
-): { hit: boolean; dx: number; dz: number } {
-  const cos = Math.cos(obb.rotY);
-  const sin = Math.sin(obb.rotY);
-  const relX = px - obb.cx;
-  const relZ = pz - obb.cz;
-
-  // Transform player into OBB local frame (inverse of Three.js Y-rotation)
-  const lx = relX * cos - relZ * sin;
-  const lz = relX * sin + relZ * cos;
-
-  const clx = clamp(lx, -obb.halfW, obb.halfW);
-  const clz = clamp(lz, -obb.halfD, obb.halfD);
-  const dlx = lx - clx;
-  const dlz = lz - clz;
-  const dSq = dlx * dlx + dlz * dlz;
-
-  if (dSq >= radius * radius) return { hit: false, dx: 0, dz: 0 };
-
-  let plx = 0;
-  let plz = 0;
-  if (dSq > 1e-6) {
-    const d = Math.sqrt(dSq);
-    const push = radius - d;
-    plx = (dlx / d) * push;
-    plz = (dlz / d) * push;
-  } else {
-    // Center inside OBB: push out along shallowest axis
-    const penX = obb.halfW - Math.abs(lx) + radius;
-    const penZ = obb.halfD - Math.abs(lz) + radius;
-    if (penX < penZ) {
-      plx = lx >= 0 ? penX : -penX;
-    } else {
-      plz = lz >= 0 ? penZ : -penZ;
-    }
-  }
-
-  // Rotate local push vector back to world XZ
-  return {
-    hit: true,
-    dx: plx * cos + plz * sin,
-    dz: -plx * sin + plz * cos,
-  };
 }
 
 /**

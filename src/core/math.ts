@@ -18,6 +18,15 @@ export interface AABB {
   maxY: number;
 }
 
+/** Tight 2D Oriented Bounding Box in world XZ (rotY matches Three.js mesh.rotation.y). */
+export interface OBB2D {
+  cx: number;
+  cz: number;
+  halfW: number;
+  halfD: number;
+  rotY: number;
+}
+
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -112,6 +121,63 @@ export function resolveCircleAABB(
     dz = bottom + radius;
   }
   return { dx, dz, hit: true };
+}
+
+/**
+ * Exact 2D circle vs. oriented bounding box (OBB) resolution in world XZ.
+ * Shared across all indoor furniture props AND outdoor street/beach/park props!
+ */
+export function resolveCircleOBB(
+  px: number,
+  pz: number,
+  radius: number,
+  obb: OBB2D,
+): { hit: boolean; dx: number; dz: number } {
+  // Fast circle-circle broadphase reject
+  const maxR = Math.hypot(obb.halfW, obb.halfD) + radius;
+  const relX = px - obb.cx;
+  const relZ = pz - obb.cz;
+  if (relX * relX + relZ * relZ >= maxR * maxR) {
+    return { hit: false, dx: 0, dz: 0 };
+  }
+
+  const cos = Math.cos(obb.rotY);
+  const sin = Math.sin(obb.rotY);
+
+  // Transform point into OBB local frame (inverse of Three.js Y-rotation)
+  const lx = relX * cos - relZ * sin;
+  const lz = relX * sin + relZ * cos;
+
+  const clx = clamp(lx, -obb.halfW, obb.halfW);
+  const clz = clamp(lz, -obb.halfD, obb.halfD);
+  const dlx = lx - clx;
+  const dlz = lz - clz;
+  const dSq = dlx * dlx + dlz * dlz;
+
+  if (dSq >= radius * radius) return { hit: false, dx: 0, dz: 0 };
+
+  let plx = 0;
+  let plz = 0;
+  if (dSq > 1e-6) {
+    const d = Math.sqrt(dSq);
+    const push = radius - d;
+    plx = (dlx / d) * push;
+    plz = (dlz / d) * push;
+  } else {
+    const penX = obb.halfW - Math.abs(lx) + radius;
+    const penZ = obb.halfD - Math.abs(lz) + radius;
+    if (penX < penZ) {
+      plx = lx >= 0 ? penX : -penX;
+    } else {
+      plz = lz >= 0 ? penZ : -penZ;
+    }
+  }
+
+  return {
+    hit: true,
+    dx: plx * cos + plz * sin,
+    dz: -plx * sin + plz * cos,
+  };
 }
 
 /** Deterministic PRNG (Mulberry32) so city generation is reproducible. */

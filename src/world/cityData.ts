@@ -1,4 +1,4 @@
-import { clamp, createRng, type AABB } from '../core/math';
+import { clamp, createRng, type AABB, type OBB2D } from '../core/math';
 import type {
   BeachPropSpec,
   BuildingSpec,
@@ -6,6 +6,15 @@ import type {
   CityBlueprint,
   DistrictId,
   DistrictInfo,
+  OutdoorBenchSpec,
+  OutdoorBillboardSpec,
+  OutdoorBollardSpec,
+  OutdoorCafeSetSpec,
+  OutdoorHydrantSpec,
+  OutdoorLoungerSpec,
+  OutdoorMarqueeSpec,
+  OutdoorPlanterSpec,
+  OutdoorTrafficSignalSpec,
   PalmSpec,
   RoadSegment,
   StreetLightSpec,
@@ -374,10 +383,20 @@ export function createCityBlueprint(): CityBlueprint {
   const roads: RoadSegment[] = [];
   const buildings: BuildingSpec[] = [];
   const colliders: AABB[] = [];
+  const propObbs: OBB2D[] = [];
   const palms: PalmSpec[] = [];
   const streetLights: StreetLightSpec[] = [];
   const yachts: YachtSpec[] = [];
   const beachProps: BeachPropSpec[] = [];
+  const benches: OutdoorBenchSpec[] = [];
+  const planters: OutdoorPlanterSpec[] = [];
+  const sidewalkCafes: OutdoorCafeSetSpec[] = [];
+  const hydrants: OutdoorHydrantSpec[] = [];
+  const loungers: OutdoorLoungerSpec[] = [];
+  const bollards: OutdoorBollardSpec[] = [];
+  const trafficSignals: OutdoorTrafficSignalSpec[] = [];
+  const billboards: OutdoorBillboardSpec[] = [];
+  const marquees: OutdoorMarqueeSpec[] = [];
 
   // 1. Road network segments (expanded 7x7 coastal metropolis grid!)
   for (const ax of AVENUE_XS) {
@@ -896,6 +915,173 @@ export function createCityBlueprint(): CityBlueprint {
   );
   trafficNodes[oceanNorthIdx].neighbors.push(baseIdx + 0);
 
+  // 10. Deterministic Street, Park, Beach, Pier & Storefront Props + Tight 2D OBB Colliders!
+  //     Every physical outdoor object shares ONE single source of truth for visuals & modern OBB collision!
+  const propRng = createRng(773305);
+  const halfRoad = ROAD_WIDTH * 0.5;
+
+  // 10a. Sidewalk corner safety bollards (4 corners of every city block)
+  for (let bx = 0; bx < AVENUE_XS.length - 1; bx++) {
+    for (let bz = 0; bz < STREET_ZS.length - 1; bz++) {
+      const minX = AVENUE_XS[bx] + halfRoad + 0.4;
+      const maxX = AVENUE_XS[bx + 1] - halfRoad - 0.4;
+      const minZ = STREET_ZS[bz] + halfRoad + 0.4;
+      const maxZ = STREET_ZS[bz + 1] - halfRoad - 0.4;
+      const w = maxX - minX;
+      const d = maxZ - minZ;
+      const cx = (minX + maxX) * 0.5;
+      const cz = (minZ + maxZ) * 0.5;
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          const x = cx + sx * (w * 0.5 - 1.15);
+          const z = cz + sz * (d * 0.5 - 1.15);
+          bollards.push({ x, y: SIDEWALK_HEIGHT, z });
+          propObbs.push({ cx: x, cz: z, halfW: 0.1, halfD: 0.1, rotY: 0 });
+        }
+      }
+    }
+  }
+
+  // 10b. Live Intersection Traffic Signal Gantries
+  for (let ix = 0; ix < AVENUE_XS.length; ix++) {
+    for (let iz = 0; iz < STREET_ZS.length; iz++) {
+      if ((ix + iz) % 2 !== 0) continue;
+      const x = AVENUE_XS[ix] - 9.4;
+      const z = STREET_ZS[iz] - 9.4;
+      trafficSignals.push({ x, y: 0.2, z, phaseOffset: (ix * 3 + iz * 5) * 1.9 });
+      propObbs.push({ cx: x, cz: z, halfW: 0.2, halfD: 0.2, rotY: 0 });
+    }
+  }
+
+  // 10c. Readable Neon Hotel & District Marquees + dual support posts
+  const marqueeSpecs: OutdoorMarqueeSpec[] = [
+    { title: 'HOTEL SOLAIRE', sub: 'OCEAN DRIVE · ART DECO', bg: '#1e102b', fg: '#ff6ca8', acc: '#2cf3ff', x: 125, z: -65 },
+    { title: 'THE FLAMINGO', sub: 'ROOFTOP LOUNGE & BAR', bg: '#161b30', fg: '#ffd166', acc: '#ff4d8d', x: 125, z: 25 },
+    { title: 'PALM ROYALE', sub: 'SOUTH BEACH SUITES', bg: '#0e242c', fg: '#46f7b4', acc: '#ffcf5c', x: 125, z: 112 },
+    { title: 'CLUB NEON', sub: 'OPEN LATE · LIVE SYNTH', bg: '#180c2e', fg: '#2cf3ff', acc: '#ff2e93', x: -5, z: -65 },
+    { title: 'VELVET PALMS', sub: 'MIDTOWN NIGHTCLUB', bg: '#220f24', fg: '#ff70a6', acc: '#ffe066', x: -5, z: 25 },
+    { title: 'MARINA CLUB', sub: 'YACHT CHARTERS & GRILL', bg: '#0c2032', fg: '#72efdd', acc: '#ffb703', x: 12, z: 145 },
+    { title: 'WYNWOOD WALLS', sub: 'STREET ART · GALLERIES', bg: '#1a1030', fg: '#ffcf5c', acc: '#ff2e93', x: -185, z: -245 },
+    { title: 'SOL ARENA', sub: 'LIVE CONCERTS & HOOPS', bg: '#0c182e', fg: '#2cf3ff', acc: '#ff4d8d', x: -275, z: -245 },
+    { title: 'CAFE HABANA', sub: 'CORAL HEIGHTS · ESPRESSO', bg: '#2c1610', fg: '#ffd166', acc: '#ff8a3d', x: -275, z: 25 },
+    { title: 'BAYSIDE RESORT', sub: 'NORTH BEACH TOWERS', bg: '#0c2233', fg: '#72efdd', acc: '#2cf3ff', x: 125, z: -245 },
+  ];
+  for (const m of marqueeSpecs) {
+    marquees.push(m);
+    for (const bz of [-3.2, 3.2]) {
+      propObbs.push({ cx: m.x, cz: m.z + bz, halfW: 0.14, halfD: 0.14, rotY: 0 });
+    }
+  }
+
+  // 10d. Roadside & Rooftop Miami Billboards + heavy steel monopoles
+  const bbSpecs = [
+    { headline: 'SOLSTICE GT', sub: '0-60 IN 2.6s · OWN THE COAST', a: '#181436', b: '#ff427b', badge: 'SOL MOTORS', x: 151, z: -155, yaw: -0.35 },
+    { headline: 'VICE WAVE 98.5', sub: 'NON-STOP SUNSET SYNTH & COASTAL BEATS', a: '#0c1f3a', b: '#00b4d8', badge: 'LIVE ON AIR', x: -102, z: -62, yaw: Math.PI * 0.5 },
+    { headline: 'KEY SOL VILLAS', sub: 'PRIVATE ISLAND LIVING ACROSS THE CAUSEWAY', a: '#122938', b: '#18a999', badge: 'LUXURY REALTY', x: 152, z: -188, yaw: 0.25 },
+    { headline: 'SOL COLA', sub: 'ICE COLD MIAMI CITRUS REFRESHMENT', a: '#4a1228', b: '#ff8a3d', badge: 'STAY COOL', x: -188, z: 112, yaw: 0.4 },
+  ];
+  for (const bb of bbSpecs) {
+    billboards.push({ ...bb, y: getGroundHeight(bb.x, bb.z) });
+    propObbs.push({ cx: bb.x, cz: bb.z, halfW: 0.4, halfD: 0.4, rotY: 0 });
+  }
+
+  // 10e. Ocean Drive Sidewalk Cafés & Boardwalk Bougainvillea Stone Planters
+  const cafeColors = [0xff5e8e, 0x22d3ee, 0xf59e0b, 0x34d399];
+  for (let z = -155; z <= 125; z += 26) {
+    if (STREET_ZS.some((sz) => Math.abs(z - sz) < 16)) continue;
+    // Skip right in front of Hotel Solaire entrance (z = -48.4)
+    if (Math.abs(z - -48.4) > 5.0) {
+      sidewalkCafes.push({ x: 129.2, y: SIDEWALK_HEIGHT, z, color: cafeColors[Math.abs(z) % cafeColors.length] });
+      propObbs.push({ cx: 129.2, cz: z, halfW: 0.62, halfD: 0.62, rotY: 0 });
+    }
+    planters.push({ x: 151.0, y: 0.0, z: z + 10 });
+    propObbs.push({ cx: 151.0, cz: z + 10, halfW: 0.8, halfD: 2.3, rotY: 0 });
+  }
+
+  // 10f. Park & Boardwalk Benches (rotated OBBs!)
+  const benchCoords = [
+    { x: 16, z: 16, yaw: 0.78 },
+    { x: 34, z: 16, yaw: -0.78 },
+    { x: 16, z: 34, yaw: 2.35 },
+    { x: 34, z: 34, yaw: -2.35 },
+    { x: 163.5, z: -55, yaw: Math.PI * 0.5 },
+    { x: 163.5, z: 15, yaw: Math.PI * 0.5 },
+    { x: 163.5, z: 85, yaw: Math.PI * 0.5 },
+  ];
+  for (const bc of benchCoords) {
+    benches.push({ x: bc.x, y: getGroundHeight(bc.x, bc.z), z: bc.z, yaw: bc.yaw });
+    propObbs.push({ cx: bc.x, cz: bc.z, halfW: 1.05, halfD: 0.3, rotY: bc.yaw });
+  }
+
+  // 10g. Street-corner Fire Hydrants
+  for (const ax of AVENUE_XS) {
+    for (const sz of STREET_ZS) {
+      if ((ax + sz) % 40 !== 0) continue;
+      const hx = ax + 9.2;
+      const hz = sz + 9.2;
+      hydrants.push({ x: hx, y: SIDEWALK_HEIGHT, z: hz });
+      propObbs.push({ cx: hx, cz: hz, halfW: 0.19, halfD: 0.19, rotY: 0 });
+    }
+  }
+
+  // 10h. Sol Beach Sun Loungers paired beside every beach umbrella (rotated OBBs!)
+  const towelColors = [0xff5e8e, 0x22d3ee, 0xffd166, 0x34d399, 0xa855f7];
+  for (const prop of beachProps) {
+    if (prop.kind === 'lifeguard') {
+      propObbs.push({ cx: prop.x, cz: prop.z, halfW: 1.55, halfD: 1.55, rotY: prop.yaw });
+    } else {
+      // Umbrella pole (can walk under canopy shade, collides cleanly with the pole!)
+      propObbs.push({ cx: prop.x, cz: prop.z, halfW: 0.12, halfD: 0.12, rotY: 0 });
+      const tx = prop.x + 1.5;
+      const tz = prop.z + 0.8;
+      const yaw = Math.PI * 0.5 + (propRng() - 0.5) * 0.35;
+      const col = towelColors[Math.abs(Math.round(prop.z)) % towelColors.length];
+      loungers.push({ x: tx, y: getGroundHeight(tx, tz) + 0.02, z: tz, yaw, color: col });
+      propObbs.push({ cx: tx, cz: tz, halfW: 0.4, halfD: 0.94, rotY: yaw });
+    }
+  }
+
+  // 10i. Palm Tree Trunks (~150+ palms — tight 0.48m diameter trunk colliders!)
+  for (const palm of palms) {
+    propObbs.push({ cx: palm.x, cz: palm.z, halfW: 0.24, halfD: 0.24, rotY: 0 });
+  }
+
+  // 10j. Streetlight Poles (tight 0.32m pole colliders!)
+  for (const sl of streetLights) {
+    propObbs.push({ cx: sl.x, cz: sl.z, halfW: 0.16, halfD: 0.16, rotY: 0 });
+  }
+
+  // 10k. Coral Park Basketball Hoop Stanchions (-335, 25 ± 14.4)
+  for (const side of [-1, 1]) {
+    propObbs.push({ cx: -335, cz: 25 + side * 14.4, halfW: 0.18, halfD: 0.18, rotY: 0 });
+  }
+
+  // 10l. South Pier Wooden Railing Bollards
+  for (let px = SOUTH_PIER.rampEndX + 6; px <= SOUTH_PIER.endX - 2; px += 14) {
+    for (const side of [-5.8, 5.8]) {
+      propObbs.push({ cx: px, cz: SOUTH_PIER.centerZ + side * 1.15, halfW: 0.15, halfD: 0.15, rotY: 0 });
+    }
+  }
+
+  // 10m. Outdoor Enterable Storefront Sidewalk Props (potted palms, Café Habana bistro sets & chalkboard!)
+  const storefrontPropObbs: OBB2D[] = [
+    // Hotel Solaire (wallX: 124, centerZ: -48.4, facing +X)
+    { cx: 125.8, cz: -46.3, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    { cx: 125.8, cz: -50.5, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    // Club Neon (wallX: -1.8, centerZ: -48.4, facing -X)
+    { cx: -3.2, cz: -51.4, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    { cx: -3.2, cz: -45.4, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    // Café Habana (wallX: -272.9, centerZ: 8.4, facing -X)
+    { cx: -274.6, cz: 6.2, halfW: 0.4, halfD: 0.32, rotY: 0.35 },
+    { cx: -274.5, cz: 10.7, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    { cx: -274.7, cz: 13.2, halfW: 0.62, halfD: 0.62, rotY: 0 },
+    { cx: -274.7, cz: 3.6, halfW: 0.62, halfD: 0.62, rotY: 0 },
+    // Wynwood Art Gallery (wallX: -183.6, centerZ: -228.4, facing -X)
+    { cx: -185.2, cz: -231.6, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    { cx: -185.2, cz: -225.2, halfW: 0.28, halfD: 0.28, rotY: 0 },
+  ];
+  propObbs.push(...storefrontPropObbs);
+
   return {
     avenueXs: AVENUE_XS,
     streetZs: STREET_ZS,
@@ -904,10 +1090,20 @@ export function createCityBlueprint(): CityBlueprint {
     roads,
     buildings,
     colliders,
+    propObbs,
     palms,
     streetLights,
     yachts,
     beachProps,
+    benches,
+    planters,
+    sidewalkCafes,
+    hydrants,
+    loungers,
+    bollards,
+    trafficSignals,
+    billboards,
+    marquees,
     trafficNodes,
     districts: DISTRICTS,
   };

@@ -866,6 +866,7 @@ function bootstrap(): void {
           },
           dt,
           blueprint.colliders,
+          blueprint.propObbs,
         );
       } else if (
         Math.abs(v.vx) > 0.05 ||
@@ -876,7 +877,13 @@ function bootstrap(): void {
         Math.abs(v.pitchTilt) > 0.004
       ) {
         // Unoccupied rammed car skids & coasts naturally to a stop instead of freezing rigidly
-        stepVehiclePhysics(v, { throttle: 0, steer: 0, handbrake: false }, dt, blueprint.colliders);
+        stepVehiclePhysics(
+          v,
+          { throttle: 0, steer: 0, handbrake: false },
+          dt,
+          blueprint.colliders,
+          blueprint.propObbs,
+        );
       } else {
         v.lastCollisionImpact = 0;
       }
@@ -884,7 +891,7 @@ function bootstrap(): void {
 
     // 2. Resolve exact SAT rigid-body collisions between ALL fleet vehicles & ALL AI traffic cars FIRST!
     resolveVehiclePairCollisions(vehicles);
-    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders);
+    stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs);
 
     // 3. Now step player (using up-to-date car positions so traffic can NEVER move onto/through the player!)
     if (activeVehicle) {
@@ -908,6 +915,7 @@ function bootstrap(): void {
         vehicles,
         trafficCars,
         pedestrians,
+        blueprint.propObbs,
       );
     }
 

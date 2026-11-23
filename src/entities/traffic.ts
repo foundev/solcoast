@@ -1,6 +1,16 @@
 import * as THREE from 'three';
-import { clamp, createRng, distXZ, lerp, lerpAngle, wrapAngle, yawFromDir, type AABB } from '../core/math';
-import { resolveCarVsBuildingSAT, resolveCarVsCarSAT } from '../core/physics';
+import {
+  clamp,
+  createRng,
+  distXZ,
+  lerp,
+  lerpAngle,
+  wrapAngle,
+  yawFromDir,
+  type AABB,
+  type OBB2D,
+} from '../core/math';
+import { resolveCarVsBuildingSAT, resolveCarVsCarSAT, resolveCarVsObbSAT } from '../core/physics';
 import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
@@ -120,6 +130,7 @@ export function stepTraffic(
   playerVehicles: VehicleState[],
   dt: number,
   colliders: AABB[] = [],
+  propObbs: OBB2D[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
 
@@ -141,7 +152,7 @@ export function stepTraffic(
       car.z += car.vz * safeDt;
       car.yaw = wrapAngle(car.yaw + car.yawRate * safeDt);
 
-      // Bounce solidly off building walls & stay out of deep water
+      // Bounce solidly off building walls & outdoor street props & stay out of deep water
       for (const box of colliders) {
         const hit = resolveCarVsBuildingSAT(car, box);
         if (hit.hit && hit.closingSpeed > 1.2) {
@@ -151,6 +162,17 @@ export function stepTraffic(
           car.lastImpactNx = hit.nx;
           car.lastImpactNz = hit.nz;
           car.suspOffset = -0.09;
+        }
+      }
+      for (const obb of propObbs) {
+        const hit = resolveCarVsObbSAT(car, obb);
+        if (hit.hit && hit.closingSpeed > 1.2) {
+          car.lastImpactSpeed = Math.max(car.lastImpactSpeed, hit.closingSpeed);
+          car.lastImpactX = hit.contactX;
+          car.lastImpactZ = hit.contactZ;
+          car.lastImpactNx = hit.nx;
+          car.lastImpactNz = hit.nz;
+          car.suspOffset = -0.08;
         }
       }
       if (isDeepWater(car.x, car.z)) {

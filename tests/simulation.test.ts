@@ -954,5 +954,47 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(p.z).toBeGreaterThanOrEqual(4.9 + 0.45);
     expect(p.z).toBeLessThan(4.9 + 0.65);
+
+    // 9. Outdoor world props (planters, benches, lifeguard towers, palms) all use the unified tight OBB collision!
+    const planter = blueprint.planters[0];
+    const walker = createInitialPlayerState(null);
+    walker.x = planter.x - 2.2;
+    walker.z = planter.z;
+    walker.y = 0;
+    for (let i = 0; i < 80; i++) {
+      stepPlayerOnFoot(
+        walker,
+        { forward: 0, right: 1, sprint: false, jump: false, cameraYaw: 0 },
+        1 / 60,
+        blueprint.colliders,
+        [],
+        [],
+        [],
+        blueprint.propObbs,
+      );
+    }
+    // Stopped tightly against the 1.6m-wide stone planter edge (halfW=0.8 + radius=0.34 = 1.14m from center)
+    expect(walker.x).toBeLessThanOrEqual(planter.x - 1.05);
+    expect(walker.x).toBeGreaterThan(planter.x - 1.35);
+
+    // Cars also collide solidly with outdoor prop OBBs (e.g. beach lifeguard tower!)
+    const lgTower = blueprint.beachProps.find((bp) => bp.kind === 'lifeguard')!;
+    const car = createVehicleState(DEFAULT_VEHICLES[0]);
+    car.x = lgTower.x - 4.2;
+    car.z = lgTower.z;
+    car.yaw = Math.PI * 0.5;
+    car.vx = 14;
+    car.vz = 0;
+    car.speed = 14;
+    for (let i = 0; i < 30; i++) {
+      stepVehiclePhysics(
+        car,
+        { throttle: 1, steer: 0, handbrake: false },
+        1 / 60,
+        blueprint.colliders,
+        blueprint.propObbs,
+      );
+    }
+    expect(car.x).toBeLessThan(lgTower.x - 2.0);
   });
 });

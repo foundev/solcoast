@@ -6,8 +6,9 @@ import {
   rightFromYaw,
   wrapAngle,
   type AABB,
+  type OBB2D,
 } from '../core/math';
-import { resolveCarVsBuildingSAT, resolveCarVsCarSAT } from '../core/physics';
+import { resolveCarVsBuildingSAT, resolveCarVsCarSAT, resolveCarVsObbSAT } from '../core/physics';
 import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
@@ -280,6 +281,7 @@ export function stepVehiclePhysics(
   input: VehicleDriveInput,
   dt: number,
   colliders: AABB[],
+  propObbs: OBB2D[] = [],
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   v.lastCollisionImpact = 0;
@@ -423,6 +425,21 @@ export function stepVehiclePhysics(
       // Realistic chassis compression & nose jolt on wall crunch
       v.pitchVel -= clamp(impact * 0.042, 0, 0.9);
       v.suspVel -= clamp(impact * 0.065, 0, 1.3);
+    }
+  }
+  for (const obb of propObbs) {
+    const contact = resolveCarVsObbSAT(v, obb);
+    if (contact.hit && contact.closingSpeed > 0.1) {
+      const impact = contact.closingSpeed;
+      if (impact > v.lastCollisionImpact) {
+        v.lastCollisionImpact = impact;
+        v.lastImpactX = contact.contactX;
+        v.lastImpactZ = contact.contactZ;
+        v.lastImpactNx = contact.nx;
+        v.lastImpactNz = contact.nz;
+      }
+      v.pitchVel -= clamp(impact * 0.036, 0, 0.75);
+      v.suspVel -= clamp(impact * 0.055, 0, 1.1);
     }
   }
 

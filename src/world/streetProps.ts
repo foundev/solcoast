@@ -398,23 +398,17 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     root.add(treeGrateInst);
   }
 
-  // 2. Live Cycling Intersection Traffic Signal Gantries
+  // 2. Live Cycling Intersection Traffic Signal Gantries (shared exact coords with blueprint.propObbs!)
   const signalBoxMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.5, metalness: 0.4 });
-  for (let ix = 0; ix < AVENUE_XS.length; ix++) {
-    for (let iz = 0; iz < STREET_ZS.length; iz++) {
-      // Place traffic gantries at major central intersections
-      if ((ix + iz) % 2 !== 0) continue;
-      const ax = AVENUE_XS[ix];
-      const sz = STREET_ZS[iz];
-
+  for (const sigSpec of blueprint.trafficSignals) {
       const redMat = new THREE.MeshStandardMaterial({ color: 0x330808, emissive: 0xff1e2d, emissiveIntensity: 0.2 });
       const amberMat = new THREE.MeshStandardMaterial({ color: 0x332406, emissive: 0xffb703, emissiveIntensity: 0.1 });
       const greenMat = new THREE.MeshStandardMaterial({ color: 0x063318, emissive: 0x22ff77, emissiveIntensity: 2.2 });
 
-      signals.push({ redMat, amberMat, greenMat, phaseOffset: (ix * 3 + iz * 5) * 1.9 });
+      signals.push({ redMat, amberMat, greenMat, phaseOffset: sigSpec.phaseOffset });
 
       const gantry = new THREE.Group();
-      gantry.position.set(ax - 9.4, 0.2, sz - 9.4);
+      gantry.position.set(sigSpec.x, sigSpec.y, sigSpec.z);
 
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 6.4, 8), poleMat);
       post.position.y = 3.2;
@@ -451,24 +445,10 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       gantry.add(rLensB, aLensB, gLensB);
 
       root.add(gantry);
-    }
   }
 
-  // 3. Readable Neon Hotel & District Marquees across Ocean Drive, Neon Strip, Wynwood, Coral Heights & North Beach
-  const hotelMarquees = [
-    { title: 'HOTEL SOLAIRE', sub: 'OCEAN DRIVE · ART DECO', bg: '#1e102b', fg: '#ff6ca8', acc: '#2cf3ff', x: 125, z: -65 },
-    { title: 'THE FLAMINGO', sub: 'ROOFTOP LOUNGE & BAR', bg: '#161b30', fg: '#ffd166', acc: '#ff4d8d', x: 125, z: 25 },
-    { title: 'PALM ROYALE', sub: 'SOUTH BEACH SUITES', bg: '#0e242c', fg: '#46f7b4', acc: '#ffcf5c', x: 125, z: 112 },
-    { title: 'CLUB NEON', sub: 'OPEN LATE · LIVE SYNTH', bg: '#180c2e', fg: '#2cf3ff', acc: '#ff2e93', x: -5, z: -65 },
-    { title: 'VELVET PALMS', sub: 'MIDTOWN NIGHTCLUB', bg: '#220f24', fg: '#ff70a6', acc: '#ffe066', x: -5, z: 25 },
-    { title: 'MARINA CLUB', sub: 'YACHT CHARTERS & GRILL', bg: '#0c2032', fg: '#72efdd', acc: '#ffb703', x: 12, z: 145 },
-    { title: 'WYNWOOD WALLS', sub: 'STREET ART · GALLERIES', bg: '#1a1030', fg: '#ffcf5c', acc: '#ff2e93', x: -185, z: -245 },
-    { title: 'SOL ARENA', sub: 'LIVE CONCERTS & HOOPS', bg: '#0c182e', fg: '#2cf3ff', acc: '#ff4d8d', x: -275, z: -245 },
-    { title: 'CAFE HABANA', sub: 'CORAL HEIGHTS · ESPRESSO', bg: '#2c1610', fg: '#ffd166', acc: '#ff8a3d', x: -275, z: 25 },
-    { title: 'BAYSIDE RESORT', sub: 'NORTH BEACH TOWERS', bg: '#0c2233', fg: '#72efdd', acc: '#2cf3ff', x: 125, z: -245 },
-  ];
-
-  for (const m of hotelMarquees) {
+  // 3. Readable Neon Hotel & District Marquees (shared exact coords with blueprint.propObbs!)
+  for (const m of blueprint.marquees) {
     const tex = createNeonSignTexture(m.title, m.sub, m.bg, m.fg, m.acc);
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
@@ -504,51 +484,8 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     root.add(signFrame);
   }
 
-  // 4. Roadside & Rooftop Miami Billboards
-  const billboards = [
-    {
-      headline: 'SOLSTICE GT',
-      sub: '0-60 IN 2.6s · OWN THE COAST',
-      a: '#181436',
-      b: '#ff427b',
-      badge: 'SOL MOTORS',
-      x: 151,
-      z: -155,
-      yaw: -0.35,
-    },
-    {
-      headline: 'VICE WAVE 98.5',
-      sub: 'NON-STOP SUNSET SYNTH & COASTAL BEATS',
-      a: '#0c1f3a',
-      b: '#00b4d8',
-      badge: 'LIVE ON AIR',
-      x: -102,
-      z: -62,
-      yaw: Math.PI * 0.5,
-    },
-    {
-      headline: 'KEY SOL VILLAS',
-      sub: 'PRIVATE ISLAND LIVING ACROSS THE CAUSEWAY',
-      a: '#122938',
-      b: '#18a999',
-      badge: 'LUXURY REALTY',
-      x: 152,
-      z: -188,
-      yaw: 0.25,
-    },
-    {
-      headline: 'SOL COLA',
-      sub: 'ICE COLD MIAMI CITRUS REFRESHMENT',
-      a: '#4a1228',
-      b: '#ff8a3d',
-      badge: 'STAY COOL',
-      x: -188,
-      z: 112,
-      yaw: 0.4,
-    },
-  ];
-
-  for (const bb of billboards) {
+  // 4. Roadside & Rooftop Miami Billboards (shared exact coords with blueprint.propObbs!)
+  for (const bb of blueprint.billboards) {
     const tex = createBillboardTexture(bb.headline, bb.sub, bb.a, bb.b, bb.badge);
     const faceMat = new THREE.MeshStandardMaterial({
       map: tex,
@@ -560,7 +497,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     signMaterials.push(faceMat);
 
     const g = new THREE.Group();
-    g.position.set(bb.x, getGroundHeight(bb.x, bb.z), bb.z);
+    g.position.set(bb.x, bb.y, bb.z);
     g.rotation.y = bb.yaw;
 
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.4, 8.2, 10), poleMat);
@@ -583,14 +520,10 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     root.add(g);
   }
 
-  // 5. Ocean Drive Sidewalk Cafés (striped umbrellas, bistro tables, benches) & Tropical Bougainvillea Planters
-  const cafeColors = [0xff5e8e, 0x22d3ee, 0xf59e0b, 0x34d399];
-  for (let z = -155; z <= 125; z += 26) {
-    if (STREET_ZS.some((sz) => Math.abs(z - sz) < 16)) continue;
-
-    // Bistro café table + 2 chairs + parasol on west sidewalk of Ocean Drive
+  // 5. Ocean Drive Sidewalk Cafés & Tropical Bougainvillea Planters (exact blueprint coords!)
+  for (const sc of blueprint.sidewalkCafes) {
     const cafe = new THREE.Group();
-    cafe.position.set(129.2, SIDEWALK_HEIGHT, z);
+    cafe.position.set(sc.x, sc.y, sc.z);
     const tablePost = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.78, 8), poleMat);
     tablePost.position.y = 0.39;
     cafe.add(tablePost);
@@ -604,16 +537,17 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     cafe.add(umbPole);
     const umbTop = new THREE.Mesh(
       new THREE.ConeGeometry(1.55, 0.52, 10),
-      new THREE.MeshStandardMaterial({ color: cafeColors[Math.abs(z) % cafeColors.length], roughness: 0.65 }),
+      new THREE.MeshStandardMaterial({ color: sc.color, roughness: 0.65 }),
     );
     umbTop.position.y = 2.5;
     umbTop.castShadow = true;
     cafe.add(umbTop);
     root.add(cafe);
+  }
 
-    // Tropical bougainvillea stone planter along boardwalk edge
+  for (const pl of blueprint.planters) {
     const planter = new THREE.Group();
-    planter.position.set(151.0, 0.0, z + 10);
+    planter.position.set(pl.x, pl.y, pl.z);
     const box = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.55, 4.6), planterStoneMat);
     box.position.y = 0.28;
     box.castShadow = true;
@@ -622,7 +556,6 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     bush.position.y = 0.78;
     bush.castShadow = true;
     planter.add(bush);
-    // Vibrant Miami magenta blossoms dot the hedge
     for (let b = -1.6; b <= 1.6; b += 0.85) {
       const flower = new THREE.Mesh(new THREE.SphereGeometry(0.24, 6, 6), blossomMat);
       flower.position.set((rng() - 0.5) * 0.6, 1.05 + rng() * 0.14, b);
@@ -632,18 +565,9 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   }
 
   // 6. Park Benches in Palm Plaza & along the Boardwalk + Fire Hydrants at street corners
-  const benchCoords = [
-    { x: 16, z: 16, yaw: 0.78 },
-    { x: 34, z: 16, yaw: -0.78 },
-    { x: 16, z: 34, yaw: 2.35 },
-    { x: 34, z: 34, yaw: -2.35 },
-    { x: 163.5, z: -55, yaw: Math.PI * 0.5 },
-    { x: 163.5, z: 15, yaw: Math.PI * 0.5 },
-    { x: 163.5, z: 85, yaw: Math.PI * 0.5 },
-  ];
-  for (const bc of benchCoords) {
+  for (const bc of blueprint.benches) {
     const bench = new THREE.Group();
-    bench.position.set(bc.x, getGroundHeight(bc.x, bc.z), bc.z);
+    bench.position.set(bc.x, bc.y, bc.z);
     bench.rotation.y = bc.yaw;
     const seat = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.1, 0.56), woodBenchMat);
     seat.position.y = 0.48;
@@ -661,37 +585,26 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   }
 
   // Fire hydrants near avenue corners
-  for (const ax of AVENUE_XS) {
-    for (const sz of STREET_ZS) {
-      if ((ax + sz) % 40 !== 0) continue;
-      const hyd = new THREE.Group();
-      hyd.position.set(ax + 9.2, 0.24, sz + 9.2);
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 0.72, 8), hydrantMat);
-      cyl.position.y = 0.36;
-      cyl.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), hydrantMat);
-      cap.position.y = 0.74;
-      hyd.add(cyl, cap);
-      root.add(hyd);
-    }
+  for (const hy of blueprint.hydrants) {
+    const hyd = new THREE.Group();
+    hyd.position.set(hy.x, hy.y, hy.z);
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 0.72, 8), hydrantMat);
+    cyl.position.y = 0.36;
+    cyl.castShadow = true;
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), hydrantMat);
+    cap.position.y = 0.74;
+    hyd.add(cyl, cap);
+    root.add(hyd);
   }
 
   // 6b. Beach Loungers & Colorful Towels resting flush on the sculpted Sol Beach dunes
-  const towelColors = [0xff5e8e, 0x22d3ee, 0xffd166, 0x34d399, 0xa855f7];
   const loungerFrameMat = new THREE.MeshStandardMaterial({ color: 0xf4f6fa, roughness: 0.45 });
-  for (const prop of blueprint.beachProps) {
-    if (prop.kind !== 'umbrella') continue;
-    const tx = prop.x + 1.5;
-    const tz = prop.z + 0.8;
-    const ty = getGroundHeight(tx, tz);
-    const col = towelColors[Math.abs(Math.round(prop.z)) % towelColors.length];
-    const towelMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.86 });
-
+  for (const lg of blueprint.loungers) {
+    const towelMat = new THREE.MeshStandardMaterial({ color: lg.color, roughness: 0.86 });
     const lounger = new THREE.Group();
-    lounger.position.set(tx, ty + 0.02, tz);
-    lounger.rotation.y = Math.PI * 0.5 + (rng() - 0.5) * 0.35;
-    // Slight tilt to match local sand slope
-    const slopeX = getGroundHeight(tx + 1, tz) - getGroundHeight(tx - 1, tz);
+    lounger.position.set(lg.x, lg.y, lg.z);
+    lounger.rotation.y = lg.yaw;
+    const slopeX = getGroundHeight(lg.x + 1, lg.z) - getGroundHeight(lg.x - 1, lg.z);
     lounger.rotation.x = Math.atan2(slopeX, 2) * 0.65;
 
     const base = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.08, 1.85), loungerFrameMat);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCircleAABB } from '../src/core/math';
+import { resolveCircleAABB, resolveCircleOBB } from '../src/core/math';
 import { MISSIONS } from '../src/systems/missions';
 import {
   BOARDWALK_HEIGHT,
@@ -114,6 +114,12 @@ describe('Sol Coast World Blueprint', () => {
           `${venue.id} entrance overlapping building collider`,
         ).toBe(false);
       }
+      for (const obb of blueprint.propObbs) {
+        expect(
+          resolveCircleOBB(venue.entranceX, venue.entranceZ, 0.45, obb).hit,
+          `${venue.id} entrance overlapping outdoor prop OBB at (${obb.cx.toFixed(1)}, ${obb.cz.toFixed(1)})`,
+        ).toBe(false);
+      }
 
       // Storefront wall must be bolted flush against an ACTUAL city building (never an open courtyard gap!)
       const sf = venue.storefront;
@@ -132,6 +138,17 @@ describe('Sol Coast World Blueprint', () => {
       expect(venue.doorways.length, `${venue.id} doorways`).toBeGreaterThanOrEqual(2);
       expect(venue.props.length, `${venue.id} 3D props`).toBeGreaterThanOrEqual(25);
       expect(venue.npcs.length, `${venue.id} NPCs`).toBeGreaterThanOrEqual(4);
+    }
+    // Modern tight OBB colliders cover every outdoor palm, lamp, bollard, hydrant, bench, planter, café, tower & lounger!
+    expect(blueprint.propObbs.length).toBeGreaterThanOrEqual(450);
+    // Spot-check that mission starts & steps remain clear of outdoor prop OBBs too
+    for (const m of MISSIONS) {
+      for (const obb of blueprint.propObbs) {
+        expect(
+          resolveCircleOBB(m.startX, m.startZ, 0.5, obb).hit,
+          `mission ${m.id} start overlapping outdoor prop OBB at (${obb.cx}, ${obb.cz})`,
+        ).toBe(false);
+      }
     }
   });
 });
