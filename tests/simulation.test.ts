@@ -762,7 +762,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
 
     const propsDir = path.resolve(__dirname, '../public/assets/props');
     const dec = new TextDecoder();
-    expect(INTERIOR_PROP_KINDS.length).toBe(40);
+    expect(INTERIOR_PROP_KINDS.length).toBe(43);
     for (const kind of INTERIOR_PROP_KINDS) {
       const buf = fs.readFileSync(path.resolve(propsDir, `${kind}.glb`));
       expect(buf.byteLength, `${kind}.glb non-empty`).toBeGreaterThan(5_000);

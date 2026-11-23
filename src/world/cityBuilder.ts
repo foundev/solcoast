@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { LoadedGameAssets } from './assets';
+import type { InteriorPropKind, LoadedGameAssets } from './assets';
 import {
   BOARDWALK_HEIGHT,
   CAUSEWAY,
@@ -12,6 +12,7 @@ import {
   getGroundHeight,
   getShorelineX,
 } from './cityData';
+import { createFountainWaterEffect, type AnimatedFountainWater } from './fountains';
 import {
   createAsphaltPbrSet,
   createBeachSandPbrSet,
@@ -39,6 +40,7 @@ export interface CitySceneHandles {
   yachts: { group: THREE.Group; baseY: number; phase: number }[];
   palmCrowns: { group: THREE.Group; phase: number }[];
   applyPhotoTextures: (textures: LoadedGameAssets['textures']) => void;
+  attachGltfFountains: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   hideFallbackYachts: () => void;
   updateAnimation: (
     elapsed: number,
@@ -1193,9 +1195,10 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   pathEW.position.set(25, parkY + 0.02, 25);
   root.add(pathEW);
 
+  const fallbackFountainGroup = new THREE.Group();
   const fountainRim = new THREE.Mesh(new THREE.CylinderGeometry(6.2, 6.6, 1.1, 24), seawallMat);
   fountainRim.position.set(25, parkY + 0.55, 25);
-  root.add(fountainRim);
+  fallbackFountainGroup.add(fountainRim);
 
   const fountainWaterMat = new THREE.MeshPhysicalMaterial({
     color: 0x1fd8e8,
@@ -1207,11 +1210,44 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   neonMaterials.push(fountainWaterMat);
   const fountainWater = new THREE.Mesh(new THREE.CylinderGeometry(5.6, 5.6, 1.15, 24), fountainWaterMat);
   fountainWater.position.set(25, parkY + 0.62, 25);
-  root.add(fountainWater);
+  fallbackFountainGroup.add(fountainWater);
 
   const fountainSpire = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.65, 3.6, 16), seawallMat);
   fountainSpire.position.set(25, parkY + 1.8, 25);
-  root.add(fountainSpire);
+  fallbackFountainGroup.add(fountainSpire);
+  root.add(fallbackFountainGroup);
+
+  // Outdoor Sculpted Fountain Varieties + Live Animated Water Jets & Ripples!
+  const outdoorFountainsRoot = new THREE.Group();
+  root.add(outdoorFountainsRoot);
+  const animatedOutdoorFountains: AnimatedFountainWater[] = [];
+
+  const outdoorFountainSpecs: {
+    kind: InteriorPropKind;
+    style: 'plaza-grand' | 'spanish-courtyard' | 'modern-zen';
+    x: number;
+    y: number;
+    z: number;
+    rotY?: number;
+    scale?: number;
+  }[] = [
+    // 1. Palm Plaza Central Park: Monumental 12m Dolphin & 3-Tier Cascading Fountain
+    { kind: 'fountain_plaza_grand', style: 'plaza-grand', x: 25, y: parkY, z: 25, scale: 1.0 },
+    // 2. Coral Park East Lawn: 8-Point Star Spanish Terracotta & Talavera Mosaic Courtyard Fountain
+    { kind: 'fountain_spanish_courtyard', style: 'spanish-courtyard', x: -314, y: parkY, z: 25, scale: 1.05 },
+    // 3. Key Sol Luxury Island Center Plaza: Modernist Honed Basalt Infinity & Brass Water-Wall
+    { kind: 'fountain_modern_zen', style: 'modern-zen', x: 301, y: KEY_SOL_BOUNDS.baseY, z: -200, scale: 1.0 },
+    // 4. Marina Cove Waterfront Promenade: Modernist Honed Basalt Infinity & Brass Water-Wall
+    { kind: 'fountain_modern_zen', style: 'modern-zen', x: -45, y: 0, z: 182, scale: 1.0 },
+  ];
+
+  for (const spec of outdoorFountainSpecs) {
+    const fx = createFountainWaterEffect(spec.style, spec.scale ?? 1.0);
+    fx.group.position.set(spec.x, spec.y, spec.z);
+    if (spec.rotY) fx.group.rotation.y = spec.rotY;
+    outdoorFountainsRoot.add(fx.group);
+    animatedOutdoorFountains.push(fx);
+  }
 
   // 10b. Coral Park & Outdoor Miami Basketball Court (-380..-290, -20..70 -> center -335, 25)
   const coralGrass = new THREE.Mesh(
@@ -1446,6 +1482,11 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       pc.group.rotation.z = Math.sin(elapsed * 1.15 + pc.phase) * 0.045;
       pc.group.rotation.x = Math.cos(elapsed * 0.85 + pc.phase) * 0.03;
     }
+
+    // Live animated arching water jets & ripples on all outdoor city fountains!
+    for (const fx of animatedOutdoorFountains) {
+      fx.update(elapsed);
+    }
   };
 
   const applyPhotoTextures = (textures: LoadedGameAssets['textures']) => {
@@ -1499,6 +1540,23 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  const attachGltfFountains = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
+    let attachedGrand = false;
+    for (const spec of outdoorFountainSpecs) {
+      const src = propsMap.get(spec.kind);
+      if (!src) continue;
+      const inst = src.clone(true);
+      inst.position.set(spec.x, spec.y, spec.z);
+      if (spec.rotY) inst.rotation.y = spec.rotY;
+      inst.scale.setScalar(spec.scale ?? 1.0);
+      outdoorFountainsRoot.add(inst);
+      if (spec.kind === 'fountain_plaza_grand') attachedGrand = true;
+    }
+    if (attachedGrand) {
+      fallbackFountainGroup.visible = false;
+    }
+  };
+
   const hideFallbackYachts = () => {
     for (const y of yachts) {
       y.group.visible = false;
@@ -1515,6 +1573,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     yachts,
     palmCrowns,
     applyPhotoTextures,
+    attachGltfFountains,
     hideFallbackYachts,
     updateAnimation,
   };

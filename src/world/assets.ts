@@ -53,7 +53,10 @@ export type InteriorPropKind =
   | 'artist_easel'
   | 'neon_palm_sign'
   | 'hotel_reception_desk'
-  | 'cocktail_bar_set';
+  | 'cocktail_bar_set'
+  | 'fountain_plaza_grand'
+  | 'fountain_spanish_courtyard'
+  | 'fountain_modern_zen';
 
 export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'sofa_luxury',
@@ -96,6 +99,9 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'neon_palm_sign',
   'hotel_reception_desk',
   'cocktail_bar_set',
+  'fountain_plaza_grand',
+  'fountain_spanish_courtyard',
+  'fountain_modern_zen',
 ];
 
 export interface LoadedPbrTextures {

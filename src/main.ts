@@ -193,10 +193,11 @@ function bootstrap(): void {
     }
   });
 
-  // Load all 40 CC0 & custom Blender interior furniture/hero GLBs + 8 interior PBR texture sets immediately!
+  // Load all 43 CC0 & custom Blender interior/fountain GLBs + 8 interior PBR texture sets immediately!
   void loadInteriorPropAssets().then((propsMap) => {
     if (propsMap.size > 0) {
       interiorSystem.attachGltfProps(propsMap);
+      cityHandles.attachGltfFountains(propsMap);
     }
   });
   void loadInteriorTextures().then((texMap) => {

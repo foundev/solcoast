@@ -435,6 +435,15 @@ export function createCityBlueprint(): CityBlueprint {
 
       // Landmark Open Park 2: Coral Park & Outdoor Basketball Courts (-380..-290, -20..70)
       if (AVENUE_XS[bx] === -380 && STREET_ZS[bz] === -20) {
+        // Spanish Courtyard Terracotta & Talavera Fountain on East lawn beside basketball court (-314, 25)
+        colliders.push({
+          minX: -315.8,
+          maxX: -312.2,
+          minZ: 23.2,
+          maxZ: 26.8,
+          minY: 0,
+          maxY: 2.5,
+        });
         for (let i = 0; i < 10; i++) {
           const angle = (i / 10) * Math.PI * 2;
           const r = 26;
@@ -629,6 +638,26 @@ export function createCityBlueprint(): CityBlueprint {
     });
     colliders.push(collider);
   }
+
+  // Key Sol Island central Modernist Basalt Infinity Fountain (301, -200)
+  colliders.push({
+    minX: 298.6,
+    maxX: 303.4,
+    minZ: -201.7,
+    maxZ: -198.3,
+    minY: KEY_SOL_BOUNDS.baseY,
+    maxY: KEY_SOL_BOUNDS.baseY + 3.0,
+  });
+
+  // Marina Cove Waterfront Promenade Modernist Basalt Infinity Fountain (-45, 182)
+  colliders.push({
+    minX: -47.4,
+    maxX: -42.6,
+    minZ: 180.3,
+    maxZ: 183.7,
+    minY: 0,
+    maxY: 3.0,
+  });
 
   // 4. South Pier Lighthouse Pavilion at the tip of the pier
   const pierPavilion: BuildingSpec = {

@@ -19,6 +19,7 @@ import type {
   InteriorTextureMap,
 } from './assets';
 import { getGroundHeight } from './cityData';
+import { createFountainWaterEffect, type AnimatedFountainWater } from './fountains';
 import { createContactShadowTexture } from './textures';
 
 export type InteriorId = 'hotel-solaire' | 'club-neon' | 'cafe-habana' | 'wynwood-gallery';
@@ -238,7 +239,10 @@ function buildWallColliders(rooms: InteriorRoomDef[], doorways: InteriorDoorwayD
 // so collisions hug the visible 3D mesh tightly with zero invisible forcefields!)
 const PROP_FOOTPRINTS: Partial<Record<InteriorPropKind, [number, number]>> = {
   armchair: [0.74, 0.86],
-  art_deco_fountain: [3.05, 3.05],
+  art_deco_fountain: [3.28, 3.28],
+  fountain_plaza_grand: [11.8, 11.8],
+  fountain_spanish_courtyard: [3.28, 3.28],
+  fountain_modern_zen: [4.52, 3.12],
   artist_easel: [1.02, 0.84],
   bar_stool: [0.42, 0.42],
   bed_suite: [1.44, 1.98],
@@ -894,7 +898,8 @@ export const INTERIORS: InteriorDef[] = [
       { kind: 'potted_plant_1', x: -2.4, z: 10.0, scale: 1.1 },
       { kind: 'pendant_lamp', x: -4.1, y: 4.4, z: 3.2, scale: 1.15, hangFromCeiling: true },
       { kind: 'pendant_lamp', x: 3.5, y: 4.4, z: 6.0, scale: 1.15, hangFromCeiling: true },
-      // Palm Conservatory Dining
+      // Palm Conservatory Dining (featuring a bubbling Spanish Courtyard Talavera Tile Fountain!)
+      { kind: 'fountain_spanish_courtyard', x: 15.5, z: 4.7, scale: 0.72 },
       { kind: 'dining_table', x: 12.8, z: 1.6, rotY: 0, scale: 1.0 },
       { kind: 'dining_chair', x: 12.2, z: 0.3, rotY: 0, scale: 1.05 },
       { kind: 'dining_chair', x: 13.4, z: 0.3, rotY: 0, scale: 1.05 },
@@ -940,10 +945,10 @@ export const INTERIORS: InteriorDef[] = [
         name: 'Carlos',
         role: 'Neighborhood Regular',
         x: 15.4,
-        z: 4.8,
-        yaw: -Math.PI * 0.5,
+        z: 8.8,
+        yaw: 0,
         variantIndex: 24,
-        lines: ['Carlos: "Best sunlit conservatory in Coral Heights. Try Diego’s pastelitos in the back kitchen!"'],
+        lines: ['Carlos: "Love sitting beside the tiled courtyard fountain here. Try Diego’s pastelitos in the back kitchen!"'],
       },
       {
         id: 'habana-local-2',
@@ -1755,6 +1760,7 @@ interface BuiltVenue {
   group: THREE.Group;
   propsRoot: THREE.Group;
   pbrBindings: PbrSurfaceBinding[];
+  fountainEffects: AnimatedFountainWater[];
   npcs: BuiltNpcHandle[];
   danceFloorMat?: THREE.MeshStandardMaterial;
   lasers?: THREE.Mesh[];
@@ -2472,6 +2478,27 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const propsRoot = new THREE.Group();
   group.add(propsRoot);
 
+  // Live animated water jets & ripples for every indoor fountain prop!
+  const fountainEffects: AnimatedFountainWater[] = [];
+  for (const p of def.props) {
+    const fStyle =
+      p.kind === 'art_deco_fountain'
+        ? 'art-deco'
+        : p.kind === 'fountain_spanish_courtyard'
+          ? 'spanish-courtyard'
+          : p.kind === 'fountain_modern_zen'
+            ? 'modern-zen'
+            : p.kind === 'fountain_plaza_grand'
+              ? 'plaza-grand'
+              : null;
+    if (!fStyle) continue;
+    const fx = createFountainWaterEffect(fStyle, p.scale ?? 1.0);
+    fx.group.position.set(p.x, p.y ?? 0, p.z);
+    if (p.rotY) fx.group.rotation.y = p.rotY;
+    group.add(fx.group);
+    fountainEffects.push(fx);
+  }
+
   // Indoor NPC mount points
   const npcs: BuiltNpcHandle[] = [];
   for (const nDef of def.npcs) {
@@ -2482,7 +2509,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     npcs.push({ def: nDef, root: npcRoot, rig: null });
   }
 
-  return { def, group, propsRoot, pbrBindings, npcs, danceFloorMat, lasers, monolithMats, exitRing };
+  return { def, group, propsRoot, pbrBindings, fountainEffects, npcs, danceFloorMat, lasers, monolithMats, exitRing };
 }
 
 export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles {
@@ -2633,6 +2660,11 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
           mat.emissive.setHSL(hue, 0.95, 0.58);
           mat.emissiveIntensity = 1.5 + Math.sin(elapsed * 2.5 + idx) * 0.5;
         });
+      }
+
+      // Animate indoor fountain water jets & ripples!
+      for (const fx of venue.fountainEffects) {
+        fx.update(elapsed);
       }
 
       // Animate indoor NPCs & subtly turn them toward you when you approach to talk!
