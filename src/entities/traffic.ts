@@ -211,6 +211,7 @@ export function stepTraffic(
 
     const from = nodes[car.fromNode];
     const to = nodes[car.toNode];
+    if (!from || !to) continue;
     const segLen = Math.hypot(to.x - from.x, to.z - from.z) || 1;
 
     const fx = Math.sin(car.yaw);
@@ -248,7 +249,9 @@ export function stepTraffic(
       const nextNode = nodes[car.toNode];
       const candidates = nextNode.neighbors.filter((n) => n !== prevId);
       const pool = candidates.length > 0 ? candidates : nextNode.neighbors;
-      const pick = pool[(car.id + Math.floor(car.x + car.z + 1000)) % pool.length];
+      const rawIdx = car.id + Math.floor(car.x + car.z);
+      const pickIdx = ((rawIdx % pool.length) + pool.length) % pool.length;
+      const pick = pool[pickIdx];
       car.fromNode = car.toNode;
       car.toNode = pick;
       car.progress -= 1;

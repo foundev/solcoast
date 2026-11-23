@@ -36,9 +36,10 @@ export function lerp(a: number, b: number, t: number): number {
 }
 
 export function wrapAngle(rad: number): number {
-  let a = rad;
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
+  if (!Number.isFinite(rad)) return 0;
+  const twoPi = Math.PI * 2;
+  let a = (((rad + Math.PI) % twoPi) + twoPi) % twoPi - Math.PI;
+  if (a <= -Math.PI) a += twoPi;
   return a;
 }
 

@@ -1077,4 +1077,36 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(car.x).toBeLessThan(lgTower.x - 2.0);
   });
+
+  it('never crashes or produces invalid traffic nodes in deep negative northwest Sunset Hills coordinates', () => {
+    const traffic = createTrafficCars(blueprint.trafficNodes, 24);
+    // Explicitly place several cars right at the northwest corner (-560, -560) where x + z < -1000
+    const nwNode = blueprint.trafficNodes.find((n) => n.x === -560 && n.z === -560)!;
+    expect(nwNode).toBeDefined();
+    for (let i = 0; i < 6; i++) {
+      traffic[i].fromNode = nwNode.neighbors[i % nwNode.neighbors.length];
+      traffic[i].toNode = nwNode.id;
+      traffic[i].x = nwNode.x;
+      traffic[i].z = nwNode.z;
+      traffic[i].progress = 0.99;
+    }
+
+    const vehicles = DEFAULT_VEHICLES.map(createVehicleState);
+    for (let step = 0; step < 1200; step++) {
+      stepTraffic(traffic, blueprint.trafficNodes, vehicles, 1 / 20, blueprint.colliders, blueprint.propObbs);
+    }
+
+    for (const tc of traffic) {
+      expect(tc.fromNode).toBeGreaterThanOrEqual(0);
+      expect(tc.fromNode).toBeLessThan(blueprint.trafficNodes.length);
+      expect(tc.toNode).toBeGreaterThanOrEqual(0);
+      expect(tc.toNode).toBeLessThan(blueprint.trafficNodes.length);
+      expect(Number.isFinite(tc.x)).toBe(true);
+      expect(Number.isFinite(tc.y)).toBe(true);
+      expect(Number.isFinite(tc.z)).toBe(true);
+      expect(Number.isFinite(tc.yaw)).toBe(true);
+      expect(Number.isFinite(tc.pitchTilt)).toBe(true);
+      expect(Number.isFinite(tc.rollTilt)).toBe(true);
+    }
+  });
 });
