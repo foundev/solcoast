@@ -16,7 +16,7 @@ import {
   isDeepWater,
   isOnRoad,
 } from '../src/world/cityData';
-import { INTERIORS } from '../src/world/interiors';
+import { INTERIORS, INTERIOR_ORIGIN_Y, interiorLocalToWorld } from '../src/world/interiors';
 
 describe('Sol Coast World Blueprint', () => {
   const blueprint = createCityBlueprint();
@@ -132,6 +132,22 @@ describe('Sol Coast World Blueprint', () => {
         );
       });
       expect(attachedBuilding, `${venue.id} storefront must sit flush on a real building facade`).toBeDefined();
+
+      // Every room across every floor of the unified 3D venue (including exterior walls & balconies) must stay strictly off every street!
+      for (const room of venue.rooms) {
+        for (const [lx, lz] of [
+          [room.minX - 1.2, room.minZ - 1.2],
+          [room.maxX + 1.2, room.minZ - 1.2],
+          [room.minX - 1.2, room.maxZ + 1.2],
+          [room.maxX + 1.2, room.maxZ + 1.2],
+        ]) {
+          const wp = interiorLocalToWorld(venue, lx, INTERIOR_ORIGIN_Y, lz, 0);
+          expect(
+            isOnRoad(wp.x, wp.z),
+            `${venue.id} room "${room.id}" corner (${wp.x.toFixed(1)}, ${wp.z.toFixed(1)}) must not protrude onto a road`,
+          ).toBe(false);
+        }
+      }
 
       // Multi-room architecture: at least 3 distinct rooms, 2+ connecting doorways, rich 3D props, and 4+ NPCs
       expect(venue.rooms.length, `${venue.id} multi-room count`).toBeGreaterThanOrEqual(3);

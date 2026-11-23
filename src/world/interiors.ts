@@ -570,18 +570,18 @@ function makeVenue(
 
 export const INTERIORS: InteriorDef[] = [
   // ─── 1. HOTEL SOLAIRE (OCEAN DRIVE — 3-FLOOR, 10-ROOM LUXURY ART DECO HOTEL) ──
-  // Bolted flush onto real Art Deco building b-108 (box x:109.3..124.0, z:-59.6..-37.2)
+  // Centered cleanly inside Ocean Drive block (x: 82..128, z: -98..-32) with generous sidewalk setbacks on all 4 sides!
   makeVenue({
     id: 'hotel-solaire',
     name: 'Hotel Solaire',
     districtLabel: 'Ocean Drive',
     accentColor: 0xff6ca8,
     entranceX: 126.5,
-    entranceZ: -48.4,
+    entranceZ: -62.0,
     outdoorExitYaw: Math.PI * 0.5,
     storefront: {
       wallX: 124.0,
-      centerZ: -48.4,
+      centerZ: -62.0,
       facingSignX: 1,
       signText: 'HOTEL SOLAIRE',
       subtitle: 'OCEAN DRIVE · 3 FLOORS · SUITES · PENTHOUSE',

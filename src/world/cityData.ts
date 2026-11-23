@@ -647,7 +647,7 @@ export function createCityBlueprint(): CityBlueprint {
   }
 
   // Exact world-space building specs & multi-wing exterior wall footprint colliders for the 4 unified enterable buildings
-  const hotelMainCol: AABB = { minX: 108.0, maxX: 124.0, minZ: -58.4, maxZ: -26.4, minY: 0, maxY: 16.0 };
+  const hotelMainCol: AABB = { minX: 108.0, maxX: 124.0, minZ: -72.0, maxZ: -40.0, minY: 0, maxY: 16.0 };
   const clubMainCol: AABB = { minX: -1.8, maxX: 7.2, minZ: -52.4, maxZ: -44.4, minY: 0, maxY: 5.0 };
   const cafeMainCol: AABB = { minX: -272.9, maxX: -251.9, minZ: 0.4, maxZ: 16.4, minY: 0, maxY: 5.5 };
   const galleryMainCol: AABB = { minX: -183.6, maxX: -167.6, minZ: -239.4, maxZ: -217.4, minY: 0, maxY: 7.0 };
@@ -656,7 +656,7 @@ export function createCityBlueprint(): CityBlueprint {
     {
       id: 'b-108',
       x: 116.0,
-      z: -42.4,
+      z: -56.0,
       width: 16.0,
       depth: 32.0,
       height: 15.0,
@@ -714,11 +714,11 @@ export function createCityBlueprint(): CityBlueprint {
   );
 
   colliders.push(
-    // Hotel Solaire (Ocean Drive): Main Lobby + South Suite Podium, North Ocean Lounge Wing & Rear Bath Podiums
+    // Hotel Solaire (Ocean Drive, centered at z = -62.0): Main Lobby + South Suite Podium, North Ocean Lounge Wing & Rear Bath Podiums
     hotelMainCol,
-    { minX: 108.0, maxX: 122.0, minZ: -71.4, maxZ: -58.4, minY: 0, maxY: 16.0 },
-    { minX: 102.0, maxX: 108.0, minZ: -33.4, maxZ: -26.4, minY: 0, maxY: 16.0 },
-    { minX: 102.0, maxX: 108.0, minZ: -70.4, maxZ: -63.4, minY: 0, maxY: 16.0 },
+    { minX: 108.0, maxX: 122.0, minZ: -85.0, maxZ: -72.0, minY: 0, maxY: 16.0 },
+    { minX: 102.0, maxX: 108.0, minZ: -47.0, maxZ: -40.0, minY: 0, maxY: 16.0 },
+    { minX: 102.0, maxX: 108.0, minZ: -84.0, maxZ: -77.0, minY: 0, maxY: 16.0 },
     // Club Neon (Neon Strip): Velvet Entry Foyer, Main Dance Hall & VIP Bar Wing
     clubMainCol,
     { minX: 7.2, maxX: 29.2, minZ: -60.4, maxZ: -36.4, minY: 0, maxY: 9.0 },
@@ -1062,7 +1062,7 @@ export function createCityBlueprint(): CityBlueprint {
 
   // 10c. Readable Neon Hotel & District Marquees + dual support posts
   const marqueeSpecs: OutdoorMarqueeSpec[] = [
-    { title: 'HOTEL SOLAIRE', sub: 'OCEAN DRIVE · ART DECO', bg: '#1e102b', fg: '#ff6ca8', acc: '#2cf3ff', x: 125, z: -65 },
+    { title: 'HOTEL SOLAIRE', sub: 'OCEAN DRIVE · ART DECO', bg: '#1e102b', fg: '#ff6ca8', acc: '#2cf3ff', x: 127, z: -36 },
     { title: 'THE FLAMINGO', sub: 'ROOFTOP LOUNGE & BAR', bg: '#161b30', fg: '#ffd166', acc: '#ff4d8d', x: 125, z: 25 },
     { title: 'PALM ROYALE', sub: 'SOUTH BEACH SUITES', bg: '#0e242c', fg: '#46f7b4', acc: '#ffcf5c', x: 125, z: 112 },
     { title: 'CLUB NEON', sub: 'OPEN LATE · LIVE SYNTH', bg: '#180c2e', fg: '#2cf3ff', acc: '#ff2e93', x: -5, z: -65 },
@@ -1096,8 +1096,8 @@ export function createCityBlueprint(): CityBlueprint {
   const cafeColors = [0xff5e8e, 0x22d3ee, 0xf59e0b, 0x34d399];
   for (let z = -155; z <= 125; z += 26) {
     if (STREET_ZS.some((sz) => Math.abs(z - sz) < 16)) continue;
-    // Skip right in front of Hotel Solaire entrance (z = -48.4)
-    if (Math.abs(z - -48.4) > 5.0) {
+    // Skip right in front of Hotel Solaire entrance (z = -62.0)
+    if (Math.abs(z - -62.0) > 6.0) {
       sidewalkCafes.push({ x: 129.2, y: SIDEWALK_HEIGHT, z, color: cafeColors[Math.abs(z) % cafeColors.length] });
       propObbs.push({ cx: 129.2, cz: z, halfW: 0.62, halfD: 0.62, rotY: 0 });
     }
@@ -1172,9 +1172,9 @@ export function createCityBlueprint(): CityBlueprint {
 
   // 10m. Outdoor Enterable Storefront Sidewalk Props (potted palms, Café Habana bistro sets & chalkboard!)
   const storefrontPropObbs: OBB2D[] = [
-    // Hotel Solaire (wallX: 124, centerZ: -48.4, facing +X)
-    { cx: 125.8, cz: -46.3, halfW: 0.28, halfD: 0.28, rotY: 0 },
-    { cx: 125.8, cz: -50.5, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    // Hotel Solaire (wallX: 124, centerZ: -62.0, facing +X)
+    { cx: 125.8, cz: -59.9, halfW: 0.28, halfD: 0.28, rotY: 0 },
+    { cx: 125.8, cz: -64.1, halfW: 0.28, halfD: 0.28, rotY: 0 },
     // Club Neon (wallX: -1.8, centerZ: -48.4, facing -X)
     { cx: -3.2, cz: -51.4, halfW: 0.28, halfD: 0.28, rotY: 0 },
     { cx: -3.2, cz: -45.4, halfW: 0.28, halfD: 0.28, rotY: 0 },
