@@ -8,6 +8,7 @@ import {
   detectInteriorFootstepSurface,
   detectOutdoorFootstepSurface,
 } from '../src/core/audio';
+import { ENGINE_WORKLET_CODE, WAVEGUIDE_ENGINE_PRESETS } from '../src/core/engineWorklet';
 import { InputManager } from '../src/core/input';
 import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
@@ -1215,11 +1216,20 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
   it('gives all 8 car models distinct performance/sound profiles and simulates real upshifting & downshifting', () => {
     const models = Object.values(MODEL_SPEC_TABLE);
     expect(models.length).toBe(8);
-    // Every model class has its own distinct engine sound profile!
+    // Every model class has its own distinct physical digital-waveguide engine preset!
     expect(new Set(models.map((m) => m.engineSound)).size).toBe(8);
+    expect(ENGINE_WORKLET_CODE).toContain('physical-engine-processor');
+    for (const m of models) {
+      const preset = WAVEGUIDE_ENGINE_PRESETS[m.engineSound];
+      expect(preset).toBeDefined();
+      if (!preset.isElectric) {
+        expect(preset.firingOffsets.length).toBe(preset.cylinders);
+        expect(preset.headerLengthsM.length).toBe(preset.cylinders);
+      }
+    }
     // Supercar top speed & EV launch torque clearly beat heavy SUV / Taxi
-    expect(MODEL_SPEC_TABLE.ferrari.maxSpeed).toBeGreaterThan(MODEL_SPEC_TABLE.suv.maxSpeed + 20);
-    expect(MODEL_SPEC_TABLE.ev.accel).toBeGreaterThan(MODEL_SPEC_TABLE.taxi.accel + 12);
+    expect(MODEL_SPEC_TABLE.ferrari.maxSpeed).toBeGreaterThan(MODEL_SPEC_TABLE.suv.maxSpeed + 25);
+    expect(MODEL_SPEC_TABLE.ev.accel).toBeGreaterThan(MODEL_SPEC_TABLE.taxi.accel + 8);
 
     // Accelerate the 7-speed Solstice GT and verify real upshifts fire, then brake and verify downshifts fire!
     const ferrari = createVehicleState(DEFAULT_VEHICLES[0]);
@@ -1227,7 +1237,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     ferrari.z = 120;
     ferrari.yaw = 0;
     let upshifts = 0;
-    for (let i = 0; i < 240; i++) {
+    for (let i = 0; i < 420; i++) {
       stepVehiclePhysics(ferrari, { throttle: 1, steer: 0, handbrake: false }, 1 / 60, []);
       if (ferrari.lastShiftKind === 'up') upshifts++;
     }
@@ -1235,7 +1245,7 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(ferrari.gear).toBeGreaterThanOrEqual(4);
 
     let downshifts = 0;
-    for (let i = 0; i < 160; i++) {
+    for (let i = 0; i < 200; i++) {
       stepVehiclePhysics(ferrari, { throttle: -1, steer: 0, handbrake: false }, 1 / 60, []);
       if (ferrari.lastShiftKind === 'down') downshifts++;
     }

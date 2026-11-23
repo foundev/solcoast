@@ -1,4 +1,5 @@
 import type { EngineSoundProfile } from '../entities/vehicle';
+import { ENGINE_WORKLET_CODE, WAVEGUIDE_ENGINE_PRESETS } from './engineWorklet';
 import { clamp, rightFromYaw } from './math';
 
 export type FootstepSurface = 'concrete' | 'sand' | 'wood' | 'tile' | 'carpet';
@@ -90,7 +91,9 @@ export class SoundEngine {
   private ctx: AudioContext | null = null;
   private noiseBuf: AudioBuffer | null = null;
 
-  // Player vehicle realistic acoustic engine synth (custom PeriodicWave + muffler formants + exhaust air + road roll)
+  // Player vehicle real-time 48kHz physical digital-waveguide AudioWorklet engine + road roll + turbo air!
+  private engineWorkletNode: AudioWorkletNode | null = null;
+  private workletReady = false;
   private engineOscA: OscillatorNode | null = null;
   private engineOscB: OscillatorNode | null = null;
   private engineSubOsc: OscillatorNode | null = null;
@@ -427,6 +430,35 @@ export class SoundEngine {
 
     this.clubOsc = clubOsc;
     this.clubGain = clubGain;
+
+    // 7. Load the real-time 48kHz physical digital-waveguide combustion engine AudioWorklet asynchronously!
+    //    Once ready, it takes over from the fallback PeriodicWave engine with true per-cylinder headers & mufflers.
+    if (ctx.audioWorklet && typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
+      const blob = new Blob([ENGINE_WORKLET_CODE], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      void ctx.audioWorklet
+        .addModule(blobUrl)
+        .then(() => {
+          URL.revokeObjectURL(blobUrl);
+          if (!this.ctx) return;
+          const node = new AudioWorkletNode(this.ctx, 'physical-engine-processor', {
+            numberOfInputs: 0,
+            numberOfOutputs: 1,
+            outputChannelCount: [1],
+          });
+          node.connect(this.ctx.destination);
+          this.engineWorkletNode = node;
+          this.workletReady = true;
+          this.activeEngineProfile = null; // Push active car preset immediately on next updateDriving
+          // Mute fallback PeriodicWave oscillators now that physical waveguide engine is live
+          const t = this.ctx.currentTime;
+          this.engineGain?.gain.setTargetAtTime(0, t, 0.03);
+          this.exhaustNoiseGain?.gain.setTargetAtTime(0, t, 0.03);
+        })
+        .catch(() => {
+          URL.revokeObjectURL(blobUrl);
+        });
+    }
   }
 
   public toggle(): boolean {
@@ -445,6 +477,9 @@ export class SoundEngine {
     this.roadRollGain?.gain.setTargetAtTime(0, now, 0.06);
     this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
     this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
+    if (this.engineWorkletNode) {
+      this.engineWorkletNode.parameters.get('active')?.setTargetAtTime(0, now, 0.05);
+    }
     this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
     this.trafficGain?.gain.setTargetAtTime(0, now, 0.08);
     this.oceanGain?.gain.setTargetAtTime(0, now, 0.12);
@@ -476,10 +511,55 @@ export class SoundEngine {
       this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
       this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
       this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
+      if (this.engineWorkletNode) {
+        this.engineWorkletNode.parameters.get('active')?.setTargetAtTime(0, now, 0.05);
+      }
       return;
     }
 
-    // Load the custom band-limited PeriodicWave for this car's cylinder architecture
+    const rpm = clamp(rpmNorm, 0.04, 1.05);
+    const spd = clamp(speedNorm, 0, 1.1);
+    const load = clamp(Math.abs(throttle), 0, 1);
+
+    // Primary path: Real-time 48kHz physical digital-waveguide combustion engine AudioWorklet!
+    if (this.workletReady && this.engineWorkletNode) {
+      if (this.activeEngineProfile !== profile) {
+        this.activeEngineProfile = profile;
+        const preset = WAVEGUIDE_ENGINE_PRESETS[profile] ?? WAVEGUIDE_ENGINE_PRESETS['sport-v6'];
+        this.engineWorkletNode.port.postMessage({ type: 'preset', preset });
+      }
+      const params = this.engineWorkletNode.parameters;
+      params.get('rpmNorm')?.setTargetAtTime(rpm, now, 0.02);
+      params.get('throttle')?.setTargetAtTime(load, now, 0.025);
+      params.get('active')?.setTargetAtTime(1.0, now, 0.04);
+      params.get('shiftCut')?.setTargetAtTime(shiftActive ? 1.0 : 0.0, now, 0.012);
+
+      // Keep fallback oscillators silent while physical worklet runs
+      this.engineGain?.gain.setTargetAtTime(0, now, 0.04);
+      this.exhaustNoiseGain?.gain.setTargetAtTime(0, now, 0.04);
+
+      // Warm asphalt tire-roll & wind rush scaling smoothly with vehicle speed
+      const rollVol = clamp(spd * spd * 0.034 + spd * 0.01, 0, 0.042);
+      this.roadRollFilter?.frequency.setTargetAtTime(180 + spd * 340, now, 0.08);
+      this.roadRollGain?.gain.setTargetAtTime(rollVol, now, 0.08);
+
+      // Silky filtered-air turbo spool on turbo-jdm & muscle-v8
+      const turboVol = profile === 'turbo-jdm' ? 0.015 : profile === 'muscle-v8' ? 0.006 : 0;
+      if (turboVol > 0) {
+        const tAir = turboVol * clamp((rpm - 0.38) * 1.5, 0, 1) * (0.2 + load * 0.85) * (shiftActive ? 0.3 : 1.0);
+        this.turboAirFilter?.frequency.setTargetAtTime(1200 + rpm * 1400, now, 0.045);
+        this.turboAirGain?.gain.setTargetAtTime(tAir, now, 0.05);
+      } else {
+        this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
+      }
+
+      const driftVol = clamp(driftAmount * 0.075, 0, 0.075);
+      this.driftGain?.gain.setTargetAtTime(driftVol, now, 0.04);
+      this.hornGain?.gain.setTargetAtTime(horn ? 0.065 : 0, now, 0.02);
+      return;
+    }
+
+    // Fallback path (if AudioWorklet is unavailable): band-limited PeriodicWave acoustic synth
     if (this.activeEngineProfile !== profile && this.engineOscA && this.engineOscB) {
       this.activeEngineProfile = profile;
       const wave = this.engineWaveMap[profile] ?? this.engineWaveMap['sport-v6'];
@@ -488,10 +568,6 @@ export class SoundEngine {
         this.engineOscB.setPeriodicWave(wave);
       }
     }
-
-    const rpm = clamp(rpmNorm, 0.04, 1.05);
-    const spd = clamp(speedNorm, 0, 1.1);
-    const load = clamp(Math.abs(throttle), 0, 1);
 
     // Warm, realistic acoustic firing frequencies & exhaust-muffler voicings per engine family
     let idleHz = 36;
@@ -670,6 +746,9 @@ export class SoundEngine {
     if (!this.ctx || !this.noiseBuf || !this.enabled || profile === 'electric-ev') return;
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume();
+    }
+    if (this.workletReady && this.engineWorkletNode) {
+      this.engineWorkletNode.port.postMessage({ type: 'shift', kind });
     }
     const now = this.ctx.currentTime;
 
