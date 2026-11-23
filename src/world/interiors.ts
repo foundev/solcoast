@@ -1812,35 +1812,35 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     });
 
     if (room.ceilingStyle === 'coffered') {
-      // Art Deco coffered ceiling grid + recessed warm downlights
+      // Art Deco coffered ceiling grid: primary girders slightly deeper than cross-beams (zero Z-fighting!)
       const stepsX = Math.max(2, Math.round(rw / 4.5));
       for (let i = 1; i < stepsX; i++) {
         const bx = room.minX + (i / stepsX) * rw;
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, rd - 0.2), beamMat);
-        beam.position.set(bx, room.height - 0.12, cz);
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, rd - 0.36), beamMat);
+        beam.position.set(bx, room.height - 0.13, cz);
         group.add(beam);
       }
       const stepsZ = Math.max(2, Math.round(rd / 4.5));
       for (let j = 1; j < stepsZ; j++) {
         const bz = room.minZ + (j / stepsZ) * rd;
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.2, 0.24, 0.28), beamMat);
-        beam.position.set(cx, room.height - 0.12, bz);
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.17, 0.26), beamMat);
+        beam.position.set(cx, room.height - 0.105, bz);
         group.add(beam);
       }
     } else if (room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight') {
-      // Exposed timber ceiling rafters spanning across the room
+      // Exposed timber ceiling rafters spanning cleanly inside crown molding
       const count = Math.max(3, Math.round(rd / 2.4));
       for (let i = 1; i < count; i++) {
         const bz = room.minZ + (i / count) * rd;
-        const rafter = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.2, 0.24, 0.18), beamMat);
+        const rafter = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.22, 0.18), beamMat);
         rafter.position.set(cx, room.height - 0.14, bz);
         group.add(rafter);
       }
     } else if (room.ceilingStyle === 'trusses') {
       // Exposed industrial black steel ceiling trusses
       for (let bz = room.minZ + 3.2; bz < room.maxZ - 2.0; bz += 4.5) {
-        const truss = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.4, 0.34, 0.28), beamMat);
-        truss.position.set(cx, room.height - 0.35, bz);
+        const truss = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.44, 0.34, 0.28), beamMat);
+        truss.position.set(cx, room.height - 0.38, bz);
         group.add(truss);
       }
     } else if (room.ceilingStyle === 'gallery-track') {
@@ -1849,14 +1849,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const glowMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0 });
       for (const offset of [-0.26, 0.26]) {
         const rail = new THREE.Mesh(new THREE.BoxGeometry(rw - 2.4, 0.08, 0.1), railMat);
-        rail.position.set(cx, room.height - 0.16, cz + rd * offset);
+        rail.position.set(cx, room.height - 0.18, cz + rd * offset);
         group.add(rail);
         for (let sx = room.minX + 2.8; sx <= room.maxX - 2.8; sx += 3.2) {
           const spot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.18, 10), railMat);
-          spot.position.set(sx, room.height - 0.28, cz + rd * offset);
-          const bulb = new THREE.Mesh(new THREE.CircleGeometry(0.07, 10), glowMat);
+          spot.position.set(sx, room.height - 0.31, cz + rd * offset);
+          const bulb = new THREE.Mesh(new THREE.CircleGeometry(0.068, 10), glowMat);
           bulb.rotation.x = Math.PI * 0.5;
-          bulb.position.set(sx, room.height - 0.38, cz + rd * offset);
+          bulb.position.set(sx, room.height - 0.415, cz + rd * offset);
           group.add(spot, bulb);
         }
       }
@@ -1864,9 +1864,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       // Glowing perimeter neon ceiling cove strips
       const coveMat = new THREE.MeshBasicMaterial({ color: room.crownColor ?? 0xff2e93 });
       const barN = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.6, 0.07, 0.08), coveMat);
-      barN.position.set(cx, room.height - 0.12, room.minZ + 0.14);
+      barN.position.set(cx, room.height - 0.24, room.minZ + 0.18);
       const barS = barN.clone();
-      barS.position.z = room.maxZ - 0.14;
+      barS.position.z = room.maxZ - 0.18;
       group.add(barN, barS);
     }
 
@@ -1925,9 +1925,12 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     wallMesh.position.set(0, seg.height * 0.5, 0);
     segGroup.add(wallMesh);
 
-    // Baseboard trim
-    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(len, 0.2, 0.06), baseboardMat);
-    baseboard.position.set(0, 0.1, 0.03);
+    // Inset X-axis trim ends so 90-degree room corners butt cleanly without overlapping Z-fighting!
+    const trimLen = Math.max(0.05, len - (seg.axis === 'x' ? 0.26 : 0.02));
+
+    // Baseboard trim (proud of wall & wainscoting, clear of floor plane)
+    const baseboard = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.18, 0.05), baseboardMat);
+    baseboard.position.set(0, 0.1, 0.05);
     segGroup.add(baseboard);
 
     // Architectural Wainscoting + Chair Rail (on Hotel, Café, VIP Bar walls!)
@@ -1937,29 +1940,29 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         roughness: 0.55,
         metalness: 0.1,
       });
-      const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(len, 1.05, 0.045), wainMat);
-      wainPanel.position.set(0, 0.54, 0.022);
+      const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.88, 0.03), wainMat);
+      wainPanel.position.set(0, 0.63, 0.035);
       const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(len, 0.08, 0.09),
+        new THREE.BoxGeometry(trimLen, 0.08, 0.07),
         new THREE.MeshStandardMaterial({
           color: room.crownColor ?? room.wainscotColor,
           roughness: 0.32,
           metalness: 0.45,
         }),
       );
-      rail.position.set(0, 1.08, 0.045);
+      rail.position.set(0, 1.11, 0.055);
       segGroup.add(wainPanel, rail);
     }
 
-    // Crown Molding along the top of every wall!
+    // Crown Molding cleanly separated from ceiling & wall (zero Z-fighting!)
     if (room.crownColor !== undefined) {
       const crownMat = new THREE.MeshStandardMaterial({
         color: room.crownColor,
         roughness: 0.35,
         metalness: 0.3,
       });
-      const crown = new THREE.Mesh(new THREE.BoxGeometry(len, 0.16, 0.12), crownMat);
-      crown.position.set(0, seg.height - 0.08, 0.06);
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.14, 0.1), crownMat);
+      crown.position.set(0, seg.height - 0.1, 0.08);
       segGroup.add(crown);
     }
 
@@ -1999,11 +2002,11 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const headerH = Math.max(0.25, maxH - dw.height);
 
     const header = new THREE.Mesh(
-      new THREE.BoxGeometry(dw.axis === 'z' ? span + 0.35 : 0.36, headerH, dw.axis === 'x' ? span + 0.35 : 0.36),
+      new THREE.BoxGeometry(dw.axis === 'z' ? span - 0.04 : 0.08, headerH - 0.04, dw.axis === 'x' ? span - 0.04 : 0.08),
       new THREE.MeshStandardMaterial({ color: adjacentRooms[0]?.wallColor ?? 0x222530, roughness: 0.78 }),
     );
     const lintel = new THREE.Mesh(
-      new THREE.BoxGeometry(dw.axis === 'z' ? span + 0.35 : 0.44, 0.22, dw.axis === 'x' ? span + 0.35 : 0.44),
+      new THREE.BoxGeometry(dw.axis === 'z' ? span + 0.32 : 0.44, 0.22, dw.axis === 'x' ? span + 0.32 : 0.44),
       frameMat,
     );
 

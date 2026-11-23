@@ -445,6 +445,8 @@ function bootstrap(): void {
           player.grounded = true;
           cameraCtrl.yaw = def.outdoorExitYaw;
           cameraCtrl.snap();
+          camera.far = 2200;
+          camera.updateProjectionMatrix();
           sound.playChime('enter');
           hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
           persistNow(false);
@@ -584,6 +586,8 @@ function bootstrap(): void {
         player.fallRoll = 0;
         cameraCtrl.yaw = nearbyEntrance.spawnYaw;
         cameraCtrl.snap();
+        camera.far = 110;
+        camera.updateProjectionMatrix();
         sound.playChime('enter');
         hud.showDistrictBanner(nearbyEntrance.name);
         hud.showToast(`Entered ${nearbyEntrance.name} — explore all ${nearbyEntrance.rooms.length} rooms & talk to locals with [E]!`, 'success');
