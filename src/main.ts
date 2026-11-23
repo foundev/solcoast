@@ -40,7 +40,7 @@ import {
 import { RagdollPhysicsWorld } from './systems/ragdollWorld';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
-import { loadGameAssets } from './world/assets';
+import { loadGameAssets, loadInteriorPropAssets } from './world/assets';
 import { buildCityScene } from './world/cityBuilder';
 import {
   createCityBlueprint,
@@ -52,6 +52,7 @@ import {
   createInteriorSystem,
   findNearbyBuildingEntrance,
   findNearbyInteriorNpc,
+  getInteriorRoomAt,
   stepPlayerInInterior,
   type InteriorDef,
 } from './world/interiors';
@@ -182,6 +183,11 @@ function bootstrap(): void {
       interiorSystem.attachGltfNpcs((idx) => assets.clonePedestrian(idx));
     }
 
+    // Stream all 30 CC0 photorealistic PBR interior furniture & prop GLBs asynchronously
+    void loadInteriorPropAssets().then((propsMap) => {
+      interiorSystem.attachGltfProps(propsMap);
+    });
+
     const carCount = Object.keys(assets.carGltfs).length;
     const boatCount = Object.keys(assets.boatGltfs).length;
     if (carCount > 0 || boatCount > 0 || assets.protagonistGltf) {
@@ -205,6 +211,7 @@ function bootstrap(): void {
   let autoSaveTimer = 0;
   let lastDistrictId: DistrictId = getDistrictAt(player.x, player.z).id;
   let activeInterior: InteriorDef | null = null;
+  let interiorTransitionCooldown = 0;
   const npcTalkCounts = new Map<string, number>();
 
   const setOutdoorVisible = (visible: boolean) => {
@@ -392,6 +399,11 @@ function bootstrap(): void {
     }
 
     cameraCtrl.applyLookInput(snap.mouseDX, snap.mouseDY, snap.wheelDelta);
+    if (interiorTransitionCooldown > 0) {
+      interiorTransitionCooldown = Math.max(0, interiorTransitionCooldown - dt);
+    }
+
+    let interactConsumed = false;
 
     // ─── INDOOR BUILDING INTERIOR LOOP ───────────────────────────────────────────
     if (activeInterior) {
@@ -408,9 +420,11 @@ function bootstrap(): void {
           : `Talk to ${nearbyNpc.name} (${nearbyNpc.role})`;
       }
 
-      if (snap.interactPressed) {
+      if (snap.interactPressed && interiorTransitionCooldown <= 0) {
         if (nearExit) {
-          // Step back outside onto the city sidewalk!
+          // Step back outside onto the city sidewalk — consume interact so we NEVER re-enter on the same frame!
+          interactConsumed = true;
+          interiorTransitionCooldown = 0.4;
           activeInterior = null;
           interiorSystem.setActiveInterior(null);
           setOutdoorVisible(true);
@@ -425,10 +439,12 @@ function bootstrap(): void {
           player.speed = 0;
           player.grounded = true;
           cameraCtrl.yaw = def.outdoorExitYaw;
+          cameraCtrl.snap();
           sound.playChime('enter');
           hud.showToast(`Stepped back out onto ${def.districtLabel}`, 'info');
           persistNow(false);
         } else if (nearbyNpc) {
+          interactConsumed = true;
           const count = npcTalkCounts.get(nearbyNpc.id) ?? 0;
           npcTalkCounts.set(nearbyNpc.id, count + 1);
           if (nearbyNpc.actionCost && nearbyNpc.actionToast) {
@@ -474,9 +490,14 @@ function bootstrap(): void {
         }
 
         const outdoorDistrict = getDistrictAt(activeInterior.entranceX, activeInterior.entranceZ);
+        const currentRoom = getInteriorRoomAt(activeInterior, player.x, player.z);
         hud.update({
           timeLabel: formatTimeLabel(timeOfDayHours),
-          district: { ...outdoorDistrict, name: activeInterior.name, tagline: activeInterior.districtLabel },
+          district: {
+            ...outdoorDistrict,
+            name: `${activeInterior.name} — ${currentRoom.name}`,
+            tagline: activeInterior.districtLabel,
+          },
           cash,
           discoveredCount: discoveredDistricts.size,
           player,
@@ -528,15 +549,16 @@ function bootstrap(): void {
       promptText = `Exit ${activeVehicle.name} (On Foot)`;
     }
 
-    if (snap.interactPressed) {
+    if (snap.interactPressed && !interactConsumed) {
       if (nearbyMission) {
         const started = missions.startMission(nearbyMission.id);
         if (started) {
           sound.playChime('checkpoint');
           hud.showToast(`Mission Started: ${started.title} — ${started.description}`, 'success');
         }
-      } else if (nearbyEntrance) {
+      } else if (nearbyEntrance && interiorTransitionCooldown <= 0) {
         // Step inside the building interior!
+        interiorTransitionCooldown = 0.4;
         activeInterior = nearbyEntrance;
         setOutdoorVisible(false);
         sky.setInteriorMode(true);
@@ -556,9 +578,10 @@ function bootstrap(): void {
         player.fallPitch = 0;
         player.fallRoll = 0;
         cameraCtrl.yaw = nearbyEntrance.spawnYaw;
+        cameraCtrl.snap();
         sound.playChime('enter');
         hud.showDistrictBanner(nearbyEntrance.name);
-        hud.showToast(`Entered ${nearbyEntrance.name} — explore or talk to locals with [E]!`, 'success');
+        hud.showToast(`Entered ${nearbyEntrance.name} — explore all ${nearbyEntrance.rooms.length} rooms & talk to locals with [E]!`, 'success');
       } else if (activeVehicle) {
         if (Math.abs(activeVehicle.speed) < 10) {
           const exitPos = computeSafeExitPosition(activeVehicle, blueprint.colliders);

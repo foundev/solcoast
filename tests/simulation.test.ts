@@ -26,12 +26,14 @@ import {
   stepVehiclePhysics,
 } from '../src/entities/vehicle';
 import { RagdollPhysicsWorld } from '../src/systems/ragdollWorld';
+import { INTERIOR_PROP_KINDS } from '../src/world/assets';
 import { createCityBlueprint } from '../src/world/cityData';
 import {
   INTERIOR_ORIGIN_Y,
   INTERIORS,
   findNearbyBuildingEntrance,
   findNearbyInteriorNpc,
+  getInteriorRoomAt,
   stepPlayerInInterior,
 } from '../src/world/interiors';
 
@@ -744,35 +746,60 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(lFoot.y).toBeLessThan(-0.3);
   });
 
-  it('supports entering building interiors, finding indoor NPCs, and solid wall/furniture/NPC collisions', () => {
+  it('supports multi-room building interiors, valid 3D prop GLBs, doorway traversal, and solid wall/furniture/NPC collisions', () => {
+    // 1. All 30 CC0 interior furniture/prop GLBs exist, are valid binary glTF, and avoid slow transmission passes
+    const propsDir = path.resolve(__dirname, '../public/assets/props');
+    const dec = new TextDecoder();
+    expect(INTERIOR_PROP_KINDS.length).toBe(30);
+    for (const kind of INTERIOR_PROP_KINDS) {
+      const buf = fs.readFileSync(path.resolve(propsDir, `${kind}.glb`));
+      expect(buf.byteLength, `${kind}.glb non-empty`).toBeGreaterThan(5_000);
+      expect(dec.decode(buf.subarray(0, 4)), `${kind}.glb magic`).toBe('glTF');
+      const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const jsonLen = view.getUint32(12, true);
+      const gltf = JSON.parse(dec.decode(buf.subarray(20, 20 + jsonLen)));
+      expect(gltf.extensionsUsed ?? []).not.toContain('KHR_materials_transmission');
+    }
+
+    // 2. Outdoor doorway detection at real Hotel Solaire facade
     const hotel = INTERIORS.find((v) => v.id === 'hotel-solaire')!;
     expect(findNearbyBuildingEntrance(hotel.entranceX + 0.5, hotel.entranceZ)?.id).toBe('hotel-solaire');
     expect(findNearbyBuildingEntrance(0, 0)).toBeNull();
 
-    // Walk inside Hotel Solaire Lobby
+    // 3. Multi-room traversal: start in Grand Atrium, walk North through suite archway into Penthouse Suite
     const p = createInitialPlayerState(null);
     p.x = hotel.spawnX;
     p.y = INTERIOR_ORIGIN_Y;
     p.z = hotel.spawnZ;
     p.yaw = hotel.spawnYaw;
+    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('atrium');
 
-    // Walking into the north wall must clamp cleanly inside the room
-    for (let i = 0; i < 180; i++) {
+    for (let i = 0; i < 190; i++) {
       stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
     }
     expect(p.y).toBeCloseTo(INTERIOR_ORIGIN_Y, 3);
-    expect(p.z).toBeGreaterThanOrEqual(-hotel.depth * 0.5 + 0.5);
+    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('suite');
 
-    // Walking straight into the central fountain collider must stay outside it
-    const fountain = hotel.colliders[2];
-    p.x = 0;
-    p.z = 3.5;
-    for (let i = 0; i < 60; i++) {
-      stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
+    // 4. Walk East through the Atrium -> Ocean Cocktail Lounge brass archway (z = 4.0)
+    p.x = 6.0;
+    p.z = 4.0;
+    for (let i = 0; i < 120; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 0, right: 1, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
     }
-    expect(p.z).toBeGreaterThanOrEqual(fountain.maxZ + 0.4);
+    expect(getInteriorRoomAt(hotel, p.x, p.z).id).toBe('lounge');
 
-    // Approaching an indoor NPC finds them for dialogue and prevents walking through them
+    // 5. Walking into solid interior partition wall (x = 10 at z = 9.0, outside the z: 1.5..6.5 doorway) is blocked!
+    p.x = 8.5;
+    p.z = 9.0;
+    for (let i = 0; i < 80; i++) {
+      stepPlayerInInterior(p, hotel, { forward: 0, right: 1, sprint: true, jump: false, cameraYaw: 0 }, 1 / 60);
+    }
+    expect(p.x).toBeLessThanOrEqual(9.7);
+
+    // 6. Standing at Ocean Cocktail Lounge mahogany bar reaches Bartender Mateo across the counter
+    expect(findNearbyInteriorNpc(hotel, 19.0, 2.6)?.id).toBe('solaire-bartender');
+
+    // 7. Indoor NPC bodies stay solid (cannot walk through them)
     const npc = hotel.npcs[2]; // Camila
     p.x = npc.x;
     p.z = npc.z + 1.4;
@@ -781,8 +808,5 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
       stepPlayerInInterior(p, hotel, { forward: 1, right: 0, sprint: false, jump: false, cameraYaw: 0 }, 1 / 60);
     }
     expect(Math.hypot(p.x - npc.x, p.z - npc.z)).toBeGreaterThanOrEqual(0.8);
-
-    // Standing right across the bar counter still reaches Bartender Mateo for ordering drinks
-    expect(findNearbyInteriorNpc(hotel, 6.4, -4.7)?.id).toBe('solaire-bartender');
   });
 });

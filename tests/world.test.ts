@@ -103,9 +103,10 @@ describe('Sol Coast World Blueprint', () => {
     }
   });
 
-  it('places every enterable building doorway on dry sidewalk clear of building colliders', () => {
+  it('bolts every enterable storefront flush onto a real building facade with dry sidewalk access and 3+ connected rooms', () => {
     expect(INTERIORS.length).toBeGreaterThanOrEqual(4);
     for (const venue of INTERIORS) {
+      // Sidewalk doorway is on dry land and clear of building colliders
       expect(isDeepWater(venue.entranceX, venue.entranceZ), `${venue.id} entrance in water`).toBe(false);
       for (const box of blueprint.colliders) {
         expect(
@@ -113,10 +114,24 @@ describe('Sol Coast World Blueprint', () => {
           `${venue.id} entrance overlapping building collider`,
         ).toBe(false);
       }
-      // Verify interior spawn & exit are cleanly inside room bounds
-      expect(Math.abs(venue.spawnX)).toBeLessThan(venue.width * 0.5 - 1);
-      expect(Math.abs(venue.spawnZ)).toBeLessThan(venue.depth * 0.5 - 1);
-      expect(venue.npcs.length).toBeGreaterThanOrEqual(3);
+
+      // Storefront wall must be bolted flush against an ACTUAL city building (never an open courtyard gap!)
+      const sf = venue.storefront;
+      const attachedBuilding = blueprint.buildings.find((b) => {
+        const edgeX = sf.facingSignX === 1 ? b.collider.maxX : b.collider.minX;
+        return (
+          Math.abs(edgeX - sf.wallX) < 0.35 &&
+          sf.centerZ > b.collider.minZ + 3 &&
+          sf.centerZ < b.collider.maxZ - 3
+        );
+      });
+      expect(attachedBuilding, `${venue.id} storefront must sit flush on a real building facade`).toBeDefined();
+
+      // Multi-room architecture: at least 3 distinct rooms, 2+ connecting doorways, rich 3D props, and 4+ NPCs
+      expect(venue.rooms.length, `${venue.id} multi-room count`).toBeGreaterThanOrEqual(3);
+      expect(venue.doorways.length, `${venue.id} doorways`).toBeGreaterThanOrEqual(2);
+      expect(venue.props.length, `${venue.id} 3D props`).toBeGreaterThanOrEqual(25);
+      expect(venue.npcs.length, `${venue.id} NPCs`).toBeGreaterThanOrEqual(4);
     }
   });
 });

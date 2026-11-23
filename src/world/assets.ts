@@ -13,6 +13,71 @@ export type BoatModelKind =
   | 'watertaxi'
   | 'cruiseship';
 
+export type InteriorPropKind =
+  | 'sofa_luxury'
+  | 'sofa_club'
+  | 'lounge_chair'
+  | 'armchair'
+  | 'bar_stool'
+  | 'dining_chair'
+  | 'gallery_bench'
+  | 'coffee_table'
+  | 'bistro_table'
+  | 'dining_table'
+  | 'console_table'
+  | 'cabinet'
+  | 'bed_suite'
+  | 'display_shelves'
+  | 'metal_shelves'
+  | 'chandelier'
+  | 'pendant_lamp'
+  | 'stage_lights'
+  | 'potted_plant_1'
+  | 'potted_plant_2'
+  | 'coffee_cart'
+  | 'chalkboard'
+  | 'wine_bottles'
+  | 'cake_display'
+  | 'boombox'
+  | 'marble_bust'
+  | 'bronze_shark'
+  | 'grandfather_clock'
+  | 'spray_paint'
+  | 'ornate_mirror';
+
+export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
+  'sofa_luxury',
+  'sofa_club',
+  'lounge_chair',
+  'armchair',
+  'bar_stool',
+  'dining_chair',
+  'gallery_bench',
+  'coffee_table',
+  'bistro_table',
+  'dining_table',
+  'console_table',
+  'cabinet',
+  'bed_suite',
+  'display_shelves',
+  'metal_shelves',
+  'chandelier',
+  'pendant_lamp',
+  'stage_lights',
+  'potted_plant_1',
+  'potted_plant_2',
+  'coffee_cart',
+  'chalkboard',
+  'wine_bottles',
+  'cake_display',
+  'boombox',
+  'marble_bust',
+  'bronze_shark',
+  'grandfather_clock',
+  'spray_paint',
+  'ornate_mirror',
+];
+
 export interface LoadedPbrTextures {
   map: THREE.Texture;
   normalMap: THREE.Texture;
@@ -556,4 +621,45 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
       return g.scene.clone(true);
     },
   };
+}
+
+/**
+ * Loads all 30 CC0 photorealistic PBR interior furniture & prop GLBs in parallel
+ * without blocking initial outdoor world rendering.
+ */
+export async function loadInteriorPropAssets(): Promise<Map<InteriorPropKind, THREE.Group>> {
+  const gltfLoader = new GLTFLoader();
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath('/assets/draco/');
+  gltfLoader.setDRACOLoader(dracoLoader);
+
+  const loadOne = (kind: InteriorPropKind): Promise<[InteriorPropKind, THREE.Group | null]> =>
+    new Promise((resolve) => {
+      gltfLoader.load(
+        `/assets/props/${kind}.glb`,
+        (gltf) => {
+          gltf.scene.traverse((obj) => {
+            if (obj instanceof THREE.Mesh) {
+              obj.castShadow = false;
+              obj.receiveShadow = false;
+            }
+          });
+          resolve([kind, gltf.scene]);
+        },
+        undefined,
+        (err) => {
+          console.warn(`[SolCoast] Could not load interior prop ${kind}.glb:`, err);
+          resolve([kind, null]);
+        },
+      );
+    });
+
+  const entries = await Promise.all(INTERIOR_PROP_KINDS.map(loadOne));
+  dracoLoader.dispose();
+
+  const map = new Map<InteriorPropKind, THREE.Group>();
+  for (const [kind, scene] of entries) {
+    if (scene) map.set(kind, scene);
+  }
+  return map;
 }

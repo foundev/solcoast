@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clamp, forwardFromYaw, lerp, lerpAngle, wrapAngle } from '../core/math';
 import type { PlayerState } from '../entities/player';
 import type { VehicleState } from '../entities/vehicle';
-import type { InteriorDef } from '../world/interiors';
+import { getInteriorRoomAt, type InteriorDef } from '../world/interiors';
 
 export type CameraMode = 'chase' | 'far' | 'hood';
 
@@ -21,6 +21,10 @@ export class CameraController {
 
   public addImpactShake(strength: number): void {
     this.shakeIntensity = Math.min(0.65, Math.max(this.shakeIntensity, strength));
+  }
+
+  public snap(): void {
+    this.initialized = false;
   }
 
   public cycleMode(): CameraMode {
@@ -113,11 +117,19 @@ export class CameraController {
       let pz = player.z - camFwd.z * horiz;
 
       if (activeInterior) {
-        const padX = activeInterior.width * 0.5 - 0.65;
-        const padZ = activeInterior.depth * 0.5 - 0.65;
-        px = clamp(px, -padX, padX);
-        pz = clamp(pz, -padZ, padZ);
-        py = clamp(py, player.y + 0.9, player.y + activeInterior.height - 0.55);
+        const room = getInteriorRoomAt(activeInterior, player.x, player.z);
+        const camRoom = getInteriorRoomAt(activeInterior, px, pz);
+        const camInsideRoom =
+          px >= camRoom.minX + 0.45 &&
+          px <= camRoom.maxX - 0.45 &&
+          pz >= camRoom.minZ + 0.45 &&
+          pz <= camRoom.maxZ - 0.45;
+        if (!camInsideRoom) {
+          px = clamp(px, room.minX + 0.55, room.maxX - 0.55);
+          pz = clamp(pz, room.minZ + 0.55, room.maxZ - 0.55);
+        }
+        const ceilH = Math.min(room.height, camRoom.height);
+        py = clamp(py, player.y + 0.9, player.y + ceilH - 0.5);
       }
 
       desiredPos = new THREE.Vector3(px, py, pz);

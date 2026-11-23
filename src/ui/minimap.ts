@@ -112,33 +112,32 @@ export class MinimapRenderer {
     const s = this.size;
     const half = s * 0.5;
 
-    // Dedicated crisp Interior Floorplan Minimap when inside a building!
+    // Dedicated crisp Multi-Room Interior Floorplan Minimap when inside a building!
     if (activeInterior) {
-      ctx.fillStyle = '#0e1320';
+      ctx.fillStyle = '#0c101b';
       ctx.fillRect(0, 0, s, s);
-      const roomScale = (s - 34) / Math.max(activeInterior.width, activeInterior.depth);
-      const ix = (wx: number) => half + wx * roomScale;
-      const iz = (wz: number) => half + wz * roomScale;
 
-      // Floor fill + room wall outline
-      ctx.fillStyle = '#20283d';
-      ctx.fillRect(
-        ix(-activeInterior.width * 0.5),
-        iz(-activeInterior.depth * 0.5),
-        activeInterior.width * roomScale,
-        activeInterior.depth * roomScale,
-      );
-      ctx.strokeStyle = '#6ec6ff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(
-        ix(-activeInterior.width * 0.5),
-        iz(-activeInterior.depth * 0.5),
-        activeInterior.width * roomScale,
-        activeInterior.depth * roomScale,
-      );
+      const spanX = activeInterior.maxX - activeInterior.minX;
+      const spanZ = activeInterior.maxZ - activeInterior.minZ;
+      const midX = (activeInterior.minX + activeInterior.maxX) * 0.5;
+      const midZ = (activeInterior.minZ + activeInterior.maxZ) * 0.5;
+      const roomScale = (s - 34) / Math.max(spanX, spanZ);
+      const ix = (wx: number) => half + (wx - midX) * roomScale;
+      const iz = (wz: number) => half + 6 + (wz - midZ) * roomScale;
 
-      // Furniture / counter colliders
-      ctx.fillStyle = 'rgba(180, 198, 224, 0.35)';
+      // 1. Each connected room shaded with its own distinct tint
+      for (const room of activeInterior.rooms) {
+        ctx.fillStyle = room.floorMapTint;
+        ctx.fillRect(
+          ix(room.minX),
+          iz(room.minZ),
+          (room.maxX - room.minX) * roomScale,
+          (room.maxZ - room.minZ) * roomScale,
+        );
+      }
+
+      // 2. Furniture / counter / sculpture colliders
+      ctx.fillStyle = 'rgba(200, 214, 238, 0.28)';
       for (const box of activeInterior.colliders) {
         ctx.fillRect(
           ix(box.minX),
@@ -148,33 +147,51 @@ export class MinimapRenderer {
         );
       }
 
-      // Exit door marker (mint green)
+      // 3. Solid perimeter & interior partition walls (leaves open doorways visible!)
+      ctx.fillStyle = '#7cd0ff';
+      for (const wall of activeInterior.walls) {
+        const wPx = Math.max(1.8, (wall.maxX - wall.minX) * roomScale);
+        const hPx = Math.max(1.8, (wall.maxZ - wall.minZ) * roomScale);
+        ctx.fillRect(ix(wall.minX), iz(wall.minZ), wPx, hPx);
+      }
+
+      // 4. Subtle room labels
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+      ctx.font = 'bold 7px system-ui';
+      ctx.textAlign = 'center';
+      for (const room of activeInterior.rooms) {
+        const rcx = ix((room.minX + room.maxX) * 0.5);
+        const rcz = iz((room.minZ + room.maxZ) * 0.5);
+        ctx.fillText(room.shortLabel, rcx, rcz + 2);
+      }
+
+      // 5. Exit door marker (mint green)
       ctx.fillStyle = '#46f7b4';
       ctx.fillRect(ix(activeInterior.exitX) - 7, iz(activeInterior.exitZ) - 3, 14, 6);
 
-      // Indoor NPCs (gold dots)
+      // 6. Indoor NPCs (gold dots)
       ctx.fillStyle = '#ffd166';
       for (const npc of activeInterior.npcs) {
         ctx.beginPath();
-        ctx.arc(ix(npc.x), iz(npc.z), 3.6, 0, Math.PI * 2);
+        ctx.arc(ix(npc.x), iz(npc.z), 3.3, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Player arrow inside floorplan
+      // 7. Player directional arrow
       ctx.save();
       ctx.translate(ix(player.x), iz(player.z));
       ctx.rotate(player.yaw);
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
       ctx.moveTo(0, -6);
-      ctx.lineTo(4.5, 4.5);
-      ctx.lineTo(0, 2);
-      ctx.lineTo(-4.5, 4.5);
+      ctx.lineTo(4.2, 4.2);
+      ctx.lineTo(0, 1.8);
+      ctx.lineTo(-4.2, 4.2);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
 
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillStyle = 'rgba(255,255,255,0.88)';
       ctx.font = 'bold 9px system-ui';
       ctx.textAlign = 'center';
       ctx.fillText(activeInterior.name.toUpperCase(), half, 12);
