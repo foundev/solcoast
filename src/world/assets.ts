@@ -455,52 +455,206 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
 }
 
 /**
- * Applies authentic 5-star hotel staff uniforms (tailored suit/dress tints + bone-parented
- * 3D uniform gear: crimson bellhop pillbox cap & brass buttons, maid white apron & headband,
- * concierge gold nametag, bartender/waiter bowtie, and security badge & dark shades).
+ * Applies authentic 5-star hotel staff uniforms & tailored suits:
+ * - Strips casual streetwear diffuse/roughness textures (`map = null`) and casual glasses so NO
+ *   t-shirts, hoodies, or beachwear bleed through
+ * - Tailors crisp wool/cotton fabric colors onto top, trousers & polished leather dress shoes
+ * - Mounts sculpted 3D suit lapels, crisp white shirt V-fronts, collars, neckties/bowties,
+ *   pocket squares, gold name badges, bellhop pillbox caps, and maid aprons directly to rig bones!
  */
-function styleUniformedStaff(avatarRoot: THREE.Object3D, uniform: NpcUniformKind): void {
+function styleUniformedStaff(
+  avatarRoot: THREE.Object3D,
+  uniform: NpcUniformKind,
+  variantIndex = 0,
+): void {
   const palette: Record<NpcUniformKind, { top: number; bottom: number; shoe: number }> = {
-    concierge: { top: 0x1a2844, bottom: 0x191d28, shoe: 0x14151a },
-    bellhop: { top: 0x8f192b, bottom: 0x1a1c24, shoe: 0x141418 },
-    maid: { top: 0x263447, bottom: 0x1f2a38, shoe: 0x16181e },
-    bartender: { top: 0xf4f5f8, bottom: 0x16181f, shoe: 0x14151a },
-    waiter: { top: 0xf6f6f8, bottom: 0x171920, shoe: 0x14151a },
-    security: { top: 0x151820, bottom: 0x12151c, shoe: 0x101116 },
+    concierge: { top: 0x162238, bottom: 0x131c2e, shoe: 0x111216 },
+    bellhop: { top: 0x8e182a, bottom: 0x171922, shoe: 0x111216 },
+    maid: { top: 0x1f2d42, bottom: 0x1a2638, shoe: 0x14161c },
+    bartender: { top: 0x161922, bottom: 0x12141b, shoe: 0x111216 },
+    waiter: { top: 0xf2f3f5, bottom: 0x14161e, shoe: 0x111216 },
+    security: { top: 0x13161e, bottom: 0x10131a, shoe: 0x0f1014 },
   };
   const pal = palette[uniform];
+  const hairTints = [0x231b16, 0x5c3a24, 0x9c7244, 0x1c1c22, 0x6b3522, 0x3b281c];
+  const hairTint = hairTints[Math.abs(variantIndex) % hairTints.length];
 
   avatarRoot.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !(obj.material instanceof THREE.MeshStandardMaterial)) return;
-    if (/outfit_top|wolf3d_outfit_top/i.test(obj.name)) {
+    if (!(obj instanceof THREE.Mesh)) return;
+    // Hide casual streetwear glasses on uniformed staff (only security wears dark executive shades)
+    if (/glasses/i.test(obj.name)) {
+      obj.visible = false;
+      return;
+    }
+    if (!(obj.material instanceof THREE.MeshStandardMaterial)) return;
+    if (/hair/i.test(obj.name)) {
       const m = obj.material.clone();
+      m.color.setHex(hairTint);
+      obj.material = m;
+    } else if (/outfit_top|wolf3d_outfit_top/i.test(obj.name)) {
+      const m = obj.material.clone();
+      m.map = null;
+      m.roughnessMap = null;
+      m.metalnessMap = null;
       m.color.setHex(pal.top);
       m.roughness = 0.72;
+      m.metalness = 0.04;
+      m.needsUpdate = true;
       obj.material = m;
     } else if (/outfit_bottom|wolf3d_outfit_bottom/i.test(obj.name)) {
       const m = obj.material.clone();
+      m.map = null;
+      m.roughnessMap = null;
+      m.metalnessMap = null;
       m.color.setHex(pal.bottom);
-      m.roughness = 0.75;
+      m.roughness = 0.76;
+      m.metalness = 0.03;
+      m.needsUpdate = true;
       obj.material = m;
     } else if (/footwear/i.test(obj.name)) {
       const m = obj.material.clone();
+      m.map = null;
+      m.roughnessMap = null;
       m.color.setHex(pal.shoe);
-      m.roughness = 0.35;
+      m.roughness = 0.24;
+      m.metalness = 0.12;
+      m.needsUpdate = true;
       obj.material = m;
     }
   });
 
   const goldMat = new THREE.MeshStandardMaterial({ color: 0xffca4b, metalness: 0.94, roughness: 0.18 });
-  const whiteCloth = new THREE.MeshStandardMaterial({ color: 0xfafaf8, roughness: 0.85 });
-  const crimsonCloth = new THREE.MeshStandardMaterial({ color: 0x92192c, roughness: 0.72 });
-  const blackCloth = new THREE.MeshStandardMaterial({ color: 0x14161d, roughness: 0.55 });
+  const silverMat = new THREE.MeshStandardMaterial({ color: 0xd8dee6, metalness: 0.92, roughness: 0.18 });
+  const whiteCloth = new THREE.MeshStandardMaterial({ color: 0xfafaf8, roughness: 0.82 });
+  const crimsonCloth = new THREE.MeshStandardMaterial({ color: 0x8e182a, roughness: 0.7 });
+  const navySuit = new THREE.MeshStandardMaterial({ color: 0x162238, roughness: 0.68 });
+  const blackSuit = new THREE.MeshStandardMaterial({ color: 0x12141c, roughness: 0.62 });
+  const burgundySilk = new THREE.MeshStandardMaterial({ color: 0x7d172b, roughness: 0.35 });
 
   const headBone = avatarRoot.getObjectByName('Head');
+  const neckBone = avatarRoot.getObjectByName('Neck');
   const chestBone = avatarRoot.getObjectByName('Spine2');
   const waistBone = avatarRoot.getObjectByName('Spine') ?? avatarRoot.getObjectByName('Hips');
 
-  if (uniform === 'bellhop') {
-    // Classic Art Deco crimson & gold pillbox bellhop cap on Head!
+  // Helper: adds crisp white dress shirt V-placket + collar + sculpted suit lapels + pocket square!
+  const addTailoredSuitFront = (
+    lapelMat: THREE.Material,
+    tieKind: 'necktie-burgundy' | 'necktie-black' | 'bowtie',
+    withPocketSquare: boolean,
+  ) => {
+    if (neckBone) {
+      // Crisp folded white dress shirt collar wrapping neck
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.076, 0.045, 14), whiteCloth);
+      collar.position.set(0, 0.015, 0.005);
+      neckBone.add(collar);
+    }
+    if (!chestBone) return;
+    const suitFront = new THREE.Group();
+
+    // Crisp white dress shirt V-front peeking inside the suit jacket
+    const shirtFront = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.21, 0.025), whiteCloth);
+    shirtFront.position.set(0, 0.115, 0.112);
+    suitFront.add(shirtFront);
+
+    // Sculpted tailored left & right suit jacket lapels framing the white shirt
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.23, 0.028), lapelMat);
+      lapel.position.set(side * 0.062, 0.105, 0.118);
+      lapel.rotation.z = side * -0.18;
+      suitFront.add(lapel);
+    }
+
+    // Two subtle front jacket buttons
+    for (const by of [-0.01, -0.065]) {
+      const btn = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), blackSuit);
+      btn.position.set(0, by, 0.126);
+      suitFront.add(btn);
+    }
+
+    // Folded crisp white silk breast pocket square
+    if (withPocketSquare) {
+      const sq = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.016, 0.012), whiteCloth);
+      sq.position.set(0.088, 0.115, 0.122);
+      sq.rotation.z = 0.08;
+      suitFront.add(sq);
+    }
+
+    // Silk necktie or black tuxedo bowtie
+    if (tieKind === 'bowtie') {
+      const bow = new THREE.Group();
+      bow.position.set(0, 0.205, 0.128);
+      const wingL = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackSuit);
+      wingL.position.x = -0.024;
+      wingL.rotation.z = 0.16;
+      const wingR = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackSuit);
+      wingR.position.x = 0.024;
+      wingR.rotation.z = -0.16;
+      const knot = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.016), blackSuit);
+      bow.add(wingL, wingR, knot);
+      suitFront.add(bow);
+    } else {
+      const tieMat = tieKind === 'necktie-burgundy' ? burgundySilk : blackSuit;
+      const knot = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.024, 0.018), tieMat);
+      knot.position.set(0, 0.202, 0.128);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.185, 0.014), tieMat);
+      blade.position.set(0, 0.10, 0.127);
+      suitFront.add(knot, blade);
+    }
+
+    chestBone.add(suitFront);
+  };
+
+  if (uniform === 'concierge') {
+    // Crisp 5-star Navy Tailored Suit + White Collared Shirt + Burgundy Silk Tie + Gold Concierge Badge!
+    addTailoredSuitFront(navySuit, 'necktie-burgundy', true);
+    if (chestBone) {
+      const tag = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.022, 0.01), goldMat);
+      tag.position.set(-0.085, 0.118, 0.128);
+      const pin = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 6), goldMat);
+      pin.position.set(0.068, 0.155, 0.13);
+      chestBone.add(tag, pin);
+    }
+  } else if (uniform === 'bartender') {
+    // Sleek Black Formal Vest/Suit + Crisp White Shirt + Black Bowtie + Silver Buttons + Black Bar Apron!
+    addTailoredSuitFront(blackSuit, 'bowtie', true);
+    if (chestBone) {
+      for (const by of [0.04, 0.0, -0.04]) {
+        const sb = new THREE.Mesh(new THREE.SphereGeometry(0.0085, 8, 6), silverMat);
+        sb.position.set(0, by, 0.129);
+        chestBone.add(sb);
+      }
+    }
+    if (waistBone) {
+      const bistroApron = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.44, 0.024), blackSuit);
+      bistroApron.position.set(0, -0.14, 0.13);
+      waistBone.add(bistroApron);
+    }
+  } else if (uniform === 'waiter') {
+    // Classic 5-Star White Tuxedo Dinner Jacket + Satin Black Lapels + Black Bowtie + Gold Service Pin!
+    addTailoredSuitFront(blackSuit, 'bowtie', true);
+    if (chestBone) {
+      const pin = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.018, 0.01), goldMat);
+      pin.position.set(-0.085, 0.118, 0.128);
+      chestBone.add(pin);
+    }
+  } else if (uniform === 'security') {
+    // Executive Black Suit + White Shirt + Black Tie + Dark Security Shades + Gold Shield Badge!
+    addTailoredSuitFront(blackSuit, 'necktie-black', false);
+    if (headBone) {
+      const acc = getSharedPedAccessories();
+      const shades = new THREE.Group();
+      shades.position.set(0, 0.088, 0.104);
+      shades.add(new THREE.Mesh(acc.shadesLensGeo, acc.lensMat));
+      headBone.add(shades);
+    }
+    if (chestBone) {
+      const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.02, 0.01, 6), goldMat);
+      badge.rotation.x = Math.PI * 0.5;
+      badge.position.set(-0.085, 0.12, 0.13);
+      chestBone.add(badge);
+    }
+  } else if (uniform === 'bellhop') {
+    // Classic Art Deco Crimson Bellhop Tunic + Gold Standing Collar + Brass Buttons + Pillbox Cap!
     if (headBone) {
       const cap = new THREE.Group();
       cap.position.set(0, 0.175, -0.005);
@@ -513,23 +667,29 @@ function styleUniformedStaff(avatarRoot: THREE.Object3D, uniform: NpcUniformKind
       cap.add(crown, band, topTrim);
       headBone.add(cap);
     }
-    // Double-breasted gleaming gold brass coat buttons & shoulder epaulettes
+    if (neckBone) {
+      const standCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.08, 0.05, 14), crimsonCloth);
+      standCollar.position.set(0, 0.018, 0.004);
+      const collarTrim = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.01, 14), goldMat);
+      collarTrim.position.set(0, 0.04, 0.004);
+      neckBone.add(standCollar, collarTrim);
+    }
     if (chestBone) {
       const gear = new THREE.Group();
       for (const sx of [-0.048, 0.048]) {
-        for (const by of [0.02, 0.08, 0.14]) {
+        for (const by of [0.01, 0.075, 0.14]) {
           const btn = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), goldMat);
-          btn.position.set(sx, by, 0.115);
+          btn.position.set(sx, by, 0.122);
           gear.add(btn);
         }
-        const ep = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.014, 0.045), goldMat);
+        const ep = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.015, 0.048), goldMat);
         ep.position.set(sx * 3.1, 0.21, 0.0);
         gear.add(ep);
       }
       chestBone.add(gear);
     }
   } else if (uniform === 'maid') {
-    // Crisp white hotel housekeeping pleated headband on Head + crisp white apron on waist!
+    // Classic 5-Star Housekeeping Uniform: White Peter Pan Collar + White Bib/Skirt Apron + Headband!
     if (headBone) {
       const band = new THREE.Mesh(
         new THREE.TorusGeometry(0.108, 0.016, 8, 18, Math.PI),
@@ -539,60 +699,21 @@ function styleUniformedStaff(avatarRoot: THREE.Object3D, uniform: NpcUniformKind
       band.rotation.x = -0.3;
       headBone.add(band);
     }
+    if (neckBone) {
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.105, 0.032, 16), whiteCloth);
+      collar.position.set(0, 0.005, 0.01);
+      neckBone.add(collar);
+    }
     if (waistBone) {
       const apron = new THREE.Group();
-      const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.36, 0.025), whiteCloth);
-      skirt.position.set(0, -0.08, 0.13);
+      const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.38, 0.025), whiteCloth);
+      skirt.position.set(0, -0.09, 0.13);
       const bib = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.022), whiteCloth);
       bib.position.set(0, 0.18, 0.125);
       const sash = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.035, 0.24), whiteCloth);
       sash.position.set(0, 0.09, 0.01);
       apron.add(skirt, bib, sash);
       waistBone.add(apron);
-    }
-  } else if (uniform === 'concierge') {
-    // Gleaming gold lapel nametag & tie bar
-    if (chestBone) {
-      const tag = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.02, 0.008), goldMat);
-      tag.position.set(-0.075, 0.12, 0.12);
-      const lapelPin = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 6), goldMat);
-      lapelPin.position.set(0.06, 0.14, 0.12);
-      chestBone.add(tag, lapelPin);
-    }
-  } else if (uniform === 'bartender' || uniform === 'waiter') {
-    // Classic black bowtie at collar + dark service apron
-    if (chestBone) {
-      const bow = new THREE.Group();
-      bow.position.set(0, 0.205, 0.095);
-      const wingL = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackCloth);
-      wingL.position.x = -0.024;
-      wingL.rotation.z = 0.18;
-      const wingR = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.022, 0.012), blackCloth);
-      wingR.position.x = 0.024;
-      wingR.rotation.z = -0.18;
-      const knot = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.016), blackCloth);
-      bow.add(wingL, wingR, knot);
-      chestBone.add(bow);
-    }
-    if (waistBone) {
-      const bistroApron = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.42, 0.024), blackCloth);
-      bistroApron.position.set(0, -0.12, 0.13);
-      waistBone.add(bistroApron);
-    }
-  } else if (uniform === 'security') {
-    // Dark security shades + gleaming gold security shield badge
-    if (headBone) {
-      const acc = getSharedPedAccessories();
-      const shades = new THREE.Group();
-      shades.position.set(0, 0.088, 0.104);
-      shades.add(new THREE.Mesh(acc.shadesLensGeo, acc.lensMat));
-      headBone.add(shades);
-    }
-    if (chestBone) {
-      const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.01, 6), goldMat);
-      badge.rotation.x = Math.PI * 0.5;
-      badge.position.set(-0.075, 0.125, 0.122);
-      chestBone.add(badge);
     }
   }
 }
@@ -771,7 +892,7 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     if (isProtagonist) {
       equipProtagonistStreetGear(cloned);
     } else if (uniform) {
-      styleUniformedStaff(cloned, uniform);
+      styleUniformedStaff(cloned, uniform, variantIndex);
     } else {
       styleCivilianPedestrian(cloned, variantIndex);
     }
@@ -807,7 +928,20 @@ export async function loadGameAssets(renderer: THREE.WebGLRenderer): Promise<Loa
     clonePedestrian(variantIndex = 0, uniform?: NpcUniformKind) {
       if (pedestrianGltfs.length === 0 || mocapClips.length === 0) return null;
       const idx = Math.abs(variantIndex);
-      const gltf = pedestrianGltfs[idx % pedestrianGltfs.length];
+      // For uniformed hotel staff, pick ONLY silhouettes that match real suits/uniforms
+      // (av6 [idx 4] & av2 [idx 1] have full long-sleeve jackets + full trousers; av1 [0] & av3 [2] have dresses for maids!)
+      let chosenIdx = idx % pedestrianGltfs.length;
+      if (uniform && pedestrianGltfs.length >= 6) {
+        if (uniform === 'maid') {
+          chosenIdx = idx % 2 === 0 ? 0 : 2; // av1 / av3 tailored dress silhouette
+        } else if (uniform === 'concierge') {
+          chosenIdx = 4; // av6 clean full long-sleeve tailored suit silhouette (no beard/glasses)
+        } else {
+          // bellhop, bartender, waiter, security -> strictly long-sleeve jacket + full trousers (av2 / av6)
+          chosenIdx = idx % 2 === 0 ? 1 : 4;
+        }
+      }
+      const gltf = pedestrianGltfs[chosenIdx];
       return prepareAvatar(gltf, false, idx, uniform);
     },
     cloneFerrari() {
