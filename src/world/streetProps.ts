@@ -16,10 +16,12 @@ import {
   createTactilePadTexture,
   type SidewalkDistrictStyle,
 } from './textures';
+import type { InteriorPropKind } from './assets';
 import type { CityBlueprint } from './types';
 
 export interface StreetPropsHandles {
   root: THREE.Group;
+  attachGltfProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   update: (elapsed: number, nightFactor: number) => void;
 }
 
@@ -598,6 +600,11 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
   }
 
   // 6b. Beach Loungers & Colorful Towels resting flush on the sculpted Sol Beach dunes
+  const fallbackLoungersRoot = new THREE.Group();
+  root.add(fallbackLoungersRoot);
+  const gltfStreetPropsRoot = new THREE.Group();
+  root.add(gltfStreetPropsRoot);
+
   const loungerFrameMat = new THREE.MeshStandardMaterial({ color: 0xf4f6fa, roughness: 0.45 });
   for (const lg of blueprint.loungers) {
     const towelMat = new THREE.MeshStandardMaterial({ color: lg.color, roughness: 0.86 });
@@ -615,7 +622,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
     backrest.position.set(0, 0.44, -0.68);
     backrest.rotation.x = 0.52;
     lounger.add(base, cushion, backrest);
-    root.add(lounger);
+    fallbackLoungersRoot.add(lounger);
   }
 
   // 7. Additive Streetlamp Light Halos (creates real cinematic night atmosphere!)
@@ -678,6 +685,29 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
 
   return {
     root,
+    attachGltfProps(propsMap: Map<InteriorPropKind, THREE.Group>) {
+      const loungerSrc = propsMap.get('prop_beach_lounger');
+      if (loungerSrc) {
+        for (const lg of blueprint.loungers) {
+          const inst = loungerSrc.clone(true);
+          inst.position.set(lg.x, lg.y, lg.z);
+          inst.rotation.y = lg.yaw;
+          const slopeX = getGroundHeight(lg.x + 1, lg.z) - getGroundHeight(lg.x - 1, lg.z);
+          inst.rotation.x = Math.atan2(slopeX, 2) * 0.65;
+          inst.traverse((obj) => {
+            if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
+              if (/TintTowel/i.test(obj.material.name)) {
+                const m = obj.material.clone();
+                m.color.setHex(lg.color);
+                obj.material = m;
+              }
+            }
+          });
+          gltfStreetPropsRoot.add(inst);
+        }
+        fallbackLoungersRoot.visible = false;
+      }
+    },
     update(elapsed: number, nightFactor: number) {
       // Live traffic signal cycle (Green -> Amber -> Red)
       for (const sig of signals) {

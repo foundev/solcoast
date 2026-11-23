@@ -200,12 +200,14 @@ function bootstrap(): void {
     }
   });
 
-  // Load all 47 CC0 & custom Blender interior/fountain/showcase-building GLBs + 8 PBR texture sets immediately!
+  // Load all CC0 & custom Blender interior/fountain/showcase-building/world-prop GLBs + 8 PBR texture sets!
   void loadInteriorPropAssets().then((propsMap) => {
     if (propsMap.size > 0) {
       interiorSystem.attachGltfProps(propsMap);
       cityHandles.attachGltfFountains(propsMap);
       cityHandles.attachShowcaseBuildings(propsMap);
+      cityHandles.attachWorldProps(propsMap);
+      streetProps.attachGltfProps(propsMap);
     }
   });
   void loadInteriorTextures().then((texMap) => {

@@ -68,7 +68,12 @@ export type InteriorPropKind =
   | 'hotel_luggage_cart'
   | 'hotel_room_service_cart'
   | 'hotel_toilet_bidet'
-  | 'hotel_tv_minibar';
+  | 'hotel_tv_minibar'
+  | 'prop_lifeguard_tower'
+  | 'prop_beach_umbrella'
+  | 'prop_beach_lounger'
+  | 'prop_basketball_hoop'
+  | 'prop_lighthouse_pavilion';
 
 export type NpcUniformKind = 'concierge' | 'bellhop' | 'maid' | 'bartender' | 'waiter' | 'security';
 
@@ -128,6 +133,11 @@ export const INTERIOR_PROP_KINDS: InteriorPropKind[] = [
   'hotel_room_service_cart',
   'hotel_toilet_bidet',
   'hotel_tv_minibar',
+  'prop_lifeguard_tower',
+  'prop_beach_umbrella',
+  'prop_beach_lounger',
+  'prop_basketball_hoop',
+  'prop_lighthouse_pavilion',
 ];
 
 export interface LoadedPbrTextures {

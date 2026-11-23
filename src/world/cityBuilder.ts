@@ -42,6 +42,7 @@ export interface CitySceneHandles {
   applyPhotoTextures: (textures: LoadedGameAssets['textures']) => void;
   attachGltfFountains: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   attachShowcaseBuildings: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
+  attachWorldProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   applyShowcaseTextures: (texMap: InteriorTextureMap) => void;
   hideFallbackYachts: () => void;
   updateAnimation: (
@@ -1274,6 +1275,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   midRing.position.set(-335, parkY + 0.065, 25);
   root.add(midRing);
 
+  const fallbackHoopsGroup = new THREE.Group();
+  root.add(fallbackHoopsGroup);
   const hoopPostMat = new THREE.MeshStandardMaterial({ color: 0x222938, metalness: 0.7, roughness: 0.32 });
   const backboardMat = new THREE.MeshStandardMaterial({ color: 0xedf6ff, roughness: 0.18, metalness: 0.1 });
   const rimMat = new THREE.MeshStandardMaterial({ color: 0xff5a22, roughness: 0.35, metalness: 0.6 });
@@ -1284,16 +1287,16 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
 
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 3.6, 8), hoopPostMat);
     post.position.set(-335, parkY + 1.8, 25 + side * 14.4);
-    root.add(post);
+    fallbackHoopsGroup.add(post);
 
     const board = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.15, 0.08), backboardMat);
     board.position.set(-335, parkY + 3.4, 25 + side * 13.7);
-    root.add(board);
+    fallbackHoopsGroup.add(board);
 
     const rim = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 8, 16), rimMat);
     rim.rotation.x = Math.PI * 0.5;
     rim.position.set(-335, parkY + 3.05, 25 + side * 13.3);
-    root.add(rim);
+    fallbackHoopsGroup.add(rim);
   }
 
   // 11. PBR Buildings
@@ -1316,12 +1319,18 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   const showcaseFallbacks = new Map<string, { spec: BuildingSpec; mesh: THREE.Object3D }>();
   const showcaseBuildingsRoot = new THREE.Group();
   root.add(showcaseBuildingsRoot);
+  let fallbackLighthouseMesh: THREE.Object3D | null = null;
+  let fallbackLighthouseSpec: BuildingSpec | null = null;
 
   for (const b of blueprint.buildings) {
     const mesh = buildBuildingMesh(b, facadeCache, neonMaterials, windowMaterials, lobbyGlassMat, hvacMat);
     root.add(mesh);
     if (b.id in SHOWCASE_BUILDING_MAP) {
       showcaseFallbacks.set(b.id, { spec: b, mesh });
+    }
+    if (b.id === 'south-pier-lighthouse') {
+      fallbackLighthouseMesh = mesh;
+      fallbackLighthouseSpec = b;
     }
   }
 
@@ -1407,7 +1416,12 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   if (bulbInst.instanceColor) bulbInst.instanceColor.needsUpdate = true;
   root.add(poleInst, armInst, bulbInst);
 
-  // 14. Beach Lifeguard Towers & Umbrellas
+  // 14. Beach Lifeguard Towers & Umbrellas (primitive fallback hidden once bespoke Blender GLBs attach!)
+  const fallbackBeachPropsRoot = new THREE.Group();
+  root.add(fallbackBeachPropsRoot);
+  const worldPropsGltfRoot = new THREE.Group();
+  root.add(worldPropsGltfRoot);
+
   for (const prop of blueprint.beachProps) {
     const g = new THREE.Group();
     g.position.set(prop.x, prop.y, prop.z);
@@ -1445,7 +1459,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       canopy.castShadow = true;
       g.add(canopy);
     }
-    root.add(g);
+    fallbackBeachPropsRoot.add(g);
   }
 
   // 15. Sculpted Moored & Offshore Yachts
@@ -1634,6 +1648,85 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     bindShowcaseTextures(texMap);
   };
 
+  const attachWorldProps = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
+    const lifeguardSrc = propsMap.get('prop_lifeguard_tower');
+    const umbrellaSrc = propsMap.get('prop_beach_umbrella');
+    let attachedBeach = false;
+
+    if (lifeguardSrc || umbrellaSrc) {
+      for (const prop of blueprint.beachProps) {
+        const src = prop.kind === 'lifeguard' ? lifeguardSrc : umbrellaSrc;
+        if (!src) continue;
+        const inst = src.clone(true);
+        inst.position.set(prop.x, prop.y, prop.z);
+        inst.rotation.y = prop.yaw;
+        const tintName = prop.kind === 'lifeguard' ? 'TintBody' : 'TintCanopy';
+        inst.traverse((obj) => {
+          if (!(obj instanceof THREE.Mesh)) return;
+          obj.castShadow = prop.kind === 'lifeguard';
+          obj.receiveShadow = true;
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          const cloned = mats.map((m) => {
+            if (m instanceof THREE.MeshStandardMaterial && m.name === tintName) {
+              const c = m.clone();
+              c.color.setHex(prop.color);
+              return c;
+            }
+            return m;
+          });
+          obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
+        });
+        worldPropsGltfRoot.add(inst);
+        attachedBeach = true;
+      }
+      if (attachedBeach && lifeguardSrc && umbrellaSrc) {
+        fallbackBeachPropsRoot.visible = false;
+      }
+    }
+
+    const hoopSrc = propsMap.get('prop_basketball_hoop');
+    if (hoopSrc) {
+      for (const side of [-1, 1]) {
+        const inst = hoopSrc.clone(true);
+        inst.position.set(-335, parkY, 25 + side * 14.4);
+        inst.rotation.y = side === -1 ? 0 : Math.PI;
+        inst.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+          }
+        });
+        worldPropsGltfRoot.add(inst);
+      }
+      fallbackHoopsGroup.visible = false;
+    }
+
+    const lhSrc = propsMap.get('prop_lighthouse_pavilion');
+    if (lhSrc && fallbackLighthouseSpec) {
+      const inst = lhSrc.clone(true);
+      inst.position.set(fallbackLighthouseSpec.x, fallbackLighthouseSpec.baseY, fallbackLighthouseSpec.z);
+      inst.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (m instanceof THREE.MeshStandardMaterial && m.name === 'LHBeaconGlow') {
+            neonMaterials.push(m);
+          }
+        }
+      });
+      worldPropsGltfRoot.add(inst);
+      if (fallbackLighthouseMesh) fallbackLighthouseMesh.visible = false;
+      lighthouseBeacon.position.set(
+        fallbackLighthouseSpec.x,
+        fallbackLighthouseSpec.baseY + 13.25,
+        fallbackLighthouseSpec.z,
+      );
+      lighthouseBeacon.scale.setScalar(0.55);
+    }
+  };
+
   const hideFallbackYachts = () => {
     for (const y of yachts) {
       y.group.visible = false;
@@ -1652,6 +1745,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     applyPhotoTextures,
     attachGltfFountains,
     attachShowcaseBuildings,
+    attachWorldProps,
     applyShowcaseTextures,
     hideFallbackYachts,
     updateAnimation,
