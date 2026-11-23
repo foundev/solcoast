@@ -211,8 +211,14 @@ export interface InteriorDef {
 export const INTERIOR_ORIGIN_Y = -60;
 export const FLOOR_STRIDE_Y = 12;
 
-export function getFloorFromPlayerY(playerY: number): number {
-  return Math.max(0, Math.round((playerY - INTERIOR_ORIGIN_Y) / FLOOR_STRIDE_Y));
+export function getFloorFromPlayerY(playerY: number, def?: InteriorDef | null): number {
+  const raw = Math.max(0, Math.round((playerY - INTERIOR_ORIGIN_Y) / FLOOR_STRIDE_Y));
+  if (!def) return raw;
+  let maxFloor = 0;
+  for (const r of def.rooms) {
+    if ((r.floor ?? 0) > maxFloor) maxFloor = r.floor ?? 0;
+  }
+  return clamp(raw, 0, maxFloor);
 }
 
 export function getInteriorFloorLabel(def: InteriorDef, floor: number): string | null {
@@ -2083,7 +2089,7 @@ export function stepPlayerInInterior(
 
   // Tight realistic human torso radius (28cm -> 56cm wide) so furniture never feels like an invisible forcefield!
   const radius = 0.28;
-  const floor = getFloorFromPlayerY(p.y);
+  const floor = getFloorFromPlayerY(p.y, def);
 
   // 2 passes resolve tight corners cleanly across walls, built-ins, and all individual 3D prop OBBs on this floor
   for (let pass = 0; pass < 2; pass++) {
@@ -3791,7 +3797,7 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
       }
 
       // Step living hotel staff patrols (bellhops, maids, room service) & drive real mocap Walk/Idle!
-      const playerFloor = getFloorFromPlayerY(playerY);
+      const playerFloor = getFloorFromPlayerY(playerY, venue.def);
       const prevCoords = venue.npcs.map((h) => ({ x: h.def.x, z: h.def.z }));
       stepInteriorPatrols(venue.def, dt, playerX, playerZ, playerFloor);
 

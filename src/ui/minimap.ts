@@ -124,7 +124,7 @@ export class MinimapRenderer {
       ctx.fillStyle = '#0c101b';
       ctx.fillRect(0, 0, s, s);
 
-      const floor = getFloorFromPlayerY(player.y);
+      const floor = getFloorFromPlayerY(player.y, activeInterior);
       const floorRooms = activeInterior.rooms.filter((r) => (r.floor ?? 0) === floor);
       const roomsToDraw = floorRooms.length > 0 ? floorRooms : activeInterior.rooms;
       const minX = Math.min(...roomsToDraw.map((r) => r.minX));

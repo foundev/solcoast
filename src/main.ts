@@ -425,7 +425,7 @@ function bootstrap(): void {
     // ─── INDOOR BUILDING INTERIOR LOOP ───────────────────────────────────────────
     if (activeInterior) {
       const def = activeInterior;
-      const currentFloor = getFloorFromPlayerY(player.y);
+      const currentFloor = getFloorFromPlayerY(player.y, def);
       const nearExit = currentFloor === 0 && distXZ(player.x, player.z, def.exitX, def.exitZ) <= 2.4;
       const nearbyElevator = nearExit ? null : findNearbyInteriorElevator(def, currentFloor, player.x, player.z);
       const nearbyDoor =
@@ -652,7 +652,7 @@ function bootstrap(): void {
           openDoorIds,
         );
 
-        const updatedFloor = getFloorFromPlayerY(player.y);
+        const updatedFloor = getFloorFromPlayerY(player.y, activeInterior);
         interiorSystem.update(
           elapsed,
           dt,
@@ -790,6 +790,34 @@ function bootstrap(): void {
             ? ` — ${nearbyEntrance.elevators.length} floors connected by brass elevator!`
             : ` — explore all ${nearbyEntrance.rooms.length} rooms & talk to locals with [E]!`;
         hud.showToast(`Entered ${nearbyEntrance.name}${elevHint}`, 'success');
+
+        // Render the newly entered interior immediately and return so outdoor stepPlayerOnFoot
+        // NEVER runs on this frame and pulls player.y upward from INTERIOR_ORIGIN_Y!
+        interiorSystem.update(
+          elapsed,
+          dt,
+          nearbyEntrance.id,
+          player.x,
+          player.z,
+          player.y,
+          openDoorIds,
+          ownedKeycards,
+        );
+        playerMesh.syncFromState(player, elapsed, dt, null, null, false);
+        cameraCtrl.update(camera, dt, player, null, nearbyEntrance);
+        minimap.render(
+          blueprint,
+          player,
+          vehicles,
+          trafficCars,
+          missions,
+          nearbyEntrance,
+          openDoorIds,
+          ownedKeycards,
+        );
+        renderer.render(scene, camera);
+        lastDrawCalls = renderer.info.render.calls;
+        return;
       } else if (activeVehicle) {
         if (Math.abs(activeVehicle.speed) < 10) {
           const exitPos = computeSafeExitPosition(activeVehicle, blueprint.colliders);

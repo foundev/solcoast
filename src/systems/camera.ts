@@ -117,7 +117,7 @@ export class CameraController {
       let pz = player.z - camFwd.z * horiz;
 
       if (activeInterior) {
-        const floor = getFloorFromPlayerY(player.y);
+        const floor = getFloorFromPlayerY(player.y, activeInterior);
         const room = getInteriorRoomAt(activeInterior, player.x, player.z, floor);
         const camRoom = getInteriorRoomAt(activeInterior, px, pz, floor);
         const camInsideRoom =

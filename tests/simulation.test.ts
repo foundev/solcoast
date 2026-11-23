@@ -908,6 +908,12 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     }
     expect(Math.hypot(maid.x - maidStartX, maid.z - maidStartZ)).toBeGreaterThan(1.0);
 
+    // 7c. Floor clamping guarantees single-floor venues & multi-floor venues NEVER float above the top floor!
+    const cafeVenue = INTERIORS.find((v) => v.id === 'cafe-habana')!;
+    expect(getFloorFromPlayerY(0, cafeVenue)).toBe(0);
+    expect(getFloorFromPlayerY(0, hotel)).toBe(2);
+    expect(getFloorFromPlayerY(INTERIOR_ORIGIN_Y, hotel)).toBe(0);
+
     // 8. Indoor NPC bodies stay solid (tight 60cm personal space)
     const npc = hotel.npcs.find((n) => n.id === 'solaire-bellhop')!;
     p.x = npc.x;
