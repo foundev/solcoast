@@ -4,11 +4,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
 import {
+  ENGINE_SYNTH_PROFILES,
   computeSpatialPanGain,
   detectInteriorFootstepSurface,
   detectOutdoorFootstepSurface,
 } from '../src/core/audio';
-import { ENGINE_WORKLET_CODE, WAVEGUIDE_ENGINE_PRESETS } from '../src/core/engineWorklet';
 import { InputManager } from '../src/core/input';
 import { createCoastalBoatFleet, stepBoats } from '../src/entities/boats';
 import { createSculptedCarBodyGeometry, createSculptedCabinGeometry } from '../src/entities/carGeometry';
@@ -1229,16 +1229,13 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
   it('gives all 8 car models distinct performance/sound profiles and simulates real upshifting & downshifting', () => {
     const models = Object.values(MODEL_SPEC_TABLE);
     expect(models.length).toBe(8);
-    // Every model class has its own distinct physical digital-waveguide engine preset!
+    // Every model class has its own distinct unified PeriodicWave + combustion-lope engine voicing
     expect(new Set(models.map((m) => m.engineSound)).size).toBe(8);
-    expect(ENGINE_WORKLET_CODE).toContain('physical-engine-processor');
     for (const m of models) {
-      const preset = WAVEGUIDE_ENGINE_PRESETS[m.engineSound];
-      expect(preset).toBeDefined();
-      if (!preset.isElectric) {
-        expect(preset.firingOffsets.length).toBe(preset.cylinders);
-        expect(preset.headerLengthsM.length).toBe(preset.cylinders);
-      }
+      const voicing = ENGINE_SYNTH_PROFILES[m.engineSound];
+      expect(voicing).toBeDefined();
+      expect(voicing.harmonics.length).toBeGreaterThanOrEqual(3);
+      expect(voicing.redlineHz).toBeGreaterThan(voicing.idleHz);
     }
     // Supercar top speed & EV launch torque clearly beat heavy SUV / Taxi
     expect(MODEL_SPEC_TABLE.ferrari.maxSpeed).toBeGreaterThan(MODEL_SPEC_TABLE.suv.maxSpeed + 25);

@@ -1,6 +1,183 @@
 import type { EngineSoundProfile } from '../entities/vehicle';
-import { ENGINE_WORKLET_CODE, WAVEGUIDE_ENGINE_PRESETS } from './engineWorklet';
 import { clamp, rightFromYaw } from './math';
+
+export interface EngineSynthVoicing {
+  harmonics: number[];
+  idleHz: number;
+  redlineHz: number;
+  bankRatio: number;
+  bankGainIdle: number;
+  bankGainHigh: number;
+  subRatio: number;
+  subLvl: number;
+  lopeRatio: number;
+  lopeDepth: number;
+  resHz: number;
+  mufBase: number;
+  mufSpan: number;
+  baseVol: number;
+  airVol: number;
+  turboVol: number;
+}
+
+/**
+ * Unified Web Audio PeriodicWave + combustion-lope + dual-muffler voicings for all 8 vehicle classes.
+ * Runs identically on both HTTP dev and HTTPS production (no SecureContext-only AudioWorklet divergence).
+ */
+export const ENGINE_SYNTH_PROFILES: Record<EngineSoundProfile, EngineSynthVoicing> = {
+  // Singing Italian V12: warm refined purr at idle, silky harmonic wail climbing toward redline
+  'exotic-v12': {
+    harmonics: [1.0, 0.72, 0.5, 0.32, 0.16, 0.12, 0.05, 0.02],
+    idleHz: 48,
+    redlineHz: 215,
+    bankRatio: 1.5,
+    bankGainIdle: 0.14,
+    bankGainHigh: 0.36,
+    subRatio: 0.5,
+    subLvl: 0.36,
+    lopeRatio: 0.25,
+    lopeDepth: 0.1,
+    resHz: 255,
+    mufBase: 280,
+    mufSpan: 860,
+    baseVol: 0.056,
+    airVol: 0.028,
+    turboVol: 0,
+  },
+  // Deep throaty cross-plane V8: unmistakable chesty idle lope + muscular exhaust rumble
+  'muscle-v8': {
+    harmonics: [1.0, 0.84, 0.44, 0.28, 0.12, 0.06, 0.02],
+    idleHz: 29,
+    redlineHz: 116,
+    bankRatio: 1.026,
+    bankGainIdle: 0.44,
+    bankGainHigh: 0.48,
+    subRatio: 0.5,
+    subLvl: 0.72,
+    lopeRatio: 0.5,
+    lopeDepth: 0.24,
+    resHz: 132,
+    mufBase: 168,
+    mufSpan: 470,
+    baseVol: 0.064,
+    airVol: 0.034,
+    turboVol: 0.007,
+  },
+  // Warm boxer flat-6: distinctive off-beat mid-bass bark without harsh organ intervals
+  flat6: {
+    harmonics: [0.94, 0.78, 0.54, 0.26, 0.16, 0.07, 0.02],
+    idleHz: 40,
+    redlineHz: 172,
+    bankRatio: 1.016,
+    bankGainIdle: 0.38,
+    bankGainHigh: 0.46,
+    subRatio: 0.5,
+    subLvl: 0.46,
+    lopeRatio: 0.375,
+    lopeDepth: 0.17,
+    resHz: 215,
+    mufBase: 240,
+    mufSpan: 720,
+    baseVol: 0.054,
+    airVol: 0.028,
+    turboVol: 0,
+  },
+  // Tuned turbo JDM coupe: crisp revvy pull + silky air spool & blow-off on shifts
+  'turbo-jdm': {
+    harmonics: [0.95, 0.8, 0.46, 0.25, 0.13, 0.05],
+    idleHz: 42,
+    redlineHz: 184,
+    bankRatio: 1.011,
+    bankGainIdle: 0.36,
+    bankGainHigh: 0.44,
+    subRatio: 0.5,
+    subLvl: 0.42,
+    lopeRatio: 0.5,
+    lopeDepth: 0.15,
+    resHz: 205,
+    mufBase: 230,
+    mufSpan: 690,
+    baseVol: 0.05,
+    airVol: 0.03,
+    turboVol: 0.017,
+  },
+  // Refined grand-touring sport V6 purr
+  'sport-v6': {
+    harmonics: [1.0, 0.64, 0.42, 0.18, 0.08, 0.03],
+    idleHz: 35,
+    redlineHz: 144,
+    bankRatio: 1.014,
+    bankGainIdle: 0.34,
+    bankGainHigh: 0.42,
+    subRatio: 0.5,
+    subLvl: 0.48,
+    lopeRatio: 0.333,
+    lopeDepth: 0.13,
+    resHz: 172,
+    mufBase: 195,
+    mufSpan: 540,
+    baseVol: 0.048,
+    airVol: 0.022,
+    turboVol: 0,
+  },
+  // Silky quiet EV dual-motor hum (silent at standstill, smooth warm rise under power)
+  'electric-ev': {
+    harmonics: [1.0, 0.14, 0.03],
+    idleHz: 84,
+    redlineHz: 340,
+    bankRatio: 1.5,
+    bankGainIdle: 0.18,
+    bankGainHigh: 0.26,
+    subRatio: 0.5,
+    subLvl: 0.22,
+    lopeRatio: 0.5,
+    lopeDepth: 0,
+    resHz: 310,
+    mufBase: 280,
+    mufSpan: 720,
+    baseVol: 0.024,
+    airVol: 0.006,
+    turboVol: 0.005,
+  },
+  // Calm, warm 4-cylinder city taxi hum
+  'commuter-i4': {
+    harmonics: [1.0, 0.56, 0.25, 0.1, 0.03],
+    idleHz: 33,
+    redlineHz: 120,
+    bankRatio: 1.008,
+    bankGainIdle: 0.32,
+    bankGainHigh: 0.38,
+    subRatio: 0.5,
+    subLvl: 0.44,
+    lopeRatio: 0.5,
+    lopeDepth: 0.14,
+    resHz: 160,
+    mufBase: 170,
+    mufSpan: 390,
+    baseVol: 0.042,
+    airVol: 0.017,
+    turboVol: 0,
+  },
+  // Heavy bassy luxury SUV V8 rumble
+  'heavy-v8': {
+    harmonics: [1.0, 0.76, 0.34, 0.18, 0.06, 0.02],
+    idleHz: 25,
+    redlineHz: 94,
+    bankRatio: 1.022,
+    bankGainIdle: 0.42,
+    bankGainHigh: 0.46,
+    subRatio: 0.5,
+    subLvl: 0.76,
+    lopeRatio: 0.5,
+    lopeDepth: 0.22,
+    resHz: 112,
+    mufBase: 138,
+    mufSpan: 350,
+    baseVol: 0.062,
+    airVol: 0.026,
+    turboVol: 0,
+  },
+};
 
 export type FootstepSurface = 'concrete' | 'sand' | 'wood' | 'tile' | 'carpet';
 
@@ -91,12 +268,12 @@ export class SoundEngine {
   private ctx: AudioContext | null = null;
   private noiseBuf: AudioBuffer | null = null;
 
-  // Player vehicle real-time 48kHz physical digital-waveguide AudioWorklet engine + road roll + turbo air!
-  private engineWorkletNode: AudioWorkletNode | null = null;
-  private workletReady = false;
+  // Unified Web Audio PeriodicWave + combustion-lope + dual-muffler engine synth + road roll + turbo air
   private engineOscA: OscillatorNode | null = null;
   private engineOscB: OscillatorNode | null = null;
   private engineSubOsc: OscillatorNode | null = null;
+  private engineLopeOsc: OscillatorNode | null = null;
+  private engineLopeDepth: GainNode | null = null;
   private engineWaveMap: Partial<Record<EngineSoundProfile, PeriodicWave>> = {};
   private engineOscAGain: GainNode | null = null;
   private engineOscBGain: GainNode | null = null;
@@ -173,68 +350,66 @@ export class SoundEngine {
       }
       return ctx.createPeriodicWave(real, imag, { disableNormalization: false });
     };
-    this.engineWaveMap = {
-      // Smooth singing V12 (warm fundamental + rich 2nd/3rd/4th/6th, zero jagged high buzz)
-      'exotic-v12': makeEngineWave([1.0, 0.72, 0.52, 0.32, 0.16, 0.14, 0.06, 0.03]),
-      // Deep throaty cross-plane V8 (strong low body + uneven 2nd/3rd growl, rolled off cleanly)
-      'muscle-v8': makeEngineWave([1.0, 0.85, 0.42, 0.28, 0.12, 0.07, 0.03]),
-      // Distinctive raspy flat-6 boxer harmonic balance
-      flat6: makeEngineWave([0.92, 0.78, 0.56, 0.24, 0.18, 0.08, 0.03]),
-      // Zippy tuned inline-6/4 turbo
-      'turbo-jdm': makeEngineWave([0.95, 0.82, 0.46, 0.26, 0.14, 0.06]),
-      // Silky grand-touring V6
-      'sport-v6': makeEngineWave([1.0, 0.64, 0.44, 0.18, 0.08, 0.03]),
-      // Ultra-clean smooth EV sine/2nd harmonic
-      'electric-ev': makeEngineWave([1.0, 0.16, 0.04]),
-      // Quiet warm commuter 4-cylinder
-      'commuter-i4': makeEngineWave([1.0, 0.58, 0.26, 0.1, 0.04]),
-      // Heavy deep SUV V8
-      'heavy-v8': makeEngineWave([1.0, 0.78, 0.34, 0.18, 0.06, 0.02]),
-    };
+    this.engineWaveMap = {};
+    for (const [k, cfg] of Object.entries(ENGINE_SYNTH_PROFILES) as Array<[EngineSoundProfile, EngineSynthVoicing]>) {
+      this.engineWaveMap[k] = makeEngineWave(cfg.harmonics);
+    }
 
     // Soft warm exhaust-manifold waveshaper curve (gentle analog warmth, no harsh clipping)
     const shaper = ctx.createWaveShaper();
     const curve = new Float32Array(256);
     for (let i = 0; i < 256; i++) {
       const x = (i * 2) / 256 - 1;
-      curve[i] = Math.tanh(x * 1.45);
+      curve[i] = Math.tanh(x * 1.28);
     }
     shaper.curve = curve;
 
-    // 1. Acoustic Engine Synth: dual detuned cylinder-bank PeriodicWave oscillators + warm sine sub
-    //    -> soft exhaust saturation -> exhaust-box resonant formant -> steep 24dB/oct dual muffler lowpass!
+    // 1. Acoustic Engine Synth: dual cylinder-bank PeriodicWave oscillators + warm sine sub
+    //    -> combustion-lope AM stage -> soft exhaust saturation -> exhaust formant -> steep 24dB/oct dual muffler!
     const oscA = ctx.createOscillator();
     const oscB = ctx.createOscillator();
     const subOsc = ctx.createOscillator();
     oscA.setPeriodicWave(this.engineWaveMap['exotic-v12']!);
     oscB.setPeriodicWave(this.engineWaveMap['exotic-v12']!);
     subOsc.type = 'sine';
-    oscA.frequency.value = 60;
-    oscB.frequency.value = 60.6;
-    subOsc.frequency.value = 30;
+    oscA.frequency.value = 50;
+    oscB.frequency.value = 50.6;
+    subOsc.frequency.value = 25;
 
     const oscAGain = ctx.createGain();
-    oscAGain.gain.value = 0.55;
+    oscAGain.gain.value = 0.56;
     const oscBGain = ctx.createGain();
-    oscBGain.gain.value = 0.45;
+    oscBGain.gain.value = 0.35;
     const subGain = ctx.createGain();
     subGain.gain.value = 0.45;
+
+    // Subtle combustion-firing amplitude lope (gives idle & low RPM real mechanical chug instead of flat hum!)
+    const lopeCarrier = ctx.createGain();
+    lopeCarrier.gain.value = 1.0;
+    const lopeOsc = ctx.createOscillator();
+    lopeOsc.type = 'sine';
+    lopeOsc.frequency.value = 18;
+    const lopeDepth = ctx.createGain();
+    lopeDepth.gain.value = 0.14;
+    lopeOsc.connect(lopeDepth);
+    lopeDepth.connect(lopeCarrier.gain);
+    lopeOsc.start();
 
     const resonator = ctx.createBiquadFilter();
     resonator.type = 'peaking';
     resonator.frequency.value = 185;
-    resonator.Q.value = 1.6;
-    resonator.gain.value = 5.0;
+    resonator.Q.value = 1.5;
+    resonator.gain.value = 4.5;
 
     const muffler1 = ctx.createBiquadFilter();
     muffler1.type = 'lowpass';
     muffler1.frequency.value = 380;
-    muffler1.Q.value = 0.75;
+    muffler1.Q.value = 0.72;
 
     const muffler2 = ctx.createBiquadFilter();
     muffler2.type = 'lowpass';
     muffler2.frequency.value = 620;
-    muffler2.Q.value = 0.6;
+    muffler2.Q.value = 0.58;
 
     const engineGain = ctx.createGain();
     engineGain.gain.value = 0;
@@ -242,9 +417,10 @@ export class SoundEngine {
     oscA.connect(oscAGain);
     oscB.connect(oscBGain);
     subOsc.connect(subGain);
-    oscAGain.connect(shaper);
-    oscBGain.connect(shaper);
-    subGain.connect(shaper);
+    oscAGain.connect(lopeCarrier);
+    oscBGain.connect(lopeCarrier);
+    subGain.connect(lopeCarrier);
+    lopeCarrier.connect(shaper);
     shaper.connect(resonator);
     resonator.connect(muffler1);
     muffler1.connect(muffler2);
@@ -302,6 +478,8 @@ export class SoundEngine {
     this.engineOscA = oscA;
     this.engineOscB = oscB;
     this.engineSubOsc = subOsc;
+    this.engineLopeOsc = lopeOsc;
+    this.engineLopeDepth = lopeDepth;
     this.engineOscAGain = oscAGain;
     this.engineOscBGain = oscBGain;
     this.engineSubGain = subGain;
@@ -430,35 +608,6 @@ export class SoundEngine {
 
     this.clubOsc = clubOsc;
     this.clubGain = clubGain;
-
-    // 7. Load the real-time 48kHz physical digital-waveguide combustion engine AudioWorklet asynchronously!
-    //    Once ready, it takes over from the fallback PeriodicWave engine with true per-cylinder headers & mufflers.
-    if (ctx.audioWorklet && typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
-      const blob = new Blob([ENGINE_WORKLET_CODE], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      void ctx.audioWorklet
-        .addModule(blobUrl)
-        .then(() => {
-          URL.revokeObjectURL(blobUrl);
-          if (!this.ctx) return;
-          const node = new AudioWorkletNode(this.ctx, 'physical-engine-processor', {
-            numberOfInputs: 0,
-            numberOfOutputs: 1,
-            outputChannelCount: [1],
-          });
-          node.connect(this.ctx.destination);
-          this.engineWorkletNode = node;
-          this.workletReady = true;
-          this.activeEngineProfile = null; // Push active car preset immediately on next updateDriving
-          // Mute fallback PeriodicWave oscillators now that physical waveguide engine is live
-          const t = this.ctx.currentTime;
-          this.engineGain?.gain.setTargetAtTime(0, t, 0.03);
-          this.exhaustNoiseGain?.gain.setTargetAtTime(0, t, 0.03);
-        })
-        .catch(() => {
-          URL.revokeObjectURL(blobUrl);
-        });
-    }
   }
 
   public toggle(): boolean {
@@ -477,9 +626,6 @@ export class SoundEngine {
     this.roadRollGain?.gain.setTargetAtTime(0, now, 0.06);
     this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
     this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
-    if (this.engineWorkletNode) {
-      this.engineWorkletNode.parameters.get('active')?.setTargetAtTime(0, now, 0.05);
-    }
     this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
     this.trafficGain?.gain.setTargetAtTime(0, now, 0.08);
     this.oceanGain?.gain.setTargetAtTime(0, now, 0.12);
@@ -511,9 +657,6 @@ export class SoundEngine {
       this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
       this.driftGain?.gain.setTargetAtTime(0, now, 0.04);
       this.hornGain?.gain.setTargetAtTime(0, now, 0.03);
-      if (this.engineWorkletNode) {
-        this.engineWorkletNode.parameters.get('active')?.setTargetAtTime(0, now, 0.05);
-      }
       return;
     }
 
@@ -521,45 +664,7 @@ export class SoundEngine {
     const spd = clamp(speedNorm, 0, 1.1);
     const load = clamp(Math.abs(throttle), 0, 1);
 
-    // Primary path: Real-time 48kHz physical digital-waveguide combustion engine AudioWorklet!
-    if (this.workletReady && this.engineWorkletNode) {
-      if (this.activeEngineProfile !== profile) {
-        this.activeEngineProfile = profile;
-        const preset = WAVEGUIDE_ENGINE_PRESETS[profile] ?? WAVEGUIDE_ENGINE_PRESETS['sport-v6'];
-        this.engineWorkletNode.port.postMessage({ type: 'preset', preset });
-      }
-      const params = this.engineWorkletNode.parameters;
-      params.get('rpmNorm')?.setTargetAtTime(rpm, now, 0.02);
-      params.get('throttle')?.setTargetAtTime(load, now, 0.025);
-      params.get('active')?.setTargetAtTime(1.0, now, 0.04);
-      params.get('shiftCut')?.setTargetAtTime(shiftActive ? 1.0 : 0.0, now, 0.012);
-
-      // Keep fallback oscillators silent while physical worklet runs
-      this.engineGain?.gain.setTargetAtTime(0, now, 0.04);
-      this.exhaustNoiseGain?.gain.setTargetAtTime(0, now, 0.04);
-
-      // Warm asphalt tire-roll & wind rush scaling smoothly with vehicle speed
-      const rollVol = clamp(spd * spd * 0.034 + spd * 0.01, 0, 0.042);
-      this.roadRollFilter?.frequency.setTargetAtTime(180 + spd * 340, now, 0.08);
-      this.roadRollGain?.gain.setTargetAtTime(rollVol, now, 0.08);
-
-      // Silky filtered-air turbo spool on turbo-jdm & muscle-v8
-      const turboVol = profile === 'turbo-jdm' ? 0.015 : profile === 'muscle-v8' ? 0.006 : 0;
-      if (turboVol > 0) {
-        const tAir = turboVol * clamp((rpm - 0.38) * 1.5, 0, 1) * (0.2 + load * 0.85) * (shiftActive ? 0.3 : 1.0);
-        this.turboAirFilter?.frequency.setTargetAtTime(1200 + rpm * 1400, now, 0.045);
-        this.turboAirGain?.gain.setTargetAtTime(tAir, now, 0.05);
-      } else {
-        this.turboAirGain?.gain.setTargetAtTime(0, now, 0.05);
-      }
-
-      const driftVol = clamp(driftAmount * 0.075, 0, 0.075);
-      this.driftGain?.gain.setTargetAtTime(driftVol, now, 0.04);
-      this.hornGain?.gain.setTargetAtTime(horn ? 0.065 : 0, now, 0.02);
-      return;
-    }
-
-    // Fallback path (if AudioWorklet is unavailable): band-limited PeriodicWave acoustic synth
+    // Unified band-limited PeriodicWave + combustion-lope + dual-muffler acoustic engine synth
     if (this.activeEngineProfile !== profile && this.engineOscA && this.engineOscB) {
       this.activeEngineProfile = profile;
       const wave = this.engineWaveMap[profile] ?? this.engineWaveMap['sport-v6'];
@@ -569,148 +674,42 @@ export class SoundEngine {
       }
     }
 
-    // Warm, realistic acoustic firing frequencies & exhaust-muffler voicings per engine family
-    let idleHz = 36;
-    let redlineHz = 145;
-    let bankRatio = 1.008; // Slight cylinder-bank detune gives real organic mechanical beat!
-    let subRatio = 0.5;
-    let subLvl = 0.45;
-    let resHz = 180;
-    let mufBase = 210;
-    let mufSpan = 520;
-    let baseVol = 0.052;
-    let airVol = 0.024;
-    let turboVol = 0;
-
-    if (profile === 'exotic-v12') {
-      // Singing Italian V12: crisp, creamy harmonic rise up to ~225Hz fundamental (rich 450-900Hz harmonics)
-      idleHz = 52;
-      redlineHz = 228;
-      bankRatio = 1.498; // Perfect 5th cylinder-bank singing overtone!
-      subRatio = 0.5;
-      subLvl = 0.34;
-      resHz = 280;
-      mufBase = 320;
-      mufSpan = 920;
-      baseVol = 0.052;
-      airVol = 0.026;
-    } else if (profile === 'muscle-v8') {
-      // Deep rumbling cross-plane V8: chesty 30-118Hz firing rumble + throaty exhaust air!
-      idleHz = 30;
-      redlineHz = 118;
-      bankRatio = 1.028; // Authentic cross-plane uneven V8 lope/burble!
-      subRatio = 0.5;
-      subLvl = 0.68;
-      resHz = 135;
-      mufBase = 175;
-      mufSpan = 480;
-      baseVol = 0.062;
-      airVol = 0.032;
-      turboVol = 0.008;
-    } else if (profile === 'flat6') {
-      // Warm metallic boxer flat-6 bark
-      idleHz = 42;
-      redlineHz = 178;
-      bankRatio = 1.335;
-      subRatio = 0.5;
-      subLvl = 0.42;
-      resHz = 225;
-      mufBase = 260;
-      mufSpan = 740;
-      baseVol = 0.05;
-      airVol = 0.026;
-    } else if (profile === 'turbo-jdm') {
-      // Zippy tuned turbo inline-6/4 + silky filtered-air spool rush
-      idleHz = 44;
-      redlineHz = 188;
-      bankRatio = 1.012;
-      subRatio = 0.5;
-      subLvl = 0.4;
-      resHz = 210;
-      mufBase = 240;
-      mufSpan = 720;
-      baseVol = 0.048;
-      airVol = 0.028;
-      turboVol = 0.018;
-    } else if (profile === 'sport-v6') {
-      // Refined smooth GT V6 purr
-      idleHz = 36;
-      redlineHz = 146;
-      bankRatio = 1.252;
-      subRatio = 0.5;
-      subLvl = 0.46;
-      resHz = 175;
-      mufBase = 200;
-      mufSpan = 560;
-      baseVol = 0.046;
-      airVol = 0.02;
-    } else if (profile === 'electric-ev') {
-      // Quiet, silky futuristic EV motor hum (completely silent at standstill, smooth warm rise)
-      idleHz = 88;
-      redlineHz = 360;
-      bankRatio = 1.5;
-      subRatio = 0.5;
-      subLvl = 0.25;
-      resHz = 320;
-      mufBase = 300;
-      mufSpan = 780;
-      baseVol = 0.024;
-      airVol = 0.006;
-      turboVol = 0.006;
-    } else if (profile === 'heavy-v8') {
-      // Low, bassy 2.35-ton luxury SUV V8 rumble
-      idleHz = 26;
-      redlineHz = 96;
-      bankRatio = 1.022;
-      subRatio = 0.5;
-      subLvl = 0.74;
-      resHz = 115;
-      mufBase = 140;
-      mufSpan = 360;
-      baseVol = 0.06;
-      airVol = 0.024;
-    } else {
-      // commuter-i4 (Sol City Taxi) — subtle, calm everyday sedan hum
-      idleHz = 34;
-      redlineHz = 122;
-      bankRatio = 1.008;
-      subRatio = 0.5;
-      subLvl = 0.44;
-      resHz = 165;
-      mufBase = 175;
-      mufSpan = 410;
-      baseVol = 0.04;
-      airVol = 0.016;
-    }
-
-    const freq = idleHz + (redlineHz - idleHz) * rpm;
+    const cfg = ENGINE_SYNTH_PROFILES[profile] ?? ENGINE_SYNTH_PROFILES['sport-v6'];
+    const freq = cfg.idleHz + (cfg.redlineHz - cfg.idleHz) * rpm;
     const shiftDip = shiftActive && profile !== 'electric-ev' ? 0.42 : 1.0;
 
-    this.engineOscA?.frequency.setTargetAtTime(freq, now, 0.025);
-    this.engineOscB?.frequency.setTargetAtTime(freq * bankRatio, now, 0.025);
-    this.engineSubOsc?.frequency.setTargetAtTime(freq * subRatio, now, 0.025);
+    this.engineOscA?.frequency.setTargetAtTime(freq, now, 0.024);
+    this.engineOscB?.frequency.setTargetAtTime(freq * cfg.bankRatio, now, 0.024);
+    this.engineSubOsc?.frequency.setTargetAtTime(freq * cfg.subRatio, now, 0.024);
     this.engineOscAGain?.gain.setTargetAtTime(0.56, now, 0.04);
-    this.engineOscBGain?.gain.setTargetAtTime(profile === 'electric-ev' ? 0.28 : 0.44, now, 0.04);
-    this.engineSubGain?.gain.setTargetAtTime(subLvl, now, 0.04);
+    const bankGain = cfg.bankGainIdle + (cfg.bankGainHigh - cfg.bankGainIdle) * rpm;
+    this.engineOscBGain?.gain.setTargetAtTime(bankGain, now, 0.04);
+    this.engineSubGain?.gain.setTargetAtTime(cfg.subLvl, now, 0.04);
+
+    // Combustion-firing lope: stronger tactile idle/low-RPM chug, smoothing out cleanly into a high-RPM sing
+    const lopeHz = Math.max(4, freq * cfg.lopeRatio);
+    const lopeAmt = cfg.lopeDepth * (1 - rpm * 0.55) * (0.75 + load * 0.35);
+    this.engineLopeOsc?.frequency.setTargetAtTime(lopeHz, now, 0.03);
+    this.engineLopeDepth?.gain.setTargetAtTime(lopeAmt, now, 0.04);
 
     // Dynamic muffler cutoff: opens up warmly under throttle & high RPM, mellows down when coasting!
-    const mufCutoff = mufBase + mufSpan * (rpm * 0.62 + load * 0.42);
-    this.engineResonator?.frequency.setTargetAtTime(resHz + rpm * 65, now, 0.04);
+    const mufCutoff = cfg.mufBase + cfg.mufSpan * (rpm * 0.62 + load * 0.42);
+    this.engineResonator?.frequency.setTargetAtTime(cfg.resHz + rpm * 65, now, 0.04);
     this.engineMuffler1?.frequency.setTargetAtTime(mufCutoff, now, 0.03);
     this.engineMuffler2?.frequency.setTargetAtTime(mufCutoff * 1.45, now, 0.03);
 
     const engVol =
       profile === 'electric-ev'
-        ? baseVol * clamp((rpm - 0.05) * 1.15, 0, 1) * (0.55 + load * 0.55)
-        : (baseVol * 0.36 + baseVol * 0.48 * load + baseVol * 0.34 * rpm) * shiftDip;
-    this.engineGain?.gain.setTargetAtTime(engVol, now, 0.035);
+        ? cfg.baseVol * clamp((rpm - 0.05) * 1.15, 0, 1) * (0.55 + load * 0.55)
+        : (cfg.baseVol * 0.38 + cfg.baseVol * 0.46 * load + cfg.baseVol * 0.34 * rpm) * shiftDip;
+    this.engineGain?.gain.setTargetAtTime(engVol, now, 0.032);
 
     // Mechanical exhaust/intake breath noise tied to RPM + throttle load
     const exVol =
       profile === 'electric-ev'
-        ? airVol * spd
-        : airVol * (0.18 + rpm * 0.55 + load * 0.65) * shiftDip;
-    this.exhaustNoiseFilter?.frequency.setTargetAtTime(160 + rpm * 420 + load * 180, now, 0.04);
+        ? cfg.airVol * spd
+        : cfg.airVol * (0.2 + rpm * 0.55 + load * 0.68) * shiftDip;
+    this.exhaustNoiseFilter?.frequency.setTargetAtTime(160 + rpm * 420 + load * 190, now, 0.04);
     this.exhaustNoiseGain?.gain.setTargetAtTime(exVol, now, 0.04);
 
     // Warm asphalt tire-roll & wind rush scaling smoothly with vehicle speed (grounds every car!)
@@ -718,12 +717,12 @@ export class SoundEngine {
     this.roadRollFilter?.frequency.setTargetAtTime(180 + spd * 340, now, 0.08);
     this.roadRollGain?.gain.setTargetAtTime(rollVol, now, 0.08);
 
-    // Silky filtered-air turbo spool rush (no annoying sine whistle!)
-    if (turboVol > 0) {
+    // Silky filtered-air turbo spool rush (no piercing sine whistle)
+    if (cfg.turboVol > 0) {
       const tAir =
         profile === 'electric-ev'
-          ? turboVol * clamp((rpm - 0.1) * 1.1, 0, 1)
-          : turboVol * clamp((rpm - 0.38) * 1.5, 0, 1) * (0.25 + load * 0.85) * shiftDip;
+          ? cfg.turboVol * clamp((rpm - 0.1) * 1.1, 0, 1)
+          : cfg.turboVol * clamp((rpm - 0.38) * 1.5, 0, 1) * (0.25 + load * 0.85) * shiftDip;
       this.turboAirFilter?.frequency.setTargetAtTime(1150 + rpm * 1450, now, 0.045);
       this.turboAirGain?.gain.setTargetAtTime(tAir, now, 0.05);
     } else {
@@ -746,9 +745,6 @@ export class SoundEngine {
     if (!this.ctx || !this.noiseBuf || !this.enabled || profile === 'electric-ev') return;
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume();
-    }
-    if (this.workletReady && this.engineWorkletNode) {
-      this.engineWorkletNode.port.postMessage({ type: 'shift', kind });
     }
     const now = this.ctx.currentTime;
 
