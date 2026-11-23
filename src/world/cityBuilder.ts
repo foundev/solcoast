@@ -44,6 +44,7 @@ export interface CitySceneHandles {
   attachShowcaseBuildings: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   attachWorldProps: (propsMap: Map<InteriorPropKind, THREE.Group>) => void;
   applyShowcaseTextures: (texMap: InteriorTextureMap) => void;
+  setActiveInteriorBuilding: (interiorId: string | null) => void;
   hideFallbackYachts: () => void;
   updateAnimation: (
     elapsed: number,
@@ -345,6 +346,7 @@ function buildBuildingMesh(
   neonMaterials: THREE.MeshStandardMaterial[],
   windowMaterials: THREE.MeshStandardMaterial[],
   lobbyGlassMat: THREE.MeshPhysicalMaterial,
+  lobbyInteriorMat: THREE.MeshStandardMaterial,
   hvacMat: THREE.MeshStandardMaterial,
 ): THREE.Group {
   const group = new THREE.Group();
@@ -465,21 +467,50 @@ function buildBuildingMesh(
     metalness: 0.22,
   });
 
-  // Main tower volume
-  const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, b.height, b.depth), wallMat);
-  mainMesh.position.y = b.height * 0.5;
-  mainMesh.castShadow = true;
-  mainMesh.receiveShadow = true;
-  group.add(mainMesh);
+  // Main tower volume + real transparent ground-floor glass storefronts with visible illuminated interior lobbies!
+  if (b.style === 'villa') {
+    const lowerH = b.height * 0.52;
+    const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, lowerH, b.depth), wallMat);
+    mainMesh.position.y = lowerH * 0.5;
+    mainMesh.castShadow = true;
+    mainMesh.receiveShadow = true;
+    group.add(mainMesh);
+  } else if (b.style === 'pavilion') {
+    const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, b.height, b.depth), wallMat);
+    mainMesh.position.y = b.height * 0.5;
+    mainMesh.castShadow = true;
+    mainMesh.receiveShadow = true;
+    group.add(mainMesh);
+  } else {
+    const lobbyH = Math.min(3.6, b.height * 0.45);
+    const upperH = Math.max(1.0, b.height - lobbyH);
+    const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, upperH, b.depth), wallMat);
+    mainMesh.position.y = lobbyH + upperH * 0.5;
+    mainMesh.castShadow = true;
+    mainMesh.receiveShadow = true;
+    group.add(mainMesh);
 
-  // Recessed ground-floor glass lobby storefront on city buildings
-  if (b.style !== 'villa' && b.style !== 'pavilion') {
-    const lobby = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 0.16, 3.6, b.depth + 0.16),
+    // Recessed warm-lit ground-floor lobby interior core + corner structural columns + transparent glass curtain wall!
+    const coreW = Math.max(1.8, b.width - 2.6);
+    const coreD = Math.max(1.8, b.depth - 2.6);
+    const lobbyCore = new THREE.Mesh(new THREE.BoxGeometry(coreW, lobbyH - 0.06, coreD), lobbyInteriorMat);
+    lobbyCore.position.y = lobbyH * 0.5;
+    group.add(lobbyCore);
+
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const col = new THREE.Mesh(new THREE.BoxGeometry(0.44, lobbyH, 0.44), accentMat);
+        col.position.set(sx * (b.width * 0.5 - 0.32), lobbyH * 0.5, sz * (b.depth * 0.5 - 0.32));
+        group.add(col);
+      }
+    }
+
+    const lobbyGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width - 0.08, lobbyH - 0.04, b.depth - 0.08),
       lobbyGlassMat,
     );
-    lobby.position.y = 1.85;
-    group.add(lobby);
+    lobbyGlass.position.y = lobbyH * 0.5;
+    group.add(lobbyGlass);
   }
 
   if (b.style === 'art-deco') {
@@ -562,14 +593,22 @@ function buildBuildingMesh(
       new THREE.BoxGeometry(b.width + 1.8, 0.42, b.depth + 1.8),
       new THREE.MeshStandardMaterial({ color: 0xf4f2ec, roughness: 0.42 }),
     );
-    midSlab.position.y = b.height * 0.5;
+    midSlab.position.y = b.height * 0.52;
     group.add(midSlab);
 
+    const upperH = b.height * 0.44;
+    const villaCore = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(1.8, b.width - 2.4), upperH - 0.08, Math.max(1.8, b.depth - 2.4)),
+      lobbyInteriorMat,
+    );
+    villaCore.position.y = b.height * 0.75;
+    group.add(villaCore);
+
     const glass = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width + 0.22, b.height * 0.42, b.depth + 0.22),
+      new THREE.BoxGeometry(b.width + 0.12, upperH, b.depth + 0.12),
       lobbyGlassMat,
     );
-    glass.position.y = b.height * 0.73;
+    glass.position.y = b.height * 0.75;
     group.add(glass);
 
     // Backyard infinity pool deck
@@ -626,6 +665,12 @@ function buildBuildingMesh(
       balcony.position.y = fy;
       group.add(balcony);
     }
+    const phCore = new THREE.Mesh(
+      new THREE.BoxGeometry(b.width * 0.44, 4.0, b.depth * 0.44),
+      lobbyInteriorMat,
+    );
+    phCore.position.y = b.height + 2.05;
+    group.add(phCore);
     const penthouse = new THREE.Mesh(
       new THREE.BoxGeometry(b.width * 0.62, 4.2, b.depth * 0.62),
       lobbyGlassMat,
@@ -683,11 +728,14 @@ function buildYachtMesh(length: number, accentColor: number): THREE.Group {
   });
   const teakMat = new THREE.MeshStandardMaterial({ color: 0xa47b52, roughness: 0.72 });
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0b1f33,
+    color: 0x7ec8e8,
     roughness: 0.04,
-    metalness: 0.25,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.42,
     clearcoat: 1.0,
     envMapIntensity: 2.0,
+    depthWrite: false,
   });
   const stripeMat = new THREE.MeshStandardMaterial({
     color: accentColor,
@@ -1299,15 +1347,25 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     fallbackHoopsGroup.add(rim);
   }
 
-  // 11. PBR Buildings
+  // 11. PBR Buildings with Real Transparent Glass Lobbies, Balconies, Villas & Penthouses!
   const facadeCache = new Map<string, THREE.MeshStandardMaterial>();
   const lobbyGlassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x152c40,
-    roughness: 0.06,
-    metalness: 0.25,
+    color: 0x86c8e8,
+    roughness: 0.05,
+    metalness: 0.14,
+    transparent: true,
+    opacity: 0.36,
     clearcoat: 1.0,
-    envMapIntensity: 1.9,
+    envMapIntensity: 2.0,
+    depthWrite: false,
   });
+  const lobbyInteriorMat = new THREE.MeshStandardMaterial({
+    color: 0xf6e3c4,
+    emissive: 0xffb86c,
+    emissiveIntensity: 0.42,
+    roughness: 0.65,
+  });
+  windowMaterials.push(lobbyInteriorMat);
   const hvacMat = new THREE.MeshStandardMaterial({ color: 0x7e8796, roughness: 0.75, metalness: 0.35 });
 
   const SHOWCASE_BUILDING_MAP: Record<string, InteriorPropKind> = {
@@ -1317,14 +1375,25 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     'b-43': 'building_wynwood_gallery',
   };
   const showcaseFallbacks = new Map<string, { spec: BuildingSpec; mesh: THREE.Object3D }>();
+  const showcaseGltfMap = new Map<string, THREE.Object3D>();
+  const allBuildingEntries: { spec: BuildingSpec; mesh: THREE.Object3D }[] = [];
   const showcaseBuildingsRoot = new THREE.Group();
   root.add(showcaseBuildingsRoot);
   let fallbackLighthouseMesh: THREE.Object3D | null = null;
   let fallbackLighthouseSpec: BuildingSpec | null = null;
 
   for (const b of blueprint.buildings) {
-    const mesh = buildBuildingMesh(b, facadeCache, neonMaterials, windowMaterials, lobbyGlassMat, hvacMat);
+    const mesh = buildBuildingMesh(
+      b,
+      facadeCache,
+      neonMaterials,
+      windowMaterials,
+      lobbyGlassMat,
+      lobbyInteriorMat,
+      hvacMat,
+    );
     root.add(mesh);
+    allBuildingEntries.push({ spec: b, mesh });
     if (b.id in SHOWCASE_BUILDING_MAP) {
       showcaseFallbacks.set(b.id, { spec: b, mesh });
     }
@@ -1629,12 +1698,19 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
           if (n.startsWith('Neon_')) {
             neonMaterials.push(m);
           } else if (n.startsWith('Glass_')) {
+            m.transparent = true;
+            m.depthWrite = false;
+            if (m.opacity >= 0.98) m.opacity = 0.34;
+            m.needsUpdate = true;
+            windowMaterials.push(m);
+          } else if (n.startsWith('Interior_')) {
             windowMaterials.push(m);
           }
         }
       });
 
       showcaseBuildingsRoot.add(inst);
+      showcaseGltfMap.set(bid, inst);
       fb.mesh.visible = false;
     }
 
@@ -1767,6 +1843,36 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     }
   };
 
+  const HOST_BLOCK_BOUNDS: Record<string, { minX: number; maxX: number; minZ: number; maxZ: number }> = {
+    'hotel-solaire': { minX: 74, maxX: 135, minZ: -105, maxZ: -22 },
+    'club-neon': { minX: -15, maxX: 65, minZ: -105, maxZ: -22 },
+    'cafe-habana': { minX: -285, maxX: -202, minZ: -35, maxZ: 65 },
+    'wynwood-gallery': { minX: -195, maxX: -112, minZ: -285, maxZ: -202 },
+  };
+
+  const setActiveInteriorBuilding = (interiorId: string | null) => {
+    const box = interiorId ? HOST_BLOCK_BOUNDS[interiorId] : null;
+    for (const entry of allBuildingEntries) {
+      const bid = entry.spec.id;
+      if (bid === 'south-pier-lighthouse' && fallbackLighthouseMesh && worldPropsGltfRoot.children.length > 0) {
+        continue;
+      }
+      const inHostBlock =
+        box !== null &&
+        entry.spec.x >= box.minX &&
+        entry.spec.x <= box.maxX &&
+        entry.spec.z >= box.minZ &&
+        entry.spec.z <= box.maxZ;
+      const gltfInst = showcaseGltfMap.get(bid);
+      if (gltfInst) {
+        gltfInst.visible = !inHostBlock;
+        entry.mesh.visible = false;
+      } else {
+        entry.mesh.visible = !inHostBlock;
+      }
+    }
+  };
+
   const hideFallbackYachts = () => {
     for (const y of yachts) {
       y.group.visible = false;
@@ -1787,6 +1893,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     attachShowcaseBuildings,
     attachWorldProps,
     applyShowcaseTextures,
+    setActiveInteriorBuilding,
     hideFallbackYachts,
     updateAnimation,
   };

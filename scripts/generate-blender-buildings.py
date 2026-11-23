@@ -300,20 +300,23 @@ def build_hotel_solaire():
     marble = make_mat("PBR_Marble_Lobby", (0.95, 0.91, 0.85), roughness=0.22, coat=0.5)
     brass = make_mat("Metal_Brass", (0.90, 0.72, 0.30), roughness=0.20, metallic=0.94)
     dark_bronze = make_mat("Metal_Bronze", (0.18, 0.15, 0.14), roughness=0.32, metallic=0.82)
-    warm_glass = make_mat("Glass_Warm_Hotel", (1.0, 0.85, 0.62), roughness=0.08, metallic=0.15, emission=(1.0, 0.78, 0.45), emission_strength=1.1, coat=1.0)
-    lobby_glass = make_mat("Glass_Lobby_Hotel", (1.0, 0.88, 0.68), roughness=0.05, metallic=0.1, emission=(1.0, 0.82, 0.52), emission_strength=1.45, coat=1.0)
+    warm_glass = make_mat("Glass_Warm_Hotel", (0.72, 0.88, 0.98), roughness=0.06, metallic=0.12, emission=(1.0, 0.82, 0.52), emission_strength=0.35, coat=1.0, alpha=0.34)
+    lobby_glass = make_mat("Glass_Lobby_Hotel", (0.76, 0.90, 0.98), roughness=0.04, metallic=0.08, emission=(1.0, 0.85, 0.58), emission_strength=0.30, coat=1.0, alpha=0.28)
+    interior_glow = make_mat("Interior_Warm_Hotel", (0.98, 0.88, 0.72), roughness=0.55, emission=(1.0, 0.82, 0.52), emission_strength=0.95)
     neon_pink = make_mat("Neon_Pink", (1.0, 0.36, 0.65), roughness=0.1, emission=(1.0, 0.32, 0.62), emission_strength=3.5)
     neon_cyan = make_mat("Neon_Cyan", (0.18, 0.94, 1.0), roughness=0.1, emission=(0.15, 0.92, 1.0), emission_strength=3.2)
     carpet = make_mat("Fabric_Carpet", (0.58, 0.08, 0.16), roughness=0.88)
-    balcony_glass = make_mat("Glass_Railing", (0.72, 0.90, 0.96), roughness=0.08, metallic=0.1, alpha=0.45, coat=1.0)
+    balcony_glass = make_mat("Glass_Railing", (0.72, 0.90, 0.96), roughness=0.08, metallic=0.1, alpha=0.36, coat=1.0)
 
     w, d = 14.5, 22.2
     front_x = w * 0.5  # +7.25
 
-    # 1. Ground-floor recessed travertine lobby plinth + colonnade (z = 0..4.5m)
-    add_box("GroundCore", (w - 1.6, d - 1.0, 4.5), (-0.8, 0, 2.25), marble, bevel_width=0.04)
-    # Recessed grand glowing glass lobby curtain wall across Ocean Drive (+X) facade
-    add_box("LobbyGlassWall", (0.25, 16.5, 3.8), (front_x - 1.45, 0, 2.1), lobby_glass)
+    # 1. Ground-floor recessed travertine lobby plinth + visible interior lobby alcove behind transparent glass!
+    add_box("GroundCore", (w - 3.6, d - 1.0, 4.5), (-1.8, 0, 2.25), marble, bevel_width=0.04)
+    add_box("LobbyInteriorBack", (0.2, 15.8, 3.7), (front_x - 3.25, 0, 2.05), interior_glow)
+    add_box("LobbyInteriorFloor", (2.4, 16.2, 0.16), (front_x - 2.35, 0, 0.08), marble)
+    # Recessed grand transparent glass lobby curtain wall across Ocean Drive (+X) facade
+    add_box("LobbyGlassWall", (0.12, 16.5, 3.8), (front_x - 1.45, 0, 2.1), lobby_glass)
     # Double brass-framed grand hotel entrance doors right at center (y=0)
     add_box("DoorFrameOuter", (0.4, 3.6, 3.2), (front_x - 1.25, 0, 1.6), brass, bevel_width=0.03)
     add_box("DoorGlass", (0.45, 3.1, 2.85), (front_x - 1.22, 0, 1.48), lobby_glass)
@@ -344,20 +347,27 @@ def build_hotel_solaire():
     # Recessed Upper-Floor Oceanfront Suite Windows & Glass/Brass Juliet Balconies!
     for fz in (6.15, 9.45, 12.75):
         for wy in (-7.4, -3.7, 0.0, 3.7, 7.4):
-            # Ocean Drive front (+X) windows & curved Juliet balconies
-            add_box("WinFrame", (0.35, 2.35, 2.15), (front_x - 0.05, wy, fz), dark_bronze)
-            add_box("WinGlass", (0.42, 2.15, 1.95), (front_x - 0.02, wy, fz), warm_glass)
+            # Ocean Drive front (+X) windows: warm interior room backing + dark bronze frame + transparent glass pane!
+            add_box("WinBack", (0.18, 2.08, 1.88), (front_x - 0.06, wy, fz), interior_glow)
+            add_box("WinFrameT", (0.38, 2.38, 0.14), (front_x + 0.02, wy, fz + 1.02), dark_bronze)
+            add_box("WinFrameB", (0.42, 2.42, 0.16), (front_x + 0.04, wy, fz - 1.02), dark_bronze)
+            for s_mull in (-1.12, 0.0, 1.12):
+                add_box("WinMull", (0.36, 0.10, 2.05), (front_x + 0.02, wy + s_mull, fz), dark_bronze)
+            add_box("WinGlass", (0.08, 2.16, 1.92), (front_x + 0.10, wy, fz), warm_glass)
             if abs(wy) > 1.5:
                 # Projecting Juliet balcony slab + glass rail + brass handrail
                 add_box("BalcSlab", (1.0, 2.7, 0.18), (front_x + 0.45, wy, fz - 1.15), stucco_cream, bevel_width=0.03)
                 add_box("BalcGlass", (0.06, 2.55, 0.95), (front_x + 0.90, wy, fz - 0.62), balcony_glass)
                 add_box("BalcRail", (0.08, 2.65, 0.06), (front_x + 0.90, wy, fz - 0.14), brass)
             # Rear (-X) suite windows
-            add_box("RearWin", (0.35, 2.1, 1.85), (-front_x + 0.05, wy, fz), warm_glass)
+            add_box("RearWinBack", (0.16, 2.0, 1.76), (-front_x + 0.06, wy, fz), interior_glow)
+            add_box("RearWin", (0.08, 2.1, 1.85), (-front_x - 0.06, wy, fz), warm_glass)
         # Side North/South windows
         for side_y in (-d * 0.5, d * 0.5):
+            sy_out = 0.08 if side_y > 0 else -0.08
             for wx in (-4.0, 0.0, 4.0):
-                add_box("SideWin", (2.1, 0.35, 1.85), (wx, side_y, fz), warm_glass)
+                add_box("SideWinBack", (2.0, 0.16, 1.76), (wx, side_y - sy_out * 0.5, fz), interior_glow)
+                add_box("SideWin", (2.1, 0.08, 1.85), (wx, side_y + sy_out, fz), warm_glass)
 
     # 3. Iconic Stepped Art Deco Wedding-Cake Crown Tower & Neon Vertical Fins (z = 14.5 .. 19.2m)!
     add_rounded_slab("CrownTier1", 7.8, 9.6, 2.4, (2.2, 0, 15.8), 0.9, stucco_cream)
@@ -386,8 +396,8 @@ def build_club_neon():
     neon_pink = make_mat("Neon_ClubPink", (1.0, 0.14, 0.56), roughness=0.1, emission=(1.0, 0.14, 0.56), emission_strength=4.0)
     neon_cyan = make_mat("Neon_ClubCyan", (0.12, 0.95, 1.0), roughness=0.1, emission=(0.12, 0.95, 1.0), emission_strength=4.0)
     neon_purple = make_mat("Neon_ClubPurple", (0.68, 0.25, 1.0), roughness=0.1, emission=(0.68, 0.25, 1.0), emission_strength=3.6)
-    club_glass = make_mat("Glass_ClubGlow", (0.72, 0.15, 0.95), roughness=0.06, metallic=0.2, emission=(0.55, 0.12, 0.82), emission_strength=1.4, coat=1.0)
-    sky_glass = make_mat("Glass_SkyDeck", (0.15, 0.82, 0.95), roughness=0.08, alpha=0.42, coat=1.0)
+    club_glass = make_mat("Glass_ClubGlow", (0.72, 0.25, 0.95), roughness=0.06, metallic=0.15, emission=(0.55, 0.12, 0.82), emission_strength=0.55, coat=1.0, alpha=0.38)
+    sky_glass = make_mat("Glass_SkyDeck", (0.15, 0.82, 0.95), roughness=0.08, alpha=0.34, coat=1.0)
 
     w, d = 20.2, 24.6
     front_x = -w * 0.5  # -10.1
@@ -466,7 +476,8 @@ def build_cafe_habana():
     iron = make_mat("Metal_WroughtIron", (0.11, 0.11, 0.13), roughness=0.38, metallic=0.82)
     awning_cream = make_mat("Fabric_AwningCream", (0.96, 0.91, 0.82), roughness=0.78)
     awning_terra = make_mat("Fabric_AwningTerra", (0.76, 0.26, 0.18), roughness=0.78)
-    warm_glass = make_mat("Glass_Warm_Cafe", (1.0, 0.86, 0.60), roughness=0.08, emission=(1.0, 0.80, 0.44), emission_strength=1.25, coat=1.0)
+    warm_glass = make_mat("Glass_Warm_Cafe", (0.76, 0.90, 0.98), roughness=0.05, metallic=0.1, emission=(1.0, 0.82, 0.48), emission_strength=0.32, coat=1.0, alpha=0.32)
+    cafe_interior = make_mat("Interior_Warm_Cafe", (0.96, 0.82, 0.62), roughness=0.6, emission=(1.0, 0.78, 0.42), emission_strength=0.9)
     hedge = make_mat("Foliage_Box", (0.16, 0.44, 0.20), roughness=0.85)
     blossom = make_mat("Foliage_Bougainvillea", (0.94, 0.20, 0.52), roughness=0.65)
 
@@ -474,14 +485,15 @@ def build_cafe_habana():
     front_x = -w * 0.5  # -11.0
 
     # 1. Ground-floor Spanish Revival Main Volume + 5-Bay Arched Colonnade Arcade on West (-X) Streetfront!
-    add_box("VillaCore", (w - 2.2, d - 0.8, 8.6), (1.1, 0, 4.3), stucco, bevel_width=0.05)
+    add_box("VillaCore", (w - 3.6, d - 0.8, 8.6), (1.8, 0, 4.3), stucco, bevel_width=0.05)
 
-    # Recessed glowing ground-floor café storefront windows + carved mahogany French double doors behind the arches!
-    add_box("CafeInnerWall", (0.3, d - 2.2, 4.0), (front_x + 2.0, 0, 2.0), ochre)
-    add_box("CafeFrontDoors", (0.35, 3.0, 3.0), (front_x + 1.85, 0, 1.5), wood)
-    add_box("CafeDoorPanes", (0.40, 2.4, 2.3), (front_x + 1.82, 0, 1.65), warm_glass)
+    # Recessed warm café interior + transparent glass storefront bay windows & carved mahogany French double doors behind the arches!
+    add_box("CafeInnerWall", (0.25, d - 2.2, 4.0), (front_x + 2.8, 0, 2.0), cafe_interior)
+    add_box("CafeFrontDoors", (0.28, 3.0, 3.0), (front_x + 1.95, 0, 1.5), wood)
+    add_box("CafeDoorPanes", (0.10, 2.4, 2.3), (front_x + 1.76, 0, 1.65), warm_glass)
     for wy in (-8.4, -4.2, 4.2, 8.4):
-        add_box(f"CafeBayWin_{wy}", (0.38, 2.8, 2.5), (front_x + 1.84, wy, 1.85), warm_glass)
+        add_box(f"CafeBayFrame_{wy}", (0.28, 2.95, 2.65), (front_x + 1.95, wy, 1.85), wood)
+        add_box(f"CafeBayWin_{wy}", (0.10, 2.75, 2.45), (front_x + 1.76, wy, 1.85), warm_glass)
         add_box(f"CafeWinSill_{wy}", (0.55, 3.1, 0.18), (front_x + 1.75, wy, 0.62), terracotta, bevel_width=0.02)
 
     # 5 Real Semicircular Spanish Stucco Arches forming the iconic streetfront colonnade arcade!
@@ -570,8 +582,9 @@ def build_wynwood_gallery():
     arch_concrete = make_mat("PBR_Concrete_Museum", (0.64, 0.66, 0.70), roughness=0.68)
     black_steel = make_mat("Metal_BlackSteel", (0.09, 0.10, 0.13), roughness=0.30, metallic=0.85)
     chrome = make_mat("Metal_ChromeArt", (0.94, 0.96, 0.99), roughness=0.06, metallic=0.99)
-    gallery_glass = make_mat("Glass_GalleryBright", (1.0, 0.97, 0.91), roughness=0.05, metallic=0.1, emission=(0.98, 0.94, 0.85), emission_strength=1.35, coat=1.0)
-    skylight_glass = make_mat("Glass_Skylight", (0.85, 0.95, 1.0), roughness=0.08, emission=(0.75, 0.88, 1.0), emission_strength=0.9, coat=1.0)
+    gallery_glass = make_mat("Glass_GalleryBright", (0.82, 0.93, 1.0), roughness=0.04, metallic=0.08, emission=(0.98, 0.94, 0.85), emission_strength=0.28, coat=1.0, alpha=0.30)
+    skylight_glass = make_mat("Glass_Skylight", (0.80, 0.93, 1.0), roughness=0.06, emission=(0.75, 0.88, 1.0), emission_strength=0.25, coat=1.0, alpha=0.34)
+    gallery_interior = make_mat("Interior_GalleryWhite", (0.96, 0.95, 0.92), roughness=0.5, emission=(1.0, 0.96, 0.88), emission_strength=0.85)
     neon_gold = make_mat("Neon_GalleryGold", (1.0, 0.80, 0.25), roughness=0.1, emission=(1.0, 0.80, 0.25), emission_strength=3.2)
     mural_magenta = make_mat("Art_MuralMagenta", (0.95, 0.18, 0.55), roughness=0.45)
     mural_cyan = make_mat("Art_MuralCyan", (0.12, 0.85, 0.95), roughness=0.45)
@@ -580,9 +593,11 @@ def build_wynwood_gallery():
     w, d = 23.6, 23.8
     front_x = -w * 0.5  # -11.8
 
-    # 1. Crisp White-Cube Museum Main Massing + Board-Formed Concrete Plinth (z = 0..8.8m)
+    # 1. Crisp White-Cube Museum Main Massing + recessed front atrium alcove behind the transparent glass curtain wall!
     add_box("MuseumPlinth", (w, d, 0.5), (0, 0, 0.25), arch_concrete, bevel_width=0.04)
-    add_box("MuseumBody", (w - 1.2, d - 0.6, 8.3), (0.6, 0, 4.65), white_concrete, bevel_width=0.05)
+    add_box("MuseumBody", (w - 3.2, d - 0.6, 8.3), (1.6, 0, 4.65), white_concrete, bevel_width=0.05)
+    add_box("AtriumBackWall", (0.2, 11.2, 5.5), (front_x + 2.1, 0, 3.1), gallery_interior)
+    add_box("AtriumMural", (0.24, 6.4, 3.2), (front_x + 1.98, 0, 3.2), mural_magenta)
 
     # 2. Iconic 3-Bay Industrial Sawtooth North-Light Skylight Roof (z = 8.8 .. 12.6m)!
     bay_w = (w - 1.6) / 3.0

@@ -57,6 +57,7 @@ import {
   findNearbyInteriorNpc,
   getFloorFromPlayerY,
   getInteriorRoomAt,
+  interiorLocalToWorld,
   stepPlayerInInterior,
   type InteriorDef,
 } from './world/interiors';
@@ -529,6 +530,7 @@ function bootstrap(): void {
           activeInterior = null;
           openDoorIds.clear();
           interiorSystem.setActiveInterior(null);
+          cityHandles.setActiveInteriorBuilding(null);
           setOutdoorVisible(true);
           sky.setInteriorMode(false);
           player.x = def.entranceX;
@@ -655,6 +657,29 @@ function bootstrap(): void {
         );
 
         const updatedFloor = getFloorFromPlayerY(player.y, activeInterior);
+        const pWorld = interiorLocalToWorld(activeInterior, player.x, player.y, player.z, updatedFloor);
+
+        // Keep the live outdoor world (sky, sun, ocean waves, traffic cars, pedestrians & cruising boats)
+        // stepping and visible right outside every hotel suite, penthouse, café & gallery window!
+        stepTraffic(trafficCars, blueprint.trafficNodes, vehicles, dt, blueprint.colliders, blueprint.propObbs);
+        stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders);
+        focusVec.set(pWorld.x, pWorld.y, pWorld.z);
+        const skyRes = sky.update(timeOfDayHours, elapsed, focusVec);
+        cityHandles.updateAnimation(
+          elapsed,
+          skyRes.nightFactor,
+          skyRes.sunDirection,
+          skyRes.sunColor,
+          skyRes.fogColor,
+        );
+        streetProps.update(elapsed, skyRes.nightFactor);
+        for (const v of vehicles) {
+          vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, false);
+        }
+        trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, pWorld.x, pWorld.z);
+        pedestrianMeshes.syncFromState(pedestrians, dt, pWorld.x, pWorld.z, ragdollWorld);
+        boatMeshes.update(elapsed, dt, skyRes.nightFactor);
+
         interiorSystem.update(
           elapsed,
           dt,
@@ -666,6 +691,8 @@ function bootstrap(): void {
           ownedKeycards,
         );
         playerMesh.syncFromState(player, elapsed, dt, null, null, false);
+        playerMesh.root.position.set(pWorld.x, pWorld.y, pWorld.z);
+        playerMesh.root.rotation.y = pWorld.rotY - player.yaw;
         cameraCtrl.update(camera, dt, player, null, activeInterior);
         sound.updateDriving(false, 0, 0, 0, false);
 
@@ -761,11 +788,12 @@ function bootstrap(): void {
           hud.showToast(`Mission Started: ${started.title} — ${started.description}`, 'success');
         }
       } else if (nearbyEntrance && interiorTransitionCooldown <= 0) {
-        // Step inside the building interior!
+        // Step inside the building interior (keep the live outdoor 3D world visible outside the windows!)
         interiorTransitionCooldown = 0.4;
         activeInterior = nearbyEntrance;
-        setOutdoorVisible(false);
-        sky.setInteriorMode(true);
+        setOutdoorVisible(true);
+        sky.setInteriorMode(false);
+        cityHandles.setActiveInteriorBuilding(nearbyEntrance.id);
         interiorSystem.setActiveInterior(nearbyEntrance.id);
         player.vehicleId = null;
         player.x = nearbyEntrance.spawnX;
@@ -783,7 +811,7 @@ function bootstrap(): void {
         player.fallRoll = 0;
         cameraCtrl.yaw = nearbyEntrance.spawnYaw;
         cameraCtrl.snap();
-        camera.far = 110;
+        camera.far = 2200;
         camera.updateProjectionMatrix();
         sound.playChime('enter');
         hud.showDistrictBanner(nearbyEntrance.name);
@@ -805,7 +833,10 @@ function bootstrap(): void {
           openDoorIds,
           ownedKeycards,
         );
+        const pWorldEnter = interiorLocalToWorld(nearbyEntrance, player.x, player.y, player.z, 0);
         playerMesh.syncFromState(player, elapsed, dt, null, null, false);
+        playerMesh.root.position.set(pWorldEnter.x, pWorldEnter.y, pWorldEnter.z);
+        playerMesh.root.rotation.y = pWorldEnter.rotY - player.yaw;
         cameraCtrl.update(camera, dt, player, null, nearbyEntrance);
         minimap.render(
           blueprint,

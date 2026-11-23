@@ -80,6 +80,21 @@ export interface InteriorDoorwayDef {
   floor?: number;
 }
 
+export interface InteriorWindowDef {
+  /** Wall plane axis: 'x' means wall at x = coord spanning z in [min, max] */
+  axis: 'x' | 'z';
+  coord: number;
+  min: number;
+  max: number;
+  sillY: number;
+  topY: number;
+  frameColor: number;
+  cols?: number;
+  tintColor?: number;
+  opacity?: number;
+  floor?: number;
+}
+
 export interface InteriorPropPlacement {
   kind: InteriorPropKind;
   x: number;
@@ -188,6 +203,7 @@ export interface InteriorDef {
   maxZ: number;
   rooms: InteriorRoomDef[];
   doorways: InteriorDoorwayDef[];
+  windows?: InteriorWindowDef[];
   doors?: InteriorDoorDef[];
   elevators?: InteriorElevatorDef[];
   /** Auto-generated perimeter & interior partition walls (with doorway cutouts) */
@@ -207,6 +223,7 @@ export interface InteriorDef {
 
 export const INTERIOR_ORIGIN_Y = -60;
 export const FLOOR_STRIDE_Y = 12;
+export const REAL_STORY_HEIGHT = 4.8;
 
 export function getFloorFromPlayerY(playerY: number, def?: InteriorDef | null): number {
   const raw = Math.max(0, Math.round((playerY - INTERIOR_ORIGIN_Y) / FLOOR_STRIDE_Y));
@@ -216,6 +233,38 @@ export function getFloorFromPlayerY(playerY: number, def?: InteriorDef | null): 
     if ((r.floor ?? 0) > maxFloor) maxFloor = r.floor ?? 0;
   }
   return clamp(raw, 0, maxFloor);
+}
+
+export function getInteriorWorldAnchor(
+  def: InteriorDef,
+  currentFloor = 0,
+): { worldX: number; worldY: number; worldZ: number; worldRotY: number } {
+  const worldRotY = def.storefront.facingSignX === 1 ? Math.PI * 0.5 : -Math.PI * 0.5;
+  const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ, 0);
+  const exitWallZ = exitRoom.maxZ;
+  const worldX = def.storefront.wallX - def.storefront.facingSignX * exitWallZ;
+  const baseGroundY = getGroundHeight(def.entranceX, def.entranceZ);
+  const worldY = baseGroundY - currentFloor * (FLOOR_STRIDE_Y - REAL_STORY_HEIGHT);
+  const worldZ = def.storefront.centerZ;
+  return { worldX, worldY, worldZ, worldRotY };
+}
+
+export function interiorLocalToWorld(
+  def: InteriorDef,
+  lx: number,
+  py: number,
+  lz: number,
+  currentFloor = getFloorFromPlayerY(py, def),
+): { x: number; y: number; z: number; rotY: number } {
+  const { worldX, worldY, worldZ, worldRotY } = getInteriorWorldAnchor(def, currentFloor);
+  const sinR = Math.sin(worldRotY);
+  const cosR = Math.cos(worldRotY);
+  return {
+    x: worldX + lx * cosR + lz * sinR,
+    y: worldY + (py - INTERIOR_ORIGIN_Y),
+    z: worldZ - lx * sinR + lz * cosR,
+    rotY: worldRotY,
+  };
 }
 
 export function getInteriorFloorLabel(def: InteriorDef, floor: number): string | null {
@@ -851,6 +900,29 @@ export const INTERIORS: InteriorDef[] = [
       { floor: 2, axis: 'x', coord: -12, min: -3.2, max: -1.6, height: 2.7, frameColor: 0xe6bd68 },
       { floor: 2, axis: 'z', coord: 4, min: -17.8, max: -16.2, height: 2.6, frameColor: 0xe6bd68 },
     ],
+    windows: [
+      // Floor 0 (1F Grand Marble Lobby & Ocean Cocktail Lounge): transparent windows onto Ocean Drive & beach!
+      { floor: 0, axis: 'z', coord: 12, min: -8.3, max: -4.1, sillY: 0.85, topY: 4.1, frameColor: 0xd9a84e, cols: 3 },
+      { floor: 0, axis: 'z', coord: 12, min: 4.1, max: 8.3, sillY: 0.85, topY: 4.1, frameColor: 0xd9a84e, cols: 3 },
+      { floor: 0, axis: 'x', coord: -10, min: 5.2, max: 9.6, sillY: 0.95, topY: 4.1, frameColor: 0xd9a84e, cols: 3 },
+      { floor: 0, axis: 'z', coord: 10, min: 13.8, max: 19.2, sillY: 0.95, topY: 3.55, frameColor: 0xd9a84e, cols: 3 },
+      // Floor 1 (2F Guest Corridor + Suite 201 + Bath 201 + Suite 202 + Bath 202): real transparent suite windows!
+      { floor: 1, axis: 'z', coord: 5, min: -6.6, max: -4.8, sillY: 0.95, topY: 2.85, frameColor: 0xd9a84e, cols: 2 },
+      { floor: 1, axis: 'z', coord: 5, min: 4.8, max: 6.6, sillY: 0.95, topY: 2.85, frameColor: 0xd9a84e, cols: 2 },
+      { floor: 1, axis: 'z', coord: 6, min: -20.8, max: -17.2, sillY: 0.8, topY: 2.95, frameColor: 0xd9a84e, cols: 3 },
+      { floor: 1, axis: 'x', coord: -22, min: 2.2, max: 4.8, sillY: 0.85, topY: 2.95, frameColor: 0xd9a84e, cols: 2 },
+      { floor: 1, axis: 'z', coord: -10, min: -21.0, max: -18.4, sillY: 1.15, topY: 2.75, frameColor: 0xd9a84e, cols: 2 },
+      { floor: 1, axis: 'z', coord: 6, min: 17.2, max: 20.8, sillY: 0.8, topY: 2.95, frameColor: 0xd9a84e, cols: 3 },
+      { floor: 1, axis: 'x', coord: 22, min: 2.2, max: 4.8, sillY: 0.85, topY: 2.95, frameColor: 0xd9a84e, cols: 2 },
+      { floor: 1, axis: 'z', coord: -10, min: 18.4, max: 21.0, sillY: 1.15, topY: 2.75, frameColor: 0xd9a84e, cols: 2 },
+      // Floor 2 (3F The Ocean Penthouse): floor-to-ceiling panoramic transparent glass walls overlooking the live world!
+      { floor: 2, axis: 'x', coord: 5, min: 5.4, max: 8.6, sillY: 0.65, topY: 3.4, frameColor: 0xe6bd68, cols: 2 },
+      { floor: 2, axis: 'z', coord: -8, min: -10.5, max: 10.5, sillY: 0.35, topY: 4.15, frameColor: 0x1a1e2a, cols: 6 },
+      { floor: 2, axis: 'z', coord: 4, min: -10.6, max: -5.6, sillY: 0.45, topY: 4.0, frameColor: 0xe6bd68, cols: 3 },
+      { floor: 2, axis: 'z', coord: -8, min: -20.8, max: -13.2, sillY: 0.35, topY: 3.65, frameColor: 0x1a1e2a, cols: 4 },
+      { floor: 2, axis: 'x', coord: -22, min: -6.6, max: -3.6, sillY: 0.55, topY: 3.55, frameColor: 0xe6bd68, cols: 2 },
+      { floor: 2, axis: 'z', coord: 10, min: -21.0, max: -17.2, sillY: 0.7, topY: 3.1, frameColor: 0xe6bd68, cols: 3 },
+    ],
     doors: [
       {
         id: 'door-201',
@@ -1408,6 +1480,9 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'z', coord: 10, min: -2.4, max: 2.4, height: 3.1, frameColor: 0x221636, accentNeon: 0xff2e93 },
       { axis: 'x', coord: -12, min: -3.5, max: 2.5, height: 3.6, frameColor: 0x1a1430, accentNeon: 0x2cf3ff },
     ],
+    windows: [
+      { axis: 'z', coord: 7, min: -20.2, max: -14.6, sillY: 0.9, topY: 3.4, frameColor: 0x2cf3ff, cols: 3, tintColor: 0x62d8ff, opacity: 0.26 },
+    ],
     colliders: [
       // Elevated DJ Stage (exact mesh bounds: 11.4x4.4 centered at 0, -9.2)
       { minX: -5.7, maxX: 5.7, minZ: -11.4, maxZ: -7.0, minY: 0, maxY: 3.0 },
@@ -1634,6 +1709,12 @@ export const INTERIORS: InteriorDef[] = [
       { axis: 'x', coord: 8, min: 3.0, max: 8.0, height: 3.6, frameColor: 0x6b4128 },
       { axis: 'z', coord: 0, min: 2.0, max: 6.2, height: 3.2, frameColor: 0x6b4128 },
     ],
+    windows: [
+      { axis: 'z', coord: 11, min: -6.6, max: -3.0, sillY: 0.85, topY: 3.3, frameColor: 0x59341f, cols: 3 },
+      { axis: 'z', coord: 11, min: 3.0, max: 6.6, sillY: 0.85, topY: 3.3, frameColor: 0x59341f, cols: 3 },
+      { axis: 'z', coord: 11, min: 11.4, max: 18.6, sillY: 0.8, topY: 3.6, frameColor: 0x59341f, cols: 5 },
+      { axis: 'x', coord: 22, min: 1.3, max: 7.7, sillY: 0.8, topY: 3.6, frameColor: 0x59341f, cols: 4 },
+    ],
     colliders: [
       // Espresso & pastry bar counter (exact mesh bounds: 5.4x2.0 centered at -4.1, 3.2)
       { minX: -6.8, maxX: -1.4, minZ: 2.2, maxZ: 4.2, minY: 0, maxY: 1.2 },
@@ -1839,6 +1920,12 @@ export const INTERIORS: InteriorDef[] = [
     doorways: [
       { axis: 'x', coord: -11, min: -1.5, max: 3.5, height: 3.8, frameColor: 0x161822, accentNeon: 0x2cf3ff },
       { axis: 'z', coord: -6, min: -2.8, max: 2.8, height: 3.8, frameColor: 0x2b2e38 },
+    ],
+    windows: [
+      { axis: 'z', coord: 10, min: -8.0, max: -2.8, sillY: 0.45, topY: 4.5, frameColor: 0x1b1e28, cols: 3 },
+      { axis: 'z', coord: 10, min: 2.8, max: 8.0, sillY: 0.45, topY: 4.5, frameColor: 0x1b1e28, cols: 3 },
+      { axis: 'x', coord: -10, min: -14.2, max: -8.8, sillY: 0.9, topY: 3.9, frameColor: 0x1b1e28, cols: 4 },
+      { axis: 'x', coord: 10, min: -14.2, max: -8.8, sillY: 0.9, topY: 3.9, frameColor: 0x1b1e28, cols: 4 },
     ],
     colliders: [
       // Atrium central sculpture plinth (exact mesh bounds: 4.6x3.2 centered at 0, 1.1)
@@ -2228,48 +2315,6 @@ function createGalleryArtworkTexture(seed: number): THREE.CanvasTexture {
   return tex;
 }
 
-function createSunsetOceanViewTexture(): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 256;
-  const ctx = c.getContext('2d')!;
-  const sky = ctx.createLinearGradient(0, 0, 0, 155);
-  sky.addColorStop(0, '#1e2758');
-  sky.addColorStop(0.5, '#c44b7a');
-  sky.addColorStop(1, '#ff9c63');
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, 512, 155);
-
-  ctx.fillStyle = '#ffe08a';
-  ctx.beginPath();
-  ctx.arc(256, 128, 36, 0, Math.PI * 2);
-  ctx.fill();
-
-  const sea = ctx.createLinearGradient(0, 155, 0, 256);
-  sea.addColorStop(0, '#2e4c7d');
-  sea.addColorStop(1, '#0d1e38');
-  ctx.fillStyle = sea;
-  ctx.fillRect(0, 155, 512, 101);
-
-  ctx.fillStyle = 'rgba(255, 196, 120, 0.55)';
-  for (let i = 0; i < 8; i++) {
-    ctx.fillRect(210 + i * 4, 160 + i * 10, 92 - i * 8, 4);
-  }
-
-  // Palm silhouettes along the horizon
-  ctx.fillStyle = '#121224';
-  for (const px of [70, 130, 390, 445]) {
-    ctx.fillRect(px - 3, 110, 6, 65);
-    ctx.beginPath();
-    ctx.arc(px, 110, 18, Math.PI, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 // ─── ARCHITECTURAL OUTDOOR STOREFRONT BUILDER (BOLTED TO REAL BUILDINGS!) ─────
 
 interface OutdoorStorefrontHandle {
@@ -2552,55 +2597,6 @@ function addGlassShower(
   group.add(panel, topBar, handle, riser, arm, head);
 }
 
-function addArchitecturalWindow(
-  group: THREE.Group,
-  x: number,
-  y: number,
-  z: number,
-  w: number,
-  h: number,
-  rotY: number,
-  frameHex: number,
-  glowHex: number,
-  cols = 3,
-): void {
-  const winGroup = new THREE.Group();
-  winGroup.position.set(x, y, z);
-  winGroup.rotation.y = rotY;
-
-  const frameMat = new THREE.MeshStandardMaterial({ color: frameHex, roughness: 0.35, metalness: 0.45 });
-  const glassMat = new THREE.MeshStandardMaterial({
-    color: glowHex,
-    emissive: glowHex,
-    emissiveIntensity: 0.72,
-    roughness: 0.1,
-  });
-
-  // Glowing daylight / Miami sky pane
-  const pane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), glassMat);
-  winGroup.add(pane);
-
-  // Outer perimeter casing + sill
-  const topBar = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 0.12, 0.14), frameMat);
-  topBar.position.set(0, h * 0.5, 0.04);
-  const botSill = new THREE.Mesh(new THREE.BoxGeometry(w + 0.28, 0.12, 0.22), frameMat);
-  botSill.position.set(0, -h * 0.5, 0.08);
-  winGroup.add(topBar, botSill);
-
-  for (let i = 0; i <= cols; i++) {
-    const mx = -w * 0.5 + (i / cols) * w;
-    const mull = new THREE.Mesh(new THREE.BoxGeometry(0.08, h + 0.06, 0.1), frameMat);
-    mull.position.set(mx, 0, 0.04);
-    winGroup.add(mull);
-  }
-  // Horizontal transom bar
-  const midBar = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.09), frameMat);
-  midBar.position.set(0, h * 0.15, 0.04);
-  winGroup.add(midBar);
-
-  group.add(winGroup);
-}
-
 function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const group = new THREE.Group();
   group.position.set(0, INTERIOR_ORIGIN_Y, 0);
@@ -2731,8 +2727,29 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   group.add(hemi);
 
   // 2. Build all perimeter & multi-room partition walls with photographic PBR textures,
-  //    architectural wainscoting, chair rail, baseboards, crown molding, & wall sconces!
-  const wallSegs = computeRoomWallSegments(def.rooms, def.doorways);
+  //    architectural wainscoting, chair rail, baseboards, crown molding, wall sconces,
+  //    AND real cut-out transparent glass windows looking directly onto the live 3D world!
+  const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ, 0);
+  const exitWallZ = exitRoom.maxZ;
+  const exitDoorCut: InteriorDoorwayDef = {
+    floor: 0,
+    axis: 'z',
+    coord: exitWallZ,
+    min: def.exitX - 1.6,
+    max: def.exitX + 1.6,
+    height: 2.8,
+    frameColor: 0x1a1e2a,
+  };
+  const windowCuts: InteriorDoorwayDef[] = (def.windows ?? []).map((w) => ({
+    floor: w.floor ?? 0,
+    axis: w.axis,
+    coord: w.coord,
+    min: w.min,
+    max: w.max,
+    height: w.topY,
+    frameColor: w.frameColor,
+  }));
+  const wallSegs = computeRoomWallSegments(def.rooms, [...def.doorways, exitDoorCut, ...windowCuts]);
   const baseboardMat = new THREE.MeshStandardMaterial({ color: 0x221a16, roughness: 0.48, metalness: 0.15 });
   const sconceMetalMat = new THREE.MeshStandardMaterial({ color: 0xd4a44a, metalness: 0.88, roughness: 0.22 });
 
@@ -2822,6 +2839,142 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     }
 
     group.add(segGroup);
+  }
+
+  // 2b. Build real cut-out Transparent Architectural Windows (lower sill wall + upper spandrel wall + see-through glass & mullions!)
+  for (const win of def.windows ?? []) {
+    const winFloor = win.floor ?? 0;
+    const baseY = winFloor * FLOOR_STRIDE_Y;
+    const span = win.max - win.min;
+    const mid = (win.min + win.max) * 0.5;
+    if (span < 0.1) continue;
+
+    const ownerRoom = def.rooms.find(
+      (r) =>
+        (r.floor ?? 0) === winFloor &&
+        (win.axis === 'x'
+          ? (Math.abs(r.minX - win.coord) < 0.08 || Math.abs(r.maxX - win.coord) < 0.08) &&
+            mid >= r.minZ &&
+            mid <= r.maxZ
+          : (Math.abs(r.minZ - win.coord) < 0.08 || Math.abs(r.maxZ - win.coord) < 0.08) &&
+            mid >= r.minX &&
+            mid <= r.maxX),
+    );
+    if (!ownerRoom) continue;
+
+    const outwardSign: 1 | -1 =
+      win.axis === 'x'
+        ? Math.abs(ownerRoom.maxX - win.coord) < 0.08
+          ? 1
+          : -1
+        : Math.abs(ownerRoom.maxZ - win.coord) < 0.08
+          ? 1
+          : -1;
+
+    const winSlotGroup = new THREE.Group();
+    if (win.axis === 'x') {
+      winSlotGroup.position.set(win.coord, baseY, mid);
+      winSlotGroup.rotation.y = outwardSign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5;
+    } else {
+      winSlotGroup.position.set(mid, baseY, win.coord);
+      winSlotGroup.rotation.y = outwardSign > 0 ? Math.PI : 0;
+    }
+
+    // Lower wall apron below the window sill (0 .. win.sillY)
+    if (win.sillY > 0.05) {
+      const lowMat = new THREE.MeshStandardMaterial({ color: ownerRoom.wallColor, roughness: 0.82 });
+      pbrBindings.push({
+        mat: lowMat,
+        key: ownerRoom.wallPbr,
+        repeatX: Math.max(1, span / 2.6),
+        repeatY: Math.max(0.25, win.sillY / 2.6),
+        tintHex: ownerRoom.wallTint ?? ownerRoom.wallColor,
+      });
+      const lowWall = new THREE.Mesh(new THREE.PlaneGeometry(span, win.sillY), lowMat);
+      lowWall.position.set(0, win.sillY * 0.5, 0);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(span, 0.18, 0.05), baseboardMat);
+      base.position.set(0, 0.1, 0.05);
+      winSlotGroup.add(lowWall, base);
+
+      if (ownerRoom.wainscotColor !== undefined && win.sillY >= 0.45) {
+        const wH = Math.min(0.88, win.sillY - 0.18);
+        const wainMat = new THREE.MeshStandardMaterial({
+          color: ownerRoom.wainscotColor,
+          roughness: 0.55,
+          metalness: 0.1,
+        });
+        const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(span, wH, 0.03), wainMat);
+        wainPanel.position.set(0, 0.19 + wH * 0.5, 0.035);
+        winSlotGroup.add(wainPanel);
+      }
+    }
+
+    // Upper wall spandrel above the window head (win.topY .. ownerRoom.height)
+    const topH = ownerRoom.height - win.topY;
+    if (topH > 0.05) {
+      const topMat = new THREE.MeshStandardMaterial({ color: ownerRoom.wallColor, roughness: 0.82 });
+      pbrBindings.push({
+        mat: topMat,
+        key: ownerRoom.wallPbr,
+        repeatX: Math.max(1, span / 2.6),
+        repeatY: Math.max(0.25, topH / 2.6),
+        tintHex: ownerRoom.wallTint ?? ownerRoom.wallColor,
+      });
+      const topWall = new THREE.Mesh(new THREE.PlaneGeometry(span, topH), topMat);
+      topWall.position.set(0, win.topY + topH * 0.5, 0);
+      winSlotGroup.add(topWall);
+
+      if (ownerRoom.crownColor !== undefined) {
+        const crownMat = new THREE.MeshStandardMaterial({
+          color: ownerRoom.crownColor,
+          roughness: 0.35,
+          metalness: 0.3,
+        });
+        const crown = new THREE.Mesh(new THREE.BoxGeometry(span, 0.14, 0.1), crownMat);
+        crown.position.set(0, ownerRoom.height - 0.1, 0.08);
+        winSlotGroup.add(crown);
+      }
+    }
+
+    // Transparent Architectural Glass Pane + 3D Frame, Sill & Mullions inside the cutout!
+    const winH = Math.max(0.2, win.topY - win.sillY);
+    const winCY = (win.sillY + win.topY) * 0.5;
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: win.frameColor,
+      roughness: 0.32,
+      metalness: 0.55,
+    });
+    const glassMat = new THREE.MeshPhysicalMaterial({
+      color: win.tintColor ?? 0xd8f0ff,
+      roughness: 0.04,
+      metalness: 0.08,
+      transparent: true,
+      opacity: win.opacity ?? 0.18,
+      clearcoat: 1.0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(span, winH), glassMat);
+    pane.position.set(0, winCY, 0.01);
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(span + 0.16, 0.12, 0.16), frameMat);
+    topBar.position.set(0, win.topY, 0.04);
+    const botSill = new THREE.Mesh(new THREE.BoxGeometry(span + 0.24, 0.12, 0.24), frameMat);
+    botSill.position.set(0, win.sillY, 0.06);
+    winSlotGroup.add(pane, topBar, botSill);
+
+    const cols = win.cols ?? 3;
+    for (let i = 0; i <= cols; i++) {
+      const mx = -span * 0.5 + (i / cols) * span;
+      const mull = new THREE.Mesh(new THREE.BoxGeometry(0.08, winH + 0.06, 0.12), frameMat);
+      mull.position.set(mx, winCY, 0.04);
+      winSlotGroup.add(mull);
+    }
+    const midBar = new THREE.Mesh(new THREE.BoxGeometry(span, 0.065, 0.10), frameMat);
+    midBar.position.set(0, winCY + winH * 0.16, 0.04);
+    winSlotGroup.add(midBar);
+
+    group.add(winSlotGroup);
   }
 
   // 3. Build architectural Doorway Archways, Frames & Upper Header Transoms (zero gaps to void!)
@@ -3029,27 +3182,51 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     doors.push({ def: d, pivotA, pivotB, openProgress: 0, readerLedMat });
   }
 
-  // 4. Illuminated Front Exit Double Doors + Glowing Green Exit Threshold Ring (Floor 0)
-  const exitRoom = getInteriorRoomAt(def, def.exitX, def.exitZ, 0);
-  const exitWallZ = exitRoom.maxZ;
+  // 4. Illuminated Front Exit Transparent Glass Double Doors + Upper Wall Transom + Glowing Exit Ring (Floor 0)
   const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1e2a, roughness: 0.3, metalness: 0.7 });
-  const exitDoorMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(3.2, 2.8, 0.16),
-    new THREE.MeshStandardMaterial({
-      color: 0x263850,
-      emissive: 0x3a648a,
-      emissiveIntensity: 0.35,
-      roughness: 0.2,
-      metalness: 0.5,
-    }),
-  );
-  exitDoorMesh.position.set(def.exitX, 1.4, exitWallZ - 0.08);
+  const exitGlassMat = new THREE.MeshPhysicalMaterial({
+    color: 0xc8ebff,
+    roughness: 0.05,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.26,
+    clearcoat: 1.0,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const exitDoorMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), exitGlassMat);
+  exitDoorMesh.position.set(def.exitX, 1.4, exitWallZ - 0.04);
+  for (const dx of [-1.6, 0, 1.6]) {
+    const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.84, 0.16), doorFrameMat);
+    stile.position.set(def.exitX + dx, 1.42, exitWallZ - 0.04);
+    group.add(stile);
+  }
+  const doorHeaderBar = new THREE.Mesh(new THREE.BoxGeometry(3.36, 0.14, 0.18), doorFrameMat);
+  doorHeaderBar.position.set(def.exitX, 2.82, exitWallZ - 0.04);
+  group.add(doorHeaderBar);
+
+  const exitTopH = exitRoom.height - 2.8;
+  if (exitTopH > 0.05) {
+    const exitTopMat = new THREE.MeshStandardMaterial({ color: exitRoom.wallColor, roughness: 0.82 });
+    pbrBindings.push({
+      mat: exitTopMat,
+      key: exitRoom.wallPbr,
+      repeatX: 3.2 / 2.6,
+      repeatY: Math.max(0.3, exitTopH / 2.6),
+      tintHex: exitRoom.wallTint ?? exitRoom.wallColor,
+    });
+    const exitTopWall = new THREE.Mesh(new THREE.PlaneGeometry(3.2, exitTopH), exitTopMat);
+    exitTopWall.position.set(def.exitX, 2.8 + exitTopH * 0.5, exitWallZ);
+    exitTopWall.rotation.y = Math.PI;
+    group.add(exitTopWall);
+  }
+
   const exitSignTex = createSignTexture('EXIT', 'PRESS [E] TO STEP OUTSIDE', '#0c261d', '#46f7b4', '#46f7b4');
   const exitSign = new THREE.Mesh(
     new THREE.PlaneGeometry(2.1, 0.55),
     new THREE.MeshBasicMaterial({ map: exitSignTex }),
   );
-  exitSign.position.set(def.exitX, 3.15, exitWallZ - 0.12);
+  exitSign.position.set(def.exitX, 3.22, exitWallZ - 0.08);
   exitSign.rotation.y = Math.PI;
   group.add(exitDoorMesh, exitSign);
 
@@ -3097,7 +3274,6 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   if (def.id === 'hotel-solaire') {
     const f1Y = FLOOR_STRIDE_Y;
     const f2Y = FLOOR_STRIDE_Y * 2;
-    const sunsetTex = createSunsetOceanViewTexture();
 
     // ── FLOOR 0 (1F GRAND LOBBY & OCEAN LOUNGE) ──
     addAreaRug(group, -5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
@@ -3125,11 +3301,6 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     );
     dir1.position.set(2.35, 2.05, -3.88);
     group.add(dir1);
-
-    // Tall Sunlit Ocean Drive Windows flanking the Lobby Front Entrance & Lounge South Wall
-    addArchitecturalWindow(group, -6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
-    addArchitecturalWindow(group, 6.2, 2.7, 11.9, 4.2, 3.2, Math.PI, 0xd9a84e, 0xffdfb8, 3);
-    addArchitecturalWindow(group, 16.5, 2.4, 9.9, 4.6, 2.4, Math.PI, 0xd9a84e, 0xffd5a0, 3);
 
     // Ocean Cocktail Lounge Mahogany Bar Counter + Glowing Backlit Mirrored Liquor Wall!
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.0), darkWoodMat);
@@ -3220,10 +3391,6 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(f, a);
     }
 
-    // Sunlit Ocean Drive Windows in Suites 201 & 202
-    addArchitecturalWindow(group, -19.0, f1Y + 1.95, 5.9, 3.6, 2.0, Math.PI, 0xd9a84e, 0xffdfb8, 3);
-    addArchitecturalWindow(group, 19.0, f1Y + 1.95, 5.9, 3.6, 2.0, Math.PI, 0xd9a84e, 0xffdfb8, 3);
-
     // En-Suite Walk-In Glass Rain Showers in Bath 201 & Bath 202!
     addGlassShower(group, -16.1, f1Y, -9.1, 2.0, 1.6, 'west');
     addGlassShower(group, 16.1, f1Y, -9.1, 2.0, 1.6, 'east');
@@ -3242,31 +3409,6 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     dir3.position.set(-2.35, f2Y + 1.95, 9.88);
     dir3.rotation.y = Math.PI;
     group.add(dir3);
-
-    // Dramatic Panoramic Miami Ocean Sunset Glass Wall across Penthouse Salon & Master Bedroom!
-    const panoSalon = new THREE.Mesh(
-      new THREE.PlaneGeometry(21.4, 3.5),
-      new THREE.MeshBasicMaterial({ map: sunsetTex }),
-    );
-    panoSalon.position.set(0, f2Y + 2.35, -7.88);
-    group.add(panoSalon);
-    for (const mx of [-10.7, -5.3, 0, 5.3, 10.7]) {
-      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.6, 0.16), doorFrameMat);
-      mullion.position.set(mx, f2Y + 2.35, -7.82);
-      group.add(mullion);
-    }
-
-    const panoMaster = new THREE.Mesh(
-      new THREE.PlaneGeometry(8.2, 2.9),
-      new THREE.MeshBasicMaterial({ map: sunsetTex }),
-    );
-    panoMaster.position.set(-17.0, f2Y + 2.15, -7.88);
-    group.add(panoMaster);
-    for (const mx of [-21.1, -17.0, -12.9]) {
-      const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.0, 0.16), doorFrameMat);
-      mullion.position.set(mx, f2Y + 2.15, -7.82);
-      group.add(mullion);
-    }
 
     // Penthouse Private Wet Bar Counter & Glowing Back-Bar Mirror!
     const phBar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 6.6), darkWoodMat);
@@ -3395,14 +3537,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     menuSign.position.set(-4.1, 2.65, 0.12);
     group.add(menuSign);
 
-    // Sunlit Streetfront Café Windows flanking the front door + Conservatory Garden Windows!
-    addArchitecturalWindow(group, -4.8, 2.2, 10.9, 3.6, 2.4, Math.PI, 0x59341f, 0xfff0cc, 3);
-    addArchitecturalWindow(group, 4.8, 2.2, 10.9, 3.6, 2.4, Math.PI, 0x59341f, 0xfff0cc, 3);
-    addArchitecturalWindow(group, 15.0, 2.4, 10.9, 7.2, 2.6, Math.PI, 0x59341f, 0xfff2d2, 5);
-    addArchitecturalWindow(group, 21.9, 2.4, 4.5, 6.4, 2.6, -Math.PI * 0.5, 0x59341f, 0xfff2d2, 4);
-
     // Conservatory Overhead Skylight Panels
-    const skyLightMat = new THREE.MeshBasicMaterial({ color: 0xe6f8ff });
+    const skyLightMat = new THREE.MeshBasicMaterial({ color: 0xe6f8ff, transparent: true, opacity: 0.45 });
     for (const sx of [11.5, 15.0, 18.5]) {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 9.5), skyLightMat);
       panel.rotation.x = Math.PI * 0.5;
@@ -3467,9 +3603,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       group.add(frameGroup);
     });
 
-    // Tall Industrial Steel-Grid Loft Windows in Artist Studio Loft!
-    addArchitecturalWindow(group, -9.9, 2.6, -11.5, 5.4, 2.8, Math.PI * 0.5, 0x1b1e28, 0xffe4c4, 4);
-    addArchitecturalWindow(group, 9.9, 2.6, -11.5, 5.4, 2.8, -Math.PI * 0.5, 0x1b1e28, 0xffe4c4, 4);
+    // Artist Studio Loft area rug
     addAreaRug(group, 6.2, -14.2, 4.8, 4.6, 0x3b2f45, 0xffcf5c);
 
     // Darkroom Wing: 4 Flanking Animated Neon Light Monoliths around the custom Blender kinetic sculpture!
@@ -3746,8 +3880,24 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
         fx.update(elapsed);
       }
 
-      // Step living hotel staff patrols (bellhops, maids, room service) & drive real mocap Walk/Idle!
+      // Anchor the active interior in real world space at the host building's location & floor height,
+      // and isolate visibility to the current floor so other floors never photobomb outside windows!
       const playerFloor = getFloorFromPlayerY(playerY, venue.def);
+      const anchor = getInteriorWorldAnchor(venue.def, playerFloor);
+      venue.group.position.set(anchor.worldX, anchor.worldY, anchor.worldZ);
+      venue.group.rotation.y = anchor.worldRotY;
+
+      for (const child of venue.group.children) {
+        if (child === venue.propsRoot || child instanceof THREE.HemisphereLight) continue;
+        const cf = Math.max(0, Math.round((child.position.y - 2.2) / FLOOR_STRIDE_Y));
+        child.visible = cf === playerFloor;
+      }
+      for (const propChild of venue.propsRoot.children) {
+        const pf = Math.max(0, Math.round((propChild.position.y - 2.2) / FLOOR_STRIDE_Y));
+        propChild.visible = pf === playerFloor;
+      }
+
+      // Step living hotel staff patrols (bellhops, maids, room service) & drive real mocap Walk/Idle!
       const prevCoords = venue.npcs.map((h) => ({ x: h.def.x, z: h.def.z }));
       stepInteriorPatrols(venue.def, dt, playerX, playerZ, playerFloor);
 

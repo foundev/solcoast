@@ -38,6 +38,7 @@ import {
   findNearbyInteriorNpc,
   getFloorFromPlayerY,
   getInteriorRoomAt,
+  interiorLocalToWorld,
   stepInteriorPatrols,
   stepPlayerInInterior,
 } from '../src/world/interiors';
@@ -791,6 +792,17 @@ describe('Driving, On-Foot & Traffic Simulation', () => {
     expect(hotel.elevators?.length).toBe(3);
     expect(hotel.rooms.length).toBe(11);
     expect(hotel.doors?.length).toBe(7);
+    expect(hotel.windows?.length).toBeGreaterThanOrEqual(16);
+    // Interior local (0, 0, 12) aligns with Hotel Solaire's real Ocean Drive storefront (124.0, ~0.18, -48.4),
+    // and upper floors step up by REAL_STORY_HEIGHT (4.8m) so windows look out onto the live 3D world!
+    const w1F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y, 12, 0);
+    expect(w1F.x).toBeCloseTo(124.0, 2);
+    expect(w1F.z).toBeCloseTo(-48.4, 2);
+    expect(w1F.y).toBeCloseTo(0.22, 2);
+    const w2F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y, 12, 1);
+    const w3F = interiorLocalToWorld(hotel, 0, INTERIOR_ORIGIN_Y + FLOOR_STRIDE_Y * 2, 12, 2);
+    expect(w2F.y - w1F.y).toBeCloseTo(4.8, 2);
+    expect(w3F.y - w2F.y).toBeCloseTo(4.8, 2);
     // Floor 3 Penthouse elevator requires VIP keycard!
     expect(hotel.elevators!.find((e) => e.floor === 2)?.requiredKeycard).toBe('hotel-penthouse');
     // Uniformed hotel staff (concierge, bellhop, maid, security, bartender, waiter) present!

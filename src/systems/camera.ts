@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import { clamp, forwardFromYaw, lerp, lerpAngle, wrapAngle } from '../core/math';
 import type { PlayerState } from '../entities/player';
 import type { VehicleState } from '../entities/vehicle';
-import { getFloorFromPlayerY, getInteriorRoomAt, type InteriorDef } from '../world/interiors';
+import {
+  getFloorFromPlayerY,
+  getInteriorRoomAt,
+  interiorLocalToWorld,
+  type InteriorDef,
+} from '../world/interiors';
 
 export type CameraMode = 'chase' | 'far' | 'hood';
 
@@ -162,7 +167,27 @@ export class CameraController {
     } else {
       this.shakeIntensity = 0;
     }
-    camera.lookAt(this.currentLook);
+    if (activeInterior) {
+      const floor = getFloorFromPlayerY(player.y, activeInterior);
+      const wPos = interiorLocalToWorld(
+        activeInterior,
+        camera.position.x,
+        camera.position.y,
+        camera.position.z,
+        floor,
+      );
+      const wLook = interiorLocalToWorld(
+        activeInterior,
+        this.currentLook.x,
+        this.currentLook.y,
+        this.currentLook.z,
+        floor,
+      );
+      camera.position.set(wPos.x, wPos.y, wPos.z);
+      camera.lookAt(wLook.x, wLook.y, wLook.z);
+    } else {
+      camera.lookAt(this.currentLook);
+    }
     if (Math.abs(camera.fov - targetFov) > 0.05) {
       camera.fov = lerp(camera.fov, targetFov, clamp(safeDt * 6, 0, 1));
       camera.updateProjectionMatrix();
