@@ -77,7 +77,13 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: process.env.BUILD_SOURCEMAP === 'true',
-    chunkSizeWarningLimit: 800,
+    // vendor-rapier is Rapier3D WASM (@dimforge/rapier3d-compat inlines its
+    // ~3 MB WASM as base64 => 4.3 MB JS / 1.6 MB gzip). It is not initial-load
+    // code: main.ts only dynamic-imports it on the first ragdoll impact (then
+    // idle-prefetches it), so the chunks actually loaded up front stay small
+    // (index ~368 kB, vendor-three ~638 kB). 4500 kB accommodates that one
+    // known WASM chunk while still warning if any other chunk balloons.
+    chunkSizeWarningLimit: 4500,
     rollupOptions: {
       output: {
         manualChunks(id) {

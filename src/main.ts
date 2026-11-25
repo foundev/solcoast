@@ -51,7 +51,9 @@ import {
   saveWorld,
   serializeWorldState,
 } from './systems/persistence';
-import { RagdollPhysicsWorld } from './systems/ragdollWorld';
+// Type-only: the real module (and its 4.3 MB Rapier3D WASM chunk) is
+// dynamic-imported lazily in bootstrap() — see ensureRagdollWorld().
+import type { RagdollPhysicsWorld } from './systems/ragdollWorld';
 import { HudController } from './ui/hud';
 import { MinimapRenderer } from './ui/minimap';
 import {
@@ -106,7 +108,7 @@ async function bootstrap(): Promise<void> {
     loadingTip.textContent = tips[Math.floor(Math.random() * tips.length)];
   }
 
-  // Total real tracked asset items: 41 core game assets + 68 Blender/CC0 props + 8 interior PBR sets + Rapier WASM + world build + GPU warm-up
+  // Total real tracked asset items: 41 core game assets + 68 Blender/CC0 props + 8 interior PBR sets + world build + GPU warm-up
   const totalSteps = 41 + INTERIOR_PROP_KINDS.length + INTERIOR_TEXTURE_KEYS.length + 3;
   let completedSteps = 0;
   const advanceLoading = (label?: string, count = 1) => {
@@ -234,21 +236,35 @@ async function bootstrap(): Promise<void> {
 
   // Wait for ALL real 3D GLB models, Blender props, HDRI skies, PBR textures & Rapier3D physics behind the
   // loading screen so the player NEVER sees low-poly fallback models pop in on startup!
-  const [assets, propsMap, interiorTexMap, ragdollWorld] = await Promise.all([
+  const [assets, propsMap, interiorTexMap] = await Promise.all([
     loadGameAssets(renderer, (label) => advanceLoading(label)),
     loadInteriorPropAssets((label) => advanceLoading(label)),
     loadInteriorTextures((label) => advanceLoading(label)),
-    RagdollPhysicsWorld.create(blueprint)
+  ]);
+
+  // Rapier3D lives in its own ~4.3 MB lazy chunk, fetched only when a ragdoll
+  // is actually needed (first player/pedestrian impact), not on the critical
+  // loading path. Pending impacts are not cleared until this world exists, so
+  // a hit that lands while it is still loading simply spawns a beat later.
+  let ragdollWorld: RagdollPhysicsWorld | null = null;
+  let ragdollLoad: Promise<RagdollPhysicsWorld | null> | null = null;
+  const ensureRagdollWorld = (): Promise<RagdollPhysicsWorld | null> => {
+    if (ragdollWorld) return Promise.resolve(ragdollWorld);
+    ragdollLoad ??= import('./systems/ragdollWorld')
+      .then(({ RagdollPhysicsWorld: LazyRagdollPhysicsWorld }) =>
+        LazyRagdollPhysicsWorld.create(blueprint),
+      )
       .then((rw) => {
-        advanceLoading('Initializing Rapier3D physics…');
+        ragdollWorld = rw;
         return rw;
       })
       .catch((err) => {
         console.warn('[SolCoast] Rapier3D physics init failed, keeping kinematic fallback.', err);
-        advanceLoading('Initializing physics…');
+        ragdollLoad = null; // allow a later impact to retry
         return null;
-      }),
-  ]);
+      });
+    return ragdollLoad;
+  };
 
   // Attach every HD 3D model, uniform, HDRI reflection & photographic PBR texture BEFORE rendering the first frame!
   sky.setHdriSet(assets.hdris);
@@ -268,9 +284,8 @@ async function bootstrap(): Promise<void> {
   const playerPerson = assets.cloneProtagonist();
   if (playerPerson) {
     playerMesh.attachGltfCharacter(playerPerson.scene, playerPerson.animations);
-    if (ragdollWorld) {
-      ragdollWorld.registerAvatarRestPose('player', playerPerson.scene);
-    }
+    // No rest-pose registration here: RagdollPhysicsWorld.spawnRagdoll()
+    // captures it from the live avatar on first spawn anyway.
   }
 
   if (assets.pedestrianGltfs.length > 0) {
@@ -1181,6 +1196,12 @@ async function bootstrap(): Promise<void> {
 
     stepPedestrians(pedestrians, vehicles, dt, trafficCars, blueprint.colliders, player.x, player.z);
 
+    // Fetch the Rapier3D chunk on the first pending ragdoll impact.
+    const needsRagdollWorld =
+      player.pendingRagdollImpact !== null ||
+      pedestrians.some((p) => p.pendingRagdollImpact !== null);
+    if (!ragdollWorld && needsRagdollWorld) void ensureRagdollWorld();
+
     // Step real Rapier3D WASM 11-limb articulated ragdolls & 3-stage physical get-ups!
     if (ragdollWorld) {
       ragdollWorld.syncVehicles(vehicles, trafficCars, player.x, player.z);
@@ -1470,6 +1491,17 @@ async function bootstrap(): Promise<void> {
   if (loadingScreen) {
     loadingScreen.classList.add('fade-out');
     window.setTimeout(() => loadingScreen.classList.add('hidden'), 520);
+  }
+
+  // Warm the Rapier3D chunk in idle time after the first real frame so the
+  // first ragdoll is usually instant, without it ever blocking startup.
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(() => void ensureRagdollWorld(), { timeout: 3000 });
+  } else {
+    window.setTimeout(() => void ensureRagdollWorld(), 3000);
   }
 
   lastTime = performance.now();
