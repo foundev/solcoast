@@ -16,21 +16,12 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertPrivateToolDir } from './lib/safe-net.mjs';
 
 const gltfOptDir = process.env.SOLCOAST_GLTF_OPT_DIR
   ? path.resolve(process.env.SOLCOAST_GLTF_OPT_DIR)
   : path.join(os.homedir(), '.cache', 'solcoast', 'gltf-opt');
-const gltfOptPkg = path.join(gltfOptDir, 'package.json');
-if (!fs.existsSync(gltfOptPkg)) {
-  throw new Error(
-    `Missing gltf-transform tooling at ${gltfOptDir}. Install privately with:\n` +
-      `  mkdir -p -m 700 "${gltfOptDir}" && npm install --prefix "${gltfOptDir}" @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions draco3dgltf meshoptimizer`,
-  );
-}
-const optStat = fs.lstatSync(gltfOptDir);
-if (optStat.isSymbolicLink() || (optStat.mode & 0o002) !== 0) {
-  throw new Error(`Refusing to load Node modules from symlink or world-writable directory: ${gltfOptDir}`);
-}
+const gltfOptPkg = assertPrivateToolDir(gltfOptDir);
 const require = createRequire(gltfOptPkg);
 const { NodeIO, PropertyType } = require('@gltf-transform/core');
 const { ALL_EXTENSIONS, KHRDracoMeshCompression, KHRMaterialsTransmission } = require('@gltf-transform/extensions');

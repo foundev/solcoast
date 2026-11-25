@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  assertWithinDir,
+  fetchBufferSafe,
+  writeFileAtomicNoSymlink,
+} from './lib/safe-net.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -10,7 +15,6 @@ const assetsDir = path.join(rootDir, 'public', 'assets');
 const forceDownload = process.argv.includes('--force');
 
 const UA = { 'User-Agent': 'SolCoastGame/1.0 (+https://github.com/foundev/solcoast)' };
-const FETCH_TIMEOUT_MS = 60_000;
 const MAX_ASSET_BYTES = 100 * 1024 * 1024; // 100 MB safety ceiling
 
 const STATIC_ALLOWED_HOSTS = new Set([
@@ -22,88 +26,31 @@ const STATIC_ALLOWED_HOSTS = new Set([
   'innerscene.com',
 ]);
 
-function isPrivateOrLocalHost(hostname) {
-  const h = hostname.toLowerCase();
-  return (
-    h === 'localhost' ||
-    h.endsWith('.local') ||
-    h === '127.0.0.1' ||
-    h === '::1' ||
-    h === '[::1]' ||
-    h === '0.0.0.0' ||
-    h.startsWith('10.') ||
-    h.startsWith('192.168.') ||
-    h.startsWith('169.254.') ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(h)
-  );
-}
-
-function assertSafeHttpsUrl(rawUrl, allowedHosts = STATIC_ALLOWED_HOSTS) {
-  const parsed = new URL(rawUrl);
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`Refusing non-HTTPS URL: ${rawUrl}`);
-  }
-  if (isPrivateOrLocalHost(parsed.hostname)) {
-    throw new Error(`Refusing private/local host URL: ${rawUrl}`);
-  }
-  if (allowedHosts && !allowedHosts.has(parsed.hostname.toLowerCase())) {
-    throw new Error(`Refusing untrusted host "${parsed.hostname}" for URL: ${rawUrl}`);
-  }
-  return parsed.toString();
-}
-
-function assertWithinDir(baseDir, targetPath) {
-  const resolvedBase = path.resolve(baseDir);
-  const resolvedTarget = path.resolve(targetPath);
-  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
-    throw new Error(`Refusing path outside ${resolvedBase}: ${targetPath}`);
-  }
-  return resolvedTarget;
-}
-
-async function fetchBufferSafe(url, { allowedHosts = STATIC_ALLOWED_HOSTS, allowRedirectHosts = false } = {}) {
-  const safeUrl = assertSafeHttpsUrl(url, allowedHosts);
-  const res = await fetch(safeUrl, {
-    headers: UA,
-    redirect: 'follow',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} downloading ${safeUrl}`);
-  }
-  if (res.url) {
-    assertSafeHttpsUrl(res.url, allowRedirectHosts ? null : allowedHosts);
-  }
-  const contentLen = Number(res.headers.get('content-length') ?? '0');
-  if (Number.isFinite(contentLen) && contentLen > MAX_ASSET_BYTES) {
-    throw new Error(`Response too large (${contentLen} bytes) for ${safeUrl}`);
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.byteLength > MAX_ASSET_BYTES) {
-    throw new Error(`Downloaded payload exceeded limit (${buf.byteLength} bytes) for ${safeUrl}`);
-  }
-  return buf;
-}
-
 async function downloadFile(url, destPath) {
   const safeDest = assertWithinDir(assetsDir, destPath);
   if (!forceDownload && fs.existsSync(safeDest) && fs.statSync(safeDest).size > 1024) {
     console.log(`• ${path.relative(rootDir, safeDest)} (cached)`);
     return;
   }
-  fs.mkdirSync(path.dirname(safeDest), { recursive: true });
-  const buf = await fetchBufferSafe(url);
-  fs.writeFileSync(safeDest, buf);
+  const buf = await fetchBufferSafe(url, {
+    headers: UA,
+    allowedHosts: STATIC_ALLOWED_HOSTS,
+    maxBytes: MAX_ASSET_BYTES,
+  });
+  writeFileAtomicNoSymlink(assetsDir, safeDest, buf);
   console.log(`✓ ${path.relative(rootDir, safeDest)} (${(buf.length / 1024).toFixed(0)} KB)`);
 }
 
 function extractSingleGlbSafely(zipPath, destPath) {
   // Inspect ZIP entries in Python without extracting arbitrary files to disk:
-  // rejects Zip Slip (../ or absolute paths), symlinks, zip bombs, and non-glTF payloads.
+  // rejects Zip Slip (../ or absolute paths), symlinks, zip bombs, and non-glTF payloads,
+  // and writes atomically via a sibling temp file (never following symlinks at dest_path).
   const py = `
-import os, posixpath, stat, sys, zipfile
+import os, posixpath, stat, sys, tempfile, zipfile
 
 zip_path, dest_path, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
+if os.path.islink(dest_path):
+    raise RuntimeError(f'Refusing to overwrite symlink: {dest_path!r}')
 with zipfile.ZipFile(zip_path, 'r') as zf:
     chosen = None
     for info in zf.infolist():
@@ -130,8 +77,16 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
         raise RuntimeError('Extracted GLB exceeded size limit')
     if data[:4] != b'glTF':
         raise RuntimeError('Extracted .glb does not have valid glTF binary header')
-    with open(dest_path, 'wb') as dst:
-        dst.write(data)
+    fd, tmp_out = tempfile.mkstemp(prefix='.glb-', dir=os.path.dirname(dest_path))
+    try:
+        with os.fdopen(fd, 'wb') as dst:
+            dst.write(data)
+        os.chmod(tmp_out, 0o644)
+        os.replace(tmp_out, dest_path)
+    except Exception:
+        if os.path.exists(tmp_out):
+            os.unlink(tmp_out)
+        raise
 `;
   execFileSync('python3', ['-c', py, zipPath, destPath, String(MAX_ASSET_BYTES)]);
 }
@@ -147,10 +102,15 @@ async function downloadInnersceneGlb(slug, destPath) {
   }
   fs.mkdirSync(path.dirname(safeDest), { recursive: true });
   const url = `https://www.innerscene.com/api/library/${slug}/download`;
-  const buf = await fetchBufferSafe(url, { allowRedirectHosts: true });
+  const buf = await fetchBufferSafe(url, {
+    headers: UA,
+    allowedHosts: STATIC_ALLOWED_HOSTS,
+    allowRedirectHosts: true,
+    maxBytes: MAX_ASSET_BYTES,
+  });
   const magic = buf.subarray(0, 4).toString('ascii');
   if (magic === 'glTF') {
-    fs.writeFileSync(safeDest, buf);
+    writeFileAtomicNoSymlink(assetsDir, safeDest, buf);
     console.log(`✓ ${path.relative(rootDir, safeDest)} (${(buf.length / 1024).toFixed(0)} KB, raw GLB)`);
     return;
   }
@@ -158,7 +118,7 @@ async function downloadInnersceneGlb(slug, destPath) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'solcoast-glb-'));
     try {
       const zipPath = path.join(tmpDir, 'pkg.zip');
-      fs.writeFileSync(zipPath, buf, { mode: 0o600 });
+      fs.writeFileSync(zipPath, buf, { flag: 'wx', mode: 0o600 });
       extractSingleGlbSafely(zipPath, safeDest);
       const sizeKb = (fs.statSync(safeDest).size / 1024).toFixed(0);
       console.log(`✓ ${path.relative(rootDir, safeDest)} (${sizeKb} KB, extracted GLB)`);
@@ -174,13 +134,12 @@ async function fetchPolyHavenFiles(id) {
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
     throw new Error(`Invalid Poly Haven asset id: ${id}`);
   }
-  const url = assertSafeHttpsUrl(`https://api.polyhaven.com/files/${id}`);
-  const res = await fetch(url, {
+  const buf = await fetchBufferSafe(`https://api.polyhaven.com/files/${id}`, {
     headers: UA,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    allowedHosts: STATIC_ALLOWED_HOSTS,
+    maxBytes: 2 * 1024 * 1024,
   });
-  if (!res.ok) throw new Error(`Poly Haven API error ${res.status} for ${id}`);
-  return res.json();
+  return JSON.parse(buf.toString('utf8'));
 }
 
 async function main() {
