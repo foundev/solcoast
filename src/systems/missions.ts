@@ -228,8 +228,20 @@ export interface MissionUpdateEvent {
 export class MissionManager {
   public active: ActiveMissionState | null = null;
   public completedIds = new Set<string>();
-  public bestTimes: Record<string, number> = {};
+  public bestTimes: Record<string, number> = Object.create(null);
   public trackedMissionId: string | null = null;
+
+  public setBestTime(id: string, sec: number): void {
+    if (
+      typeof sec !== 'number' ||
+      !Number.isFinite(sec) ||
+      sec <= 0 ||
+      !MISSIONS.some((m) => m.id === id)
+    ) {
+      return;
+    }
+    this.bestTimes[id] = Number(sec.toFixed(1));
+  }
 
   public startMission(id: string): MissionDef | null {
     const def = MISSIONS.find((m) => m.id === id);

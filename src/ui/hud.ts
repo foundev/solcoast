@@ -58,6 +58,9 @@ export class HudController {
   private saveTimer: number | null = null;
 
   public showToast(message: string, tone: 'info' | 'success' | 'warn' = 'info'): void {
+    while (this.toastContainer.childElementCount >= 6) {
+      this.toastContainer.firstElementChild?.remove();
+    }
     const el = document.createElement('div');
     el.className = `toast ${tone === 'success' ? 'toast-success' : tone === 'warn' ? 'toast-warn' : ''}`;
     el.textContent = message;
@@ -89,21 +92,33 @@ export class HudController {
   public setPauseMenu(open: boolean, missions: MissionManager): void {
     this.pauseOverlay.classList.toggle('hidden', !open);
     if (open) {
-      this.pauseMissionList.innerHTML = '';
+      this.pauseMissionList.replaceChildren();
       for (const m of MISSIONS) {
         const done = missions.completedIds.has(m.id);
-        const best = missions.bestTimes[m.id];
+        const rawBest = Object.prototype.hasOwnProperty.call(missions.bestTimes, m.id)
+          ? missions.bestTimes[m.id]
+          : undefined;
+        const best = typeof rawBest === 'number' && Number.isFinite(rawBest) && rawBest > 0 ? rawBest : undefined;
+
         const row = document.createElement('div');
         row.className = `pause-mission-item ${done ? 'done' : ''}`;
-        row.innerHTML = `
-          <div>
-            <div class="m-name">${m.title}</div>
-            <div class="m-sub">${m.district} · $${m.rewardCash.toLocaleString()}</div>
-          </div>
-          <span class="pill ${done ? 'pill-time' : 'pill-mission'}">${
-            done ? (best ? `DONE ${best}s` : 'DONE') : m.category
-          }</span>
-        `;
+
+        const infoWrap = document.createElement('div');
+        const nameEl = document.createElement('div');
+        nameEl.className = 'm-name';
+        nameEl.textContent = m.title;
+
+        const subEl = document.createElement('div');
+        subEl.className = 'm-sub';
+        subEl.textContent = `${m.district} · $${m.rewardCash.toLocaleString()}`;
+
+        infoWrap.append(nameEl, subEl);
+
+        const pillEl = document.createElement('span');
+        pillEl.className = `pill ${done ? 'pill-time' : 'pill-mission'}`;
+        pillEl.textContent = done ? (best !== undefined ? `DONE ${best}s` : 'DONE') : m.category;
+
+        row.append(infoWrap, pillEl);
         this.pauseMissionList.appendChild(row);
       }
     }
@@ -187,7 +202,10 @@ export class HudController {
       this.vehicleBadgeEl.classList.toggle('hidden', !activeVehicle.drifting);
       const rpmPct = Math.round(6 + Math.min(1, Math.max(0, activeVehicle.rpm)) * 94);
       this.rpmFillEl.style.width = `${rpmPct}%`;
-      const finish = PAINT_FINISHES[activeVehicle.paintIndex % PAINT_FINISHES.length];
+      const safePaintIdx =
+        ((Math.trunc(activeVehicle.paintIndex) % PAINT_FINISHES.length) + PAINT_FINISHES.length) %
+        PAINT_FINISHES.length;
+      const finish = PAINT_FINISHES[safePaintIdx];
       this.paintNameEl.textContent = finish.name;
       this.odoValEl.textContent = `${(activeVehicle.odometerMeters / 1609.34).toFixed(1)} mi`;
     } else {

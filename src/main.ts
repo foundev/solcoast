@@ -189,9 +189,11 @@ async function bootstrap(): Promise<void> {
         target.z = sv.z;
         target.y = getGroundHeight(sv.x, sv.z);
         target.yaw = sv.yaw;
-        target.paintIndex = sv.paintIndex;
+        target.paintIndex =
+          ((Math.trunc(sv.paintIndex) % PAINT_FINISHES.length) + PAINT_FINISHES.length) %
+          PAINT_FINISHES.length;
         target.odometerMeters = sv.odometerMeters;
-        if (target.config.customColorHex === undefined || sv.paintIndex !== target.config.defaultPaintIndex) {
+        if (target.config.customColorHex === undefined || target.paintIndex !== target.config.defaultPaintIndex) {
           vehicleMeshes.get(target.id)?.applyPaint(target.paintIndex);
         }
       }
@@ -206,7 +208,9 @@ async function bootstrap(): Promise<void> {
         : null;
     player.walkedMeters = saved.player.walkedMeters;
     saved.completedMissions.forEach((id) => missions.completedIds.add(id));
-    Object.assign(missions.bestTimes, saved.bestTimes);
+    for (const [missionId, bestSec] of Object.entries(saved.bestTimes)) {
+      missions.setBestTime(missionId, bestSec);
+    }
     saved.discoveredDistricts.forEach((d) => discoveredDistricts.add(d));
     saved.hotelKeycards?.forEach((k) => ownedKeycards.add(k));
   }
@@ -405,8 +409,9 @@ async function bootstrap(): Promise<void> {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'solcoast-save.json';
+    a.rel = 'noopener noreferrer';
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     hud.showToast('Exported solcoast-save.json', 'info');
   });
   hud.btnAudio.addEventListener('click', () => {

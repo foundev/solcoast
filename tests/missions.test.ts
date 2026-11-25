@@ -3,9 +3,12 @@ import { createInitialPlayerState } from '../src/entities/player';
 import { DEFAULT_VEHICLES, createVehicleState } from '../src/entities/vehicle';
 import { MISSIONS, MissionManager } from '../src/systems/missions';
 import {
+  MAX_SAVE_LENGTH,
+  SAVE_STORAGE_KEY,
   clearWorldSave,
   computePlayerRank,
   loadWorld,
+  parseAndValidateSaveData,
   saveWorld,
   serializeWorldState,
   type StorageLike,
@@ -107,5 +110,97 @@ describe('Mission System & World Persistence', () => {
 
     clearWorldSave(store);
     expect(loadWorld(store)).toBeNull();
+  });
+
+  it('rejects prototype pollution, XSS payloads, and malformed/out-of-bounds fields in untrusted save data', () => {
+    const store = createMemoryStorage();
+
+    // 1. Prototype pollution + string XSS payload in bestTimes + invalid district/mission IDs + negative paintIndex
+    const maliciousRaw = JSON.stringify({
+      version: 1,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      cash: 5000,
+      timeOfDayHours: 30.5,
+      player: {
+        x: 140,
+        y: 0,
+        z: 10,
+        yaw: 0,
+        vehicleId: 'solstice-gt',
+        walkedMeters: -50,
+      },
+      vehicles: [
+        {
+          id: 'solstice-gt',
+          x: 140,
+          z: 10,
+          yaw: 0,
+          paintIndex: -3,
+          odometerMeters: 100,
+        },
+        {
+          id: '__proto__',
+          x: 0,
+          z: 0,
+          yaw: 0,
+          paintIndex: 0,
+          odometerMeters: 0,
+        },
+      ],
+      completedMissions: ['ocean-drive-sprint', '<script>alert(1)</script>', 'ocean-drive-sprint'],
+      bestTimes: JSON.parse(
+        '{"ocean-drive-sprint":"<img src=x onerror=alert(1)>","south-pier-drop":42.5,"__proto__":{"polluted":true},"constructor":99}',
+      ),
+      discoveredDistricts: ['ocean-drive', 'not-a-real-district', '__proto__'],
+      hotelKeycards: ['hotel-suite-201', '../etc/passwd', '<svg onload=alert(1)>'],
+    });
+
+    store.setItem(SAVE_STORAGE_KEY, maliciousRaw);
+    const restored = loadWorld(store);
+    expect(restored).not.toBeNull();
+
+    // Object.prototype must remain completely clean
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(restored!.bestTimes)).toBeNull();
+
+    // XSS string bestTime rejected; valid numeric bestTime preserved; forbidden keys stripped
+    expect(restored!.bestTimes['ocean-drive-sprint']).toBeUndefined();
+    expect(restored!.bestTimes['south-pier-drop']).toBe(42.5);
+    expect('__proto__' in restored!.bestTimes).toBe(false);
+    expect('constructor' in restored!.bestTimes).toBe(false);
+
+    // Arrays strictly filtered & deduplicated; numeric bounds enforced
+    expect(restored!.completedMissions).toEqual(['ocean-drive-sprint']);
+    expect(restored!.discoveredDistricts).toEqual(['ocean-drive']);
+    expect(restored!.hotelKeycards).toEqual(['hotel-suite-201']);
+    expect(restored!.timeOfDayHours).toBeCloseTo(6.5, 5);
+    expect(restored!.player.walkedMeters).toBe(0);
+    expect(restored!.vehicles).toHaveLength(1);
+    expect(restored!.vehicles[0].paintIndex).toBe(0);
+
+    // 2. Rejects oversized save payloads (DoS guard) and NaN/non-numeric required fields
+    expect(parseAndValidateSaveData('x'.repeat(MAX_SAVE_LENGTH + 1))).toBeNull();
+    expect(
+      parseAndValidateSaveData(
+        JSON.stringify({
+          version: 1,
+          cash: 'not-a-number',
+          timeOfDayHours: 12,
+          player: { x: 0, y: 0, z: 0, yaw: 0, vehicleId: null, walkedMeters: 0 },
+          vehicles: [],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseAndValidateSaveData(
+        JSON.stringify({
+          version: 1,
+          cash: 100,
+          timeOfDayHours: 12,
+          player: { x: null, y: 0, z: 0, yaw: 0, vehicleId: null, walkedMeters: 0 },
+          vehicles: [],
+        }),
+      ),
+    ).toBeNull();
   });
 });
