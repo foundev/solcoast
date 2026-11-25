@@ -5,8 +5,9 @@
  *   3. Bakes exact -Z forward alignment, X/Z centering, y=0 grounding & real-world scale
  *   4. Decimates CAD tessellation via meshoptimizer + compresses embedded textures + Draco
  *
- * One-time deps:
- *   npm install --prefix /tmp/gltf-opt @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions draco3dgltf meshoptimizer
+ * One-time deps (installed in a user-private cache directory, never world-writable /tmp):
+ *   mkdir -p -m 700 ~/.cache/solcoast/gltf-opt
+ *   npm install --prefix ~/.cache/solcoast/gltf-opt @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions draco3dgltf meshoptimizer
  *   node scripts/optimize-glbs.mjs
  */
 import { execFileSync } from 'node:child_process';
@@ -16,7 +17,21 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const require = createRequire('/tmp/gltf-opt/package.json');
+const gltfOptDir = process.env.SOLCOAST_GLTF_OPT_DIR
+  ? path.resolve(process.env.SOLCOAST_GLTF_OPT_DIR)
+  : path.join(os.homedir(), '.cache', 'solcoast', 'gltf-opt');
+const gltfOptPkg = path.join(gltfOptDir, 'package.json');
+if (!fs.existsSync(gltfOptPkg)) {
+  throw new Error(
+    `Missing gltf-transform tooling at ${gltfOptDir}. Install privately with:\n` +
+      `  mkdir -p -m 700 "${gltfOptDir}" && npm install --prefix "${gltfOptDir}" @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions draco3dgltf meshoptimizer`,
+  );
+}
+const optStat = fs.lstatSync(gltfOptDir);
+if (optStat.isSymbolicLink() || (optStat.mode & 0o002) !== 0) {
+  throw new Error(`Refusing to load Node modules from symlink or world-writable directory: ${gltfOptDir}`);
+}
+const require = createRequire(gltfOptPkg);
 const { NodeIO, PropertyType } = require('@gltf-transform/core');
 const { ALL_EXTENSIONS, KHRDracoMeshCompression, KHRMaterialsTransmission } = require('@gltf-transform/extensions');
 const { dedup, draco, flatten, join, prune, simplify, weld } = require('@gltf-transform/functions');
@@ -56,6 +71,7 @@ function compressImageWithPil(bytes, mimeType, maxDim = 512) {
     const py = `
 from PIL import Image
 import sys
+Image.MAX_IMAGE_PIXELS = 40_000_000
 im = Image.open(sys.argv[1])
 has_alpha = im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info)
 if has_alpha:

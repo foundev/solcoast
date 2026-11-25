@@ -10,7 +10,14 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, '..', 'public', 'assets', 'textures');
-const cacheDir = path.join(os.tmpdir(), 'ph-int-tex');
+const cacheRoot = process.env.SOLCOAST_CACHE_DIR
+  ? path.resolve(process.env.SOLCOAST_CACHE_DIR)
+  : path.join(os.homedir(), '.cache', 'solcoast');
+const cacheDir = path.join(cacheRoot, 'ph-int-tex');
+
+const POLYHAVEN_HOSTS = new Set(['api.polyhaven.com', 'dl.polyhaven.org', 'cdn.polyhaven.org']);
+const FETCH_TIMEOUT_MS = 60_000;
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 
 const TEX_SPECS = [
   { prefix: 'int_marble', phId: 'marble_tiles' },
@@ -25,19 +32,48 @@ const TEX_SPECS = [
 
 const UA = { 'User-Agent': 'SolCoastGame/1.0 (https://github.com/foundev/solcoast)' };
 
+function assertSafePolyHavenUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Refusing non-HTTPS URL: ${rawUrl}`);
+  }
+  if (!POLYHAVEN_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new Error(`Refusing untrusted host "${parsed.hostname}" for URL: ${rawUrl}`);
+  }
+  return parsed.toString();
+}
+
 async function downloadFile(url, dest) {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const safeUrl = assertSafePolyHavenUrl(url);
+  fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
   if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return;
-  const res = await fetch(url, { headers: UA });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+  const res = await fetch(safeUrl, {
+    headers: UA,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${safeUrl}`);
+  if (res.url) assertSafePolyHavenUrl(res.url);
+  const contentLen = Number(res.headers.get('content-length') ?? '0');
+  if (Number.isFinite(contentLen) && contentLen > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`Download too large (${contentLen} bytes) for ${safeUrl}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.byteLength > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`Downloaded payload exceeded limit (${buf.byteLength} bytes) for ${safeUrl}`);
+  }
+  fs.writeFileSync(dest, buf);
 }
 
 async function downloadAll() {
-  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   await Promise.all(
     TEX_SPECS.map(async (spec) => {
-      const metaRes = await fetch(`https://api.polyhaven.com/files/${spec.phId}`, { headers: UA });
+      const metaUrl = assertSafePolyHavenUrl(`https://api.polyhaven.com/files/${spec.phId}`);
+      const metaRes = await fetch(metaUrl, {
+        headers: UA,
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       if (!metaRes.ok) throw new Error(`Meta HTTP ${metaRes.status} for ${spec.phId}`);
       const meta = await metaRes.json();
 
@@ -72,6 +108,7 @@ function optimizeAll() {
   const py = `
 from PIL import Image
 import sys
+Image.MAX_IMAGE_PIXELS = 40_000_000
 im = Image.open(sys.argv[1]).convert('RGB')
 im.thumbnail((512, 512), Image.Resampling.LANCZOS)
 im.save(sys.argv[2], 'JPEG', quality=82, optimize=True)
