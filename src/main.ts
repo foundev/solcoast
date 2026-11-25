@@ -66,6 +66,7 @@ import {
   createCityBlueprint,
   getDistrictAt,
   getGroundHeight,
+  isDeepWater,
 } from './world/cityData';
 import {
   FLOOR_STRIDE_Y,
@@ -185,10 +186,12 @@ async function bootstrap(): Promise<void> {
     for (const sv of saved.vehicles) {
       const target = vehicles.find((v) => v.id === sv.id);
       if (target) {
-        target.x = sv.x;
-        target.z = sv.z;
-        target.y = getGroundHeight(sv.x, sv.z);
-        target.yaw = sv.yaw;
+        if (!isDeepWater(sv.x, sv.z)) {
+          target.x = sv.x;
+          target.z = sv.z;
+          target.y = getGroundHeight(sv.x, sv.z);
+          target.yaw = sv.yaw;
+        }
         target.paintIndex =
           ((Math.trunc(sv.paintIndex) % PAINT_FINISHES.length) + PAINT_FINISHES.length) %
           PAINT_FINISHES.length;
@@ -198,10 +201,13 @@ async function bootstrap(): Promise<void> {
         }
       }
     }
-    player.x = saved.player.x;
-    player.y = saved.player.y;
-    player.z = saved.player.z;
-    player.yaw = saved.player.yaw;
+    if (!isDeepWater(saved.player.x, saved.player.z)) {
+      const groundY = getGroundHeight(saved.player.x, saved.player.z);
+      player.x = saved.player.x;
+      player.y = Math.max(groundY, saved.player.y);
+      player.z = saved.player.z;
+      player.yaw = saved.player.yaw;
+    }
     player.vehicleId =
       saved.player.vehicleId && vehicles.some((v) => v.id === saved.player.vehicleId)
         ? saved.player.vehicleId

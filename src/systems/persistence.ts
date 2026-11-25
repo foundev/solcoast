@@ -10,9 +10,14 @@ export const MAX_SAVE_LENGTH = 256 * 1024;
 
 const VALID_DISTRICT_SET = new Set<string>(ALL_DISTRICT_IDS);
 const VALID_MISSION_SET = new Set<string>(MISSIONS.map((m) => m.id));
+export const VALID_HOTEL_KEYCARDS = ['hotel-suite-201', 'hotel-penthouse'] as const;
+const VALID_KEYCARD_SET = new Set<string>(VALID_HOTEL_KEYCARDS);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-const MAX_WORLD_COORD = 2000;
+const WORLD_MIN_X = -640;
+const WORLD_MAX_X = 430;
+const WORLD_MIN_Z = -630;
+const WORLD_MAX_Z = 320;
 const MAX_CASH = 1_000_000_000;
 const MAX_DISTANCE = 100_000_000;
 const MAX_VEHICLES = 64;
@@ -144,9 +149,9 @@ export function parseAndValidateSaveData(raw: string): WorldSaveData | null {
   const timeOfDayHours = ((parsed.timeOfDayHours % 24) + 24) % 24;
 
   if (!isPlainRecord(parsed.player)) return null;
-  const px = asFiniteNumber(parsed.player.x, -MAX_WORLD_COORD, MAX_WORLD_COORD);
-  const py = asFiniteNumber(parsed.player.y, -200, 500);
-  const pz = asFiniteNumber(parsed.player.z, -MAX_WORLD_COORD, MAX_WORLD_COORD);
+  const px = asFiniteNumber(parsed.player.x, WORLD_MIN_X, WORLD_MAX_X);
+  const py = asFiniteNumber(parsed.player.y, -20, 120);
+  const pz = asFiniteNumber(parsed.player.z, WORLD_MIN_Z, WORLD_MAX_Z);
   const pyaw = asFiniteNumber(parsed.player.yaw, -1000, 1000);
   const walkedMeters = asFiniteNumber(parsed.player.walkedMeters, 0, MAX_DISTANCE);
   if (px === null || py === null || pz === null || pyaw === null || walkedMeters === null) {
@@ -165,8 +170,8 @@ export function parseAndValidateSaveData(raw: string): WorldSaveData | null {
   for (const item of parsed.vehicles.slice(0, MAX_VEHICLES)) {
     if (!isPlainRecord(item)) continue;
     const id = asSafeId(item.id);
-    const vx = asFiniteNumber(item.x, -MAX_WORLD_COORD, MAX_WORLD_COORD);
-    const vz = asFiniteNumber(item.z, -MAX_WORLD_COORD, MAX_WORLD_COORD);
+    const vx = asFiniteNumber(item.x, WORLD_MIN_X, WORLD_MAX_X);
+    const vz = asFiniteNumber(item.z, WORLD_MIN_Z, WORLD_MAX_Z);
     const vyaw = asFiniteNumber(item.yaw, -1000, 1000);
     const paintRaw = asFiniteNumber(item.paintIndex, 0, 1000);
     const odo = asFiniteNumber(item.odometerMeters, 0, MAX_DISTANCE);
@@ -220,10 +225,9 @@ export function parseAndValidateSaveData(raw: string): WorldSaveData | null {
   if (Array.isArray(parsed.hotelKeycards)) {
     const seen = new Set<string>();
     for (const k of parsed.hotelKeycards.slice(0, MAX_KEYCARDS)) {
-      const safeKey = asSafeId(k);
-      if (safeKey && !seen.has(safeKey)) {
-        seen.add(safeKey);
-        hotelKeycards.push(safeKey);
+      if (typeof k === 'string' && VALID_KEYCARD_SET.has(k) && !seen.has(k)) {
+        seen.add(k);
+        hotelKeycards.push(k);
       }
     }
   }

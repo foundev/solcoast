@@ -1,10 +1,9 @@
 import { defineConfig, type Plugin } from 'vite';
 
-const BASE_CSP_DIRECTIVES = [
+const SHARED_CSP_DIRECTIVES = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval' blob:",
+  "script-src 'self' 'wasm-unsafe-eval'",
   "worker-src 'self' blob:",
-  "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
   "font-src 'self'",
@@ -13,10 +12,22 @@ const BASE_CSP_DIRECTIVES = [
   "form-action 'none'",
 ];
 
-const PROD_META_CSP = [...BASE_CSP_DIRECTIVES, "connect-src 'self' data: blob:"].join('; ');
+// Production CSS is served as an external stylesheet, so block injected <style> elements
+// while still permitting JS progress-bar width updates via style-src-attr.
+const PROD_META_CSP = [
+  ...SHARED_CSP_DIRECTIVES,
+  "style-src 'self'",
+  "style-src-elem 'self'",
+  "style-src-attr 'unsafe-inline'",
+  "connect-src 'self' data: blob:",
+].join('; ');
+
 const PROD_HEADER_CSP = `${PROD_META_CSP}; frame-ancestors 'none'`;
+
+// Vite dev injects HMR CSS <style> tags and connects over localhost WebSocket.
 const DEV_HEADER_CSP = [
-  ...BASE_CSP_DIRECTIVES,
+  ...SHARED_CSP_DIRECTIVES,
+  "style-src 'self' 'unsafe-inline'",
   "connect-src 'self' data: blob: ws://localhost:* ws://127.0.0.1:*",
   "frame-ancestors 'none'",
 ].join('; ');
@@ -27,6 +38,7 @@ const COMMON_SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
 };
 
 function injectProductionCspMeta(): Plugin {
@@ -48,6 +60,9 @@ export default defineConfig({
   server: {
     port: 5173,
     open: false,
+    fs: {
+      strict: true,
+    },
     headers: {
       ...COMMON_SECURITY_HEADERS,
       'Content-Security-Policy': DEV_HEADER_CSP,

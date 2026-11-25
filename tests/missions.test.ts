@@ -152,7 +152,7 @@ describe('Mission System & World Persistence', () => {
         '{"ocean-drive-sprint":"<img src=x onerror=alert(1)>","south-pier-drop":42.5,"__proto__":{"polluted":true},"constructor":99}',
       ),
       discoveredDistricts: ['ocean-drive', 'not-a-real-district', '__proto__'],
-      hotelKeycards: ['hotel-suite-201', '../etc/passwd', '<svg onload=alert(1)>'],
+      hotelKeycards: ['hotel-suite-201', 'fake-admin-card', '../etc/passwd', '<svg onload=alert(1)>'],
     });
 
     store.setItem(SAVE_STORAGE_KEY, maliciousRaw);
