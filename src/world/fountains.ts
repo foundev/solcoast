@@ -8,7 +8,6 @@ export interface AnimatedFountainWater {
 }
 
 interface DropletTrack {
-  mesh: THREE.Mesh;
   phase: number;
   speed: number;
   startX: number;
@@ -18,6 +17,9 @@ interface DropletTrack {
   endY: number;
   endZ: number;
   arcPeak: number;
+  sx: number;
+  sy: number;
+  sz: number;
 }
 
 interface RippleRing {
@@ -51,8 +53,9 @@ function getSharedWaterResources() {
 }
 
 /**
- * Builds lightweight, live-animated arcing water jets, bubbling plumes, waterfall shimmer,
+ * Builds instanced, live-animated arcing water jets, bubbling plumes, waterfall shimmer,
  * and expanding ripple rings tailored to each of the 4 Sol Coast fountain varieties.
+ * All droplets per fountain batch into 1 single InstancedMesh draw call (instead of 32-102)!
  */
 export function createFountainWaterEffect(style: FountainStyle, scale = 1.0): AnimatedFountainWater {
   const { dropGeo, dropMat, rippleGeo } = getSharedWaterResources();
@@ -76,11 +79,7 @@ export function createFountainWaterEffect(style: FountainStyle, scale = 1.0): An
     phaseOffset: number,
   ) => {
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(dropGeo, dropMat);
-      m.scale.set(dropScale, dropScale * 1.45, dropScale);
-      group.add(m);
       droplets.push({
-        mesh: m,
         phase: (i / count + phaseOffset) % 1,
         speed,
         startX: sx,
@@ -90,6 +89,9 @@ export function createFountainWaterEffect(style: FountainStyle, scale = 1.0): An
         endY: ey,
         endZ: ez,
         arcPeak,
+        sx: dropScale,
+        sy: dropScale * 1.45,
+        sz: dropScale,
       });
     }
   };
@@ -228,18 +230,42 @@ export function createFountainWaterEffect(style: FountainStyle, scale = 1.0): An
     addRipple(0.51, 0.55, 1.25, 0.5);
   }
 
+  const dropInst = new THREE.InstancedMesh(dropGeo, dropMat, droplets.length);
+  dropInst.castShadow = false;
+  dropInst.receiveShadow = false;
+  dropInst.frustumCulled = false; // Group itself is distance-culled; droplets orbit fountain origin
+  group.add(dropInst);
+
+  // Direct matrix buffer writes avoid per-droplet Matrix4.compose() overhead
+  const matArray = dropInst.instanceMatrix.array as Float32Array;
+  for (let i = 0; i < droplets.length; i++) {
+    const base = i * 16;
+    const d = droplets[i];
+    matArray[base + 0] = d.sx;
+    matArray[base + 5] = d.sy;
+    matArray[base + 10] = d.sz;
+    matArray[base + 15] = 1;
+  }
+
   return {
     group,
     update(elapsed: number) {
-      for (const d of droplets) {
+      for (let i = 0; i < droplets.length; i++) {
+        const d = droplets[i];
         const t = (elapsed * d.speed + d.phase) % 1;
         const x = d.startX + (d.endX - d.startX) * t;
         const z = d.startZ + (d.endZ - d.startZ) * t;
         const baseY = d.startY + (d.endY - d.startY) * t;
         const y = baseY + 4 * d.arcPeak * t * (1 - t);
-        d.mesh.position.set(x, y, z);
+        const base = i * 16;
+        matArray[base + 12] = x;
+        matArray[base + 13] = y;
+        matArray[base + 14] = z;
       }
-      for (const r of ripples) {
+      dropInst.instanceMatrix.needsUpdate = true;
+
+      for (let i = 0; i < ripples.length; i++) {
+        const r = ripples[i];
         const t = (elapsed * 0.55 + r.phase) % 1;
         const s = r.minScale + (r.maxScale - r.minScale) * t;
         r.mesh.scale.set(s, 1, s);

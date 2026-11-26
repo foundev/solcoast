@@ -7,7 +7,9 @@ import {
   stepHumanRagdollPhysics,
   type HumanBodyPhysics,
   type HumanRagdollMode,
+  type OrientedCarHull,
 } from '../core/physics';
+import { DynamicPointGrid, forEachNearbyAABB } from '../core/spatialGrid';
 import type { ClonedPerson } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
@@ -467,6 +469,18 @@ function recyclePedestrianNearFocus(
   }
 }
 
+const pedGrid = new DynamicPointGrid(6, 256, 1024);
+const pedTrafficGrid = new DynamicPointGrid(10, 128, 512);
+const _pedTcHull: OrientedCarHull = {
+  x: 0,
+  z: 0,
+  yaw: 0,
+  vx: 0,
+  vz: 0,
+  halfWidth: 1.04,
+  halfLength: 2.24,
+};
+
 export function stepPedestrians(
   peds: PedestrianState[],
   vehicles: VehicleState[],
@@ -481,6 +495,13 @@ export function stepPedestrians(
   const recycleSq = PED_RECYCLE_DIST * PED_RECYCLE_DIST;
   const activeSimSq = (PED_RENDER_DIST + 30) * (PED_RENDER_DIST + 30);
   let recycledThisStep = 0;
+
+  // Build spatial grids once per tick to eliminate O(N^2) ped-ped and ped-traffic scans!
+  pedGrid.rebuild(peds);
+  const hasTraffic = trafficCars.length > 0;
+  if (hasTraffic) {
+    pedTrafficGrid.rebuild(trafficCars);
+  }
 
   for (let i = 0; i < peds.length; i++) {
     const p = peds[i];
@@ -508,7 +529,8 @@ export function stepPedestrians(
     const isNearFocus = focusX === undefined || distFocusSq <= activeSimSq;
 
     // 1. Check solid oriented vehicle collisions against player vehicles & nearby AI traffic cars!
-    for (const v of vehicles) {
+    for (let vi = 0; vi < vehicles.length; vi++) {
+      const v = vehicles[vi];
       if (p.ragdollMode === 'airborne' && p.y > v.y + 2.0) continue;
       const dxv = p.x - v.x;
       const dzv = p.z - v.z;
@@ -526,29 +548,26 @@ export function stepPedestrians(
       }
     }
 
-    if (isNearFocus) {
-      for (const tc of trafficCars) {
-        if (p.ragdollMode === 'airborne' && p.y > tc.y + 2.0) continue;
+    if (isNearFocus && hasTraffic) {
+      pedTrafficGrid.forEachIndexInRadius(p.x, p.z, 3.6, (ti) => {
+        const tc = trafficCars[ti];
+        if (p.ragdollMode === 'airborne' && p.y > tc.y + 2.0) return;
         const dxt = p.x - tc.x;
         const dzt = p.z - tc.z;
-        if (dxt * dxt + dzt * dzt > 12) continue;
-        const tcHull = {
-          x: tc.x,
-          z: tc.z,
-          yaw: tc.yaw,
-          vx: tc.vx,
-          vz: tc.vz,
-          halfWidth: 1.04,
-          halfLength: 2.24,
-        };
-        const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, tcHull);
+        if (dxt * dxt + dzt * dzt > 12) return;
+        _pedTcHull.x = tc.x;
+        _pedTcHull.z = tc.z;
+        _pedTcHull.yaw = tc.yaw;
+        _pedTcHull.vx = tc.vx;
+        _pedTcHull.vz = tc.vz;
+        const hit = resolveCircleOrientedCar(p.x, p.z, pedRadius, _pedTcHull);
         if (hit.hit) {
-          const impact = applyCarHitToHuman(p, tcHull, hit, false);
+          const impact = applyCarHitToHuman(p, _pedTcHull, hit, false);
           if (impact > 2.0) {
             tc.speed *= 0.4;
           }
         }
-      }
+      });
     }
 
     // 2. When Rapier3D articulated ragdoll or 3-stage physical get-up owns this pedestrian, skip fallback/strolling!
@@ -583,36 +602,49 @@ export function stepPedestrians(
     const goalDirX = dist > 0.05 ? dx / dist : 0;
     const goalDirZ = dist > 0.05 ? dz / dist : 0;
     if (isNearFocus) {
-      const steerAroundCar = (cx: number, cz: number, cvx: number, cvz: number, radius: number) => {
-        const carSpd = Math.hypot(cvx, cvz);
-        if (carSpd > 14) return; // Too fast to magically teleport out of the way
-        const ox = p.x - cx;
-        const oz = p.z - cz;
+      for (let vi = 0; vi < vehicles.length; vi++) {
+        const v = vehicles[vi];
+        if (v.vx * v.vx + v.vz * v.vz > 196) continue;
+        const ox = p.x - v.x;
+        const oz = p.z - v.z;
         const dSq = ox * ox + oz * oz;
-        if (dSq >= radius * radius || dSq <= 0.0001) return;
+        if (dSq >= 4.4 * 4.4 || dSq <= 0.0001) continue;
         const d = Math.sqrt(dSq);
         const nx = ox / d;
         const nz = oz / d;
-        // Blend outward push with tangential sidestep around the car bumper so walkers smoothly walk around it
         const tx = -nz;
         const tz = nx;
         const sideSign = tx * goalDirX + tz * goalDirZ >= 0 ? 1 : -1;
-        const strength = clamp((radius - d) / radius, 0.2, 1.0) * 1.45;
+        const strength = clamp((4.4 - d) / 4.4, 0.2, 1.0) * 1.45;
         avoidX += (nx * 0.65 + tx * sideSign * 0.75) * strength;
         avoidZ += (nz * 0.65 + tz * sideSign * 0.75) * strength;
-        speedBoost = Math.max(speedBoost, 1.25);
-      };
-
-      for (const v of vehicles) {
-        steerAroundCar(v.x, v.z, v.vx, v.vz, 4.4);
-      }
-      for (const tc of trafficCars) {
-        steerAroundCar(tc.x, tc.z, tc.vx, tc.vz, 3.8);
+        speedBoost = 1.25;
       }
 
-      // Smooth right-hand passing separation (never reverses walkers head-on or causes jitter-spinning!)
-      for (let j = 0; j < peds.length; j++) {
-        if (i === j) continue;
+      if (hasTraffic) {
+        pedTrafficGrid.forEachIndexInRadius(p.x, p.z, 3.9, (ti) => {
+          const tc = trafficCars[ti];
+          if (tc.vx * tc.vx + tc.vz * tc.vz > 196) return;
+          const ox = p.x - tc.x;
+          const oz = p.z - tc.z;
+          const dSq = ox * ox + oz * oz;
+          if (dSq >= 3.8 * 3.8 || dSq <= 0.0001) return;
+          const d = Math.sqrt(dSq);
+          const nx = ox / d;
+          const nz = oz / d;
+          const tx = -nz;
+          const tz = nx;
+          const sideSign = tx * goalDirX + tz * goalDirZ >= 0 ? 1 : -1;
+          const strength = clamp((3.8 - d) / 3.8, 0.2, 1.0) * 1.45;
+          avoidX += (nx * 0.65 + tx * sideSign * 0.75) * strength;
+          avoidZ += (nz * 0.65 + tz * sideSign * 0.75) * strength;
+          speedBoost = 1.25;
+        });
+      }
+
+      // Smooth right-hand passing separation via O(1) spatial hash!
+      pedGrid.forEachIndexInRadius(p.x, p.z, 1.7, (j) => {
+        if (i === j) return;
         const other = peds[j];
         const ox = p.x - other.x;
         const oz = p.z - other.z;
@@ -622,17 +654,16 @@ export function stepPedestrians(
           const nx = ox / d;
           const nz = oz / d;
           const push = (1.65 - d) * 0.42;
-          // Combine soft radial push with polite right-hand pass vector (-nz, nx)
           avoidX += (nx * 0.65 - nz * 0.45) * push;
           avoidZ += (nz * 0.65 + nx * 0.45) * push;
         }
-      }
+      });
     }
 
     // Clamp avoidance magnitude so walkers stay smoothly forward-moving instead of oscillating in place
-    const avoidMag = Math.hypot(avoidX, avoidZ);
-    if (avoidMag > 0.85) {
-      const sc = 0.85 / avoidMag;
+    const avoidMagSq = avoidX * avoidX + avoidZ * avoidZ;
+    if (avoidMagSq > 0.85 * 0.85) {
+      const sc = 0.85 / Math.sqrt(avoidMagSq);
       avoidX *= sc;
       avoidZ *= sc;
     }
@@ -650,24 +681,15 @@ export function stepPedestrians(
       let nextX = p.x + p.vx * safeDt;
       let nextZ = p.z + p.vz * safeDt;
 
-      // Keep sidestepping walkers cleanly outside building facades & dry land
+      // Keep sidestepping walkers cleanly outside nearby building facades & dry land
       if (isNearFocus && colliders.length > 0) {
-        for (let cIdx = 0; cIdx < colliders.length; cIdx++) {
-          const box = colliders[cIdx];
-          if (
-            nextX < box.minX - pedRadius ||
-            nextX > box.maxX + pedRadius ||
-            nextZ < box.minZ - pedRadius ||
-            nextZ > box.maxZ + pedRadius
-          ) {
-            continue;
-          }
+        forEachNearbyAABB(colliders, nextX, nextZ, pedRadius + 0.5, (box) => {
           const res = resolveCircleAABB(nextX, nextZ, pedRadius, box);
           if (res.hit) {
             nextX += res.dx;
             nextZ += res.dz;
           }
-        }
+        });
       }
 
       if (!isDeepWater(nextX, nextZ)) {

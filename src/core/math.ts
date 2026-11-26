@@ -71,6 +71,12 @@ export function distXZ(ax: number, az: number, bx: number, bz: number): number {
   return Math.hypot(ax - bx, az - bz);
 }
 
+const NO_CIRCLE_HIT: Readonly<{ dx: number; dz: number; hit: boolean }> = Object.freeze({
+  dx: 0,
+  dz: 0,
+  hit: false,
+});
+
 /**
  * Smooth circle-vs-AABB resolution in the XZ plane.
  * Returns push vector (dx, dz) to separate the circle from the box.
@@ -81,14 +87,23 @@ export function resolveCircleAABB(
   radius: number,
   box: AABB,
 ): { dx: number; dz: number; hit: boolean } {
-  const closestX = clamp(cx, box.minX, box.maxX);
-  const closestZ = clamp(cz, box.minZ, box.maxZ);
+  if (
+    cx < box.minX - radius ||
+    cx > box.maxX + radius ||
+    cz < box.minZ - radius ||
+    cz > box.maxZ + radius
+  ) {
+    return NO_CIRCLE_HIT;
+  }
+
+  const closestX = cx < box.minX ? box.minX : cx > box.maxX ? box.maxX : cx;
+  const closestZ = cz < box.minZ ? box.minZ : cz > box.maxZ ? box.maxZ : cz;
   const vx = cx - closestX;
   const vz = cz - closestZ;
   const distSq = vx * vx + vz * vz;
 
   if (distSq >= radius * radius) {
-    return { dx: 0, dz: 0, hit: false };
+    return NO_CIRCLE_HIT;
   }
 
   if (distSq > 1e-8) {
@@ -134,16 +149,22 @@ export function resolveCircleOBB(
   radius: number,
   obb: OBB2D,
 ): { hit: boolean; dx: number; dz: number } {
-  // Fast circle-circle broadphase reject
-  const maxR = Math.hypot(obb.halfW, obb.halfD) + radius;
+  // Fast scalar broadphase reject (avoids Math.hypot on 99.9% of non-colliding OBBs!)
   const relX = px - obb.cx;
   const relZ = pz - obb.cz;
-  if (relX * relX + relZ * relZ >= maxR * maxR) {
-    return { hit: false, dx: 0, dz: 0 };
+  const maxBound = obb.halfW + obb.halfD + radius;
+  if (
+    relX > maxBound ||
+    relX < -maxBound ||
+    relZ > maxBound ||
+    relZ < -maxBound ||
+    relX * relX + relZ * relZ >= maxBound * maxBound
+  ) {
+    return NO_CIRCLE_HIT;
   }
 
-  const cos = Math.cos(obb.rotY);
-  const sin = Math.sin(obb.rotY);
+  const cos = obb.rotY === 0 ? 1 : Math.cos(obb.rotY);
+  const sin = obb.rotY === 0 ? 0 : Math.sin(obb.rotY);
 
   // Transform point into OBB local frame (inverse of Three.js Y-rotation)
   const lx = relX * cos - relZ * sin;
@@ -155,7 +176,7 @@ export function resolveCircleOBB(
   const dlz = lz - clz;
   const dSq = dlx * dlx + dlz * dlz;
 
-  if (dSq >= radius * radius) return { hit: false, dx: 0, dz: 0 };
+  if (dSq >= radius * radius) return NO_CIRCLE_HIT;
 
   let plx = 0;
   let plz = 0;

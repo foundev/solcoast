@@ -9,6 +9,7 @@ export interface PbrTextureSet {
 
 /**
  * Generates a tangent-space normal map from a scalar height buffer (0..255).
+ * Optimized inner loop (bitmask power-of-two wrap, no per-pixel closure or Math.hypot).
  */
 function heightToNormalTexture(
   height: Float32Array,
@@ -23,32 +24,27 @@ function heightToNormalTexture(
   const ctx = canvas.getContext('2d')!;
   const img = ctx.createImageData(size, size);
   const data = img.data;
-
-  const sample = (x: number, y: number) => {
-    const wx = ((x % size) + size) % size;
-    const wy = ((y % size) + size) % size;
-    return height[wy * size + wx];
-  };
+  const mask = size - 1;
+  const isPow2 = (size & mask) === 0;
 
   for (let y = 0; y < size; y++) {
+    const yUp = isPow2 ? (y - 1) & mask : (y - 1 + size) % size;
+    const yDn = isPow2 ? (y + 1) & mask : (y + 1) % size;
+    const rowOff = y * size;
+    const rowUp = yUp * size;
+    const rowDn = yDn * size;
     for (let x = 0; x < size; x++) {
-      const hL = sample(x - 1, y);
-      const hR = sample(x + 1, y);
-      const hU = sample(x, y - 1);
-      const hD = sample(x, y + 1);
+      const xL = isPow2 ? (x - 1) & mask : (x - 1 + size) % size;
+      const xR = isPow2 ? (x + 1) & mask : (x + 1) % size;
 
-      let nx = (hL - hR) * strength;
-      let ny = (hU - hD) * strength;
-      let nz = 1.0;
-      const invLen = 1 / Math.hypot(nx, ny, nz);
-      nx *= invLen;
-      ny *= invLen;
-      nz *= invLen;
+      const nx = (height[rowOff + xL] - height[rowOff + xR]) * strength;
+      const ny = (height[rowUp + x] - height[rowDn + x]) * strength;
+      const invLen = 1 / Math.sqrt(nx * nx + ny * ny + 1.0);
 
-      const idx = (y * size + x) * 4;
-      data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
-      data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-      data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      const idx = (rowOff + x) << 2;
+      data[idx] = ((nx * invLen * 0.5 + 0.5) * 255 + 0.5) | 0;
+      data[idx + 1] = ((ny * invLen * 0.5 + 0.5) * 255 + 0.5) | 0;
+      data[idx + 2] = ((invLen * 0.5 + 0.5) * 255 + 0.5) | 0;
       data[idx + 3] = 255;
     }
   }
@@ -63,8 +59,10 @@ function heightToNormalTexture(
 }
 
 function hash2(x: number, y: number): number {
-  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
-  return n - Math.floor(n);
+  // Fast deterministic integer hash (replaces slow Math.sin across millions of startup pixels!)
+  let h = Math.imul((x * 374761393) | 0, 668265263) ^ Math.imul((y * 1274126177) | 0, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) * (1 / 4294967296);
 }
 
 /**
@@ -73,7 +71,7 @@ function hash2(x: number, y: number): number {
  * and crisp white edge lines.
  */
 export function createAsphaltPbrSet(): PbrTextureSet {
-  const size = 512;
+  const size = 256;
   const diffCanvas = document.createElement('canvas');
   diffCanvas.width = size;
   diffCanvas.height = size;

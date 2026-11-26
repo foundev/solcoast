@@ -1,5 +1,5 @@
 :root {
-  --bg-glass: rgba(11, 14, 28, 0.72);
+  --bg-glass: rgba(11, 14, 28, 0.86);
   --border-glass: rgba(255, 255, 255, 0.14);
   --coral: #ff5e8e;
   --cyan: #2cf3ff;
@@ -44,8 +44,6 @@ body {
   position: absolute;
   background: var(--bg-glass);
   border: 1px solid var(--border-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border-radius: 12px;
   padding: 12px 15px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
@@ -408,10 +406,13 @@ kbd {
 
 .rpm-bar-fill {
   height: 100%;
-  width: 0%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--cyan), var(--gold), var(--coral));
-  transition: width 0.05s linear;
+  transition: transform 0.05s linear;
 }
 
 .vehicle-meta {

@@ -134,6 +134,20 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
+const DAY_ZENITH = new THREE.Color(0x1b6ed6);
+const DAY_HORIZON = new THREE.Color(0x9de6ff);
+const SUNSET_ZENITH = new THREE.Color(0x232d6b);
+const SUNSET_HORIZON = new THREE.Color(0xfc7d7b);
+const NIGHT_ZENITH = new THREE.Color(0x050816);
+const NIGHT_HORIZON = new THREE.Color(0x151833);
+const DAY_SUN = new THREE.Color(0xfff5e2);
+const SUNSET_SUN = new THREE.Color(0xff9a52);
+const MOON_SUN = new THREE.Color(0x88b0ff);
+const NIGHT_GROUND = new THREE.Color(0x070a14);
+const NIGHT_HEMI_GROUND = new THREE.Color(0x101424);
+const INTERIOR_BG = new THREE.Color(0x090c14);
+const SHADOW_TEXEL_SIZE = (92 * 2) / 2048;
+
 export class SkySystem {
   public readonly skyMesh: THREE.Mesh;
   public readonly sunLight: THREE.DirectionalLight;
@@ -151,25 +165,29 @@ export class SkySystem {
     uTime: { value: number };
   };
 
-  // Offscreen PMREM environment scene for crisp IBL reflections on cars & glass towers!
-  private readonly pmrem: THREE.PMREMGenerator;
-  private readonly envScene: THREE.Scene;
-  private readonly envSkyMat: THREE.ShaderMaterial;
+  // Lazy offscreen PMREM environment scene (only constructed if photographic HDRIs fail to load!)
+  private readonly renderer: THREE.WebGLRenderer;
+  private pmrem: THREE.PMREMGenerator | null = null;
+  private envScene: THREE.Scene | null = null;
   private envRenderTarget: THREE.WebGLRenderTarget | null = null;
   private lastEnvHour = -999;
   private hdriSet: Partial<LoadedHdriSet> = {};
   private activeHdriKey: keyof LoadedHdriSet | null = null;
 
   private readonly tmpSunDir = new THREE.Vector3();
+  private readonly tmpClampedSunDir = new THREE.Vector3();
+  private readonly tmpSnappedFocus = new THREE.Vector3();
   private readonly tmpZenith = new THREE.Color();
   private readonly tmpHorizon = new THREE.Color();
   private readonly tmpSunColor = new THREE.Color();
   private readonly tmpGround = new THREE.Color();
+  private readonly updateResult: SkyUpdateResult;
 
   constructor(
     private readonly scene: THREE.Scene,
     renderer: THREE.WebGLRenderer,
   ) {
+    this.renderer = renderer;
     this.uniforms = {
       uZenithColor: { value: new THREE.Color(0x284d8f) },
       uHorizonColor: { value: new THREE.Color(0xff8e7a) },
@@ -194,20 +212,6 @@ export class SkySystem {
     this.skyMesh.frustumCulled = false;
     scene.add(this.skyMesh);
 
-    // Offscreen sky dome for PMREM PBR environment reflections
-    this.pmrem = new THREE.PMREMGenerator(renderer);
-    this.pmrem.compileEquirectangularShader();
-    this.envScene = new THREE.Scene();
-    this.envSkyMat = new THREE.ShaderMaterial({
-      vertexShader: SKY_VERTEX_SHADER,
-      fragmentShader: SKY_FRAGMENT_SHADER,
-      uniforms: this.uniforms,
-      side: THREE.BackSide,
-      depthWrite: false,
-    });
-    const envDome = new THREE.Mesh(new THREE.SphereGeometry(50, 24, 16), this.envSkyMat);
-    this.envScene.add(envDome);
-
     this.sunLight = new THREE.DirectionalLight(0xffe1b8, 2.7);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
@@ -228,6 +232,30 @@ export class SkySystem {
 
     this.fog = new THREE.FogExp2(0xd78f8c, 0.00125);
     scene.fog = this.fog;
+
+    this.updateResult = {
+      sunDirection: this.tmpSunDir,
+      sunColor: this.tmpSunColor,
+      fogColor: this.fog.color,
+      nightFactor: 0.15,
+      timeLabel: '17:30 GOLDEN HOUR',
+    };
+  }
+
+  private ensureProceduralPmrem(): void {
+    if (this.pmrem) return;
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.pmrem.compileEquirectangularShader();
+    this.envScene = new THREE.Scene();
+    const envSkyMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERTEX_SHADER,
+      fragmentShader: SKY_FRAGMENT_SHADER,
+      uniforms: this.uniforms,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+    const envDome = new THREE.Mesh(new THREE.SphereGeometry(50, 24, 16), envSkyMat);
+    this.envScene.add(envDome);
   }
 
   public setHdriSet(hdris: Partial<LoadedHdriSet>): void {
@@ -241,7 +269,7 @@ export class SkySystem {
       this.sunLight.visible = false;
       this.hemiLight.visible = false;
       this.scene.fog = null;
-      this.scene.background = new THREE.Color(0x090c14);
+      this.scene.background = INTERIOR_BG;
       this.scene.environmentIntensity = 0.42;
     } else {
       this.sunLight.visible = true;
@@ -259,29 +287,18 @@ export class SkySystem {
     const sunHoriz = Math.cos(dayAngle);
 
     this.tmpSunDir.set(sunHoriz * 0.92, Math.max(sunY, -0.35), -0.38).normalize();
-    const clampedSunLightDir = this.tmpSunDir.clone();
-    if (clampedSunLightDir.y < 0.16) {
-      clampedSunLightDir.set(-0.4, 0.55, 0.65).normalize();
+    this.tmpClampedSunDir.copy(this.tmpSunDir);
+    if (this.tmpClampedSunDir.y < 0.16) {
+      this.tmpClampedSunDir.set(-0.4, 0.55, 0.65).normalize();
     }
 
     const nightFactor = clamp((0.12 - sunY) / 0.34, 0, 1);
     const sunsetBand = clamp(1 - Math.abs(sunY - 0.14) / 0.32, 0, 1);
 
-    const dayZenith = new THREE.Color(0x1b6ed6);
-    const dayHorizon = new THREE.Color(0x9de6ff);
-    const sunsetZenith = new THREE.Color(0x232d6b);
-    const sunsetHorizon = new THREE.Color(0xfc7d7b);
-    const nightZenith = new THREE.Color(0x050816);
-    const nightHorizon = new THREE.Color(0x151833);
-
-    this.tmpZenith.copy(dayZenith).lerp(sunsetZenith, sunsetBand).lerp(nightZenith, nightFactor);
-    this.tmpHorizon.copy(dayHorizon).lerp(sunsetHorizon, sunsetBand).lerp(nightHorizon, nightFactor);
-
-    const daySun = new THREE.Color(0xfff5e2);
-    const sunsetSun = new THREE.Color(0xff9a52);
-    const moonSun = new THREE.Color(0x88b0ff);
-    this.tmpSunColor.copy(daySun).lerp(sunsetSun, sunsetBand).lerp(moonSun, nightFactor);
-    this.tmpGround.setHex(0x1a2838).lerp(new THREE.Color(0x070a14), nightFactor);
+    this.tmpZenith.copy(DAY_ZENITH).lerp(SUNSET_ZENITH, sunsetBand).lerp(NIGHT_ZENITH, nightFactor);
+    this.tmpHorizon.copy(DAY_HORIZON).lerp(SUNSET_HORIZON, sunsetBand).lerp(NIGHT_HORIZON, nightFactor);
+    this.tmpSunColor.copy(DAY_SUN).lerp(SUNSET_SUN, sunsetBand).lerp(MOON_SUN, nightFactor);
+    this.tmpGround.setHex(0x1a2838).lerp(NIGHT_GROUND, nightFactor);
 
     this.uniforms.uZenithColor.value.copy(this.tmpZenith);
     this.uniforms.uHorizonColor.value.copy(this.tmpHorizon);
@@ -313,8 +330,9 @@ export class SkySystem {
       this.skyMesh.visible = true;
       const hourDiff = Math.abs(h - this.lastEnvHour);
       if (hourDiff > 0.18 || this.envRenderTarget === null) {
+        this.ensureProceduralPmrem();
         this.lastEnvHour = h;
-        const nextRT = this.pmrem.fromScene(this.envScene, 0.035);
+        const nextRT = this.pmrem!.fromScene(this.envScene!, 0.035);
         this.scene.environment = nextRT.texture;
         this.scene.environmentIntensity = lerp(0.88, 0.36, nightFactor);
         this.envRenderTarget?.dispose();
@@ -322,27 +340,29 @@ export class SkySystem {
       }
     }
 
-    this.sunLight.position.copy(focusPos).addScaledVector(clampedSunLightDir, 145);
-    this.sunLight.target.position.copy(focusPos);
+    // Texel-snap shadow camera target to prevent sub-texel shadow edge shimmer during movement
+    this.tmpSnappedFocus.set(
+      Math.round(focusPos.x / SHADOW_TEXEL_SIZE) * SHADOW_TEXEL_SIZE,
+      Math.round(focusPos.y / SHADOW_TEXEL_SIZE) * SHADOW_TEXEL_SIZE,
+      Math.round(focusPos.z / SHADOW_TEXEL_SIZE) * SHADOW_TEXEL_SIZE,
+    );
+    this.sunLight.position.copy(this.tmpSnappedFocus).addScaledVector(this.tmpClampedSunDir, 145);
+    this.sunLight.target.position.copy(this.tmpSnappedFocus);
     this.sunLight.target.updateMatrixWorld();
     this.sunLight.color.copy(this.tmpSunColor);
     this.sunLight.intensity = lerp(2.25, 0.48, nightFactor) - sunsetBand * 0.15;
 
     this.hemiLight.color.copy(this.tmpHorizon);
-    this.hemiLight.groundColor.setHex(0x3a2d40).lerp(new THREE.Color(0x101424), nightFactor);
+    this.hemiLight.groundColor.setHex(0x3a2d40).lerp(NIGHT_HEMI_GROUND, nightFactor);
     this.hemiLight.intensity = lerp(0.55, 0.28, nightFactor);
 
     this.fog.color.copy(this.tmpHorizon).lerp(this.tmpZenith, 0.28);
     // Crisp, clear Miami coastal air — light distant horizon haze only, never foggy soup
     this.fog.density = lerp(0.00036, 0.00062, nightFactor) + sunsetBand * 0.00008;
 
-    return {
-      sunDirection: this.tmpSunDir.clone(),
-      sunColor: this.tmpSunColor.clone(),
-      fogColor: this.fog.color.clone(),
-      nightFactor,
-      timeLabel: formatTimeLabel(h),
-    };
+    this.updateResult.nightFactor = nightFactor;
+    this.updateResult.timeLabel = formatTimeLabel(h);
+    return this.updateResult;
   }
 }
 

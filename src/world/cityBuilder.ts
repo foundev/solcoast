@@ -105,22 +105,27 @@ const OCEAN_FRAGMENT_SHADER = /* glsl */ `
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 
-  float waveHeight(vec2 p) {
+  float waveHeight(vec2 p, float detailWeight) {
     float h = 0.0;
     h += noise(p * 0.16 + vec2(uTime * 0.42, -uTime * 0.28)) * 0.55;
     h += noise(p * 0.42 + vec2(-uTime * 0.65, uTime * 0.52)) * 0.28;
-    h += noise(p * 1.05 + vec2(uTime * 0.9, uTime * 0.7)) * 0.14;
+    if (detailWeight > 0.02) {
+      h += noise(p * 1.05 + vec2(uTime * 0.9, uTime * 0.7)) * (0.14 * detailWeight);
+    }
     return h;
   }
 
   void main() {
-    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    vec3 toCam = cameraPosition - vWorldPos;
+    float dist = length(toCam);
+    vec3 viewDir = toCam / max(dist, 0.001);
 
-    // Finite-difference multi-octave wave normal for realistic water shimmer
+    // Distance-LOD multi-octave wave normal (drops 3rd octave beyond 145m to save ALU & prevent distant shimmer)
+    float detailWeight = 1.0 - smoothstep(80.0, 145.0, dist);
     float eps = 0.35;
-    float hC = waveHeight(vWorldPos.xz);
-    float hX = waveHeight(vWorldPos.xz + vec2(eps, 0.0));
-    float hZ = waveHeight(vWorldPos.xz + vec2(0.0, eps));
+    float hC = waveHeight(vWorldPos.xz, detailWeight);
+    float hX = waveHeight(vWorldPos.xz + vec2(eps, 0.0), detailWeight);
+    float hZ = waveHeight(vWorldPos.xz + vec2(0.0, eps), detailWeight);
     vec3 normal = normalize(vec3((hC - hX) * 0.58, 1.0, (hC - hZ) * 0.58));
 
     // Shallow Miami turquoise water blending into rich Atlantic sapphire along curved shoreline
@@ -134,32 +139,38 @@ const OCEAN_FRAGMENT_SHADER = /* glsl */ `
 
     // Subtle turquoise subsurface scattering through sunlit wave crests
     vec3 sunDir = normalize(uSunDir);
-    float sss = pow(max(dot(viewDir, -sunDir + normal * 0.6), 0.0), 3.0) * clamp(vWave + 0.35, 0.0, 1.0);
+    float sssDot = max(dot(viewDir, -sunDir + normal * 0.6), 0.0);
+    float sss = sssDot * sssDot * sssDot * clamp(vWave + 0.35, 0.0, 1.0);
     waterCol += vec3(0.05, 0.48, 0.52) * sss * (1.0 - uNightFactor * 0.85) * 0.55;
 
     // Physically inspired Schlick Fresnel sky/horizon reflection
     float cosTheta = max(dot(viewDir, normal), 0.0);
-    float fresnel = 0.03 + 0.97 * pow(1.0 - cosTheta, 4.2);
-    vec3 skyReflect = mix(uFogColor * 0.92, uSunColor * 0.85, pow(max(dot(reflect(-viewDir, normal), sunDir), 0.0), 5.0) * 0.4);
+    float omc = 1.0 - cosTheta;
+    float omc2 = omc * omc;
+    float fresnel = 0.03 + 0.97 * (omc2 * omc2);
+    float refSun = max(dot(reflect(-viewDir, normal), sunDir), 0.0);
+    float refSun2 = refSun * refSun;
+    vec3 skyReflect = mix(uFogColor * 0.92, uSunColor * 0.85, refSun2 * refSun2 * refSun * 0.4);
     waterCol = mix(waterCol, skyReflect, clamp(fresnel * 0.85, 0.0, 0.88));
 
     // Tight sparkling sun specular path + broader glitter
     vec3 halfVec = normalize(sunDir + viewDir);
     float ndh = max(dot(normal, halfVec), 0.0);
-    float specTight = pow(ndh, 240.0) * 2.2;
-    float specBroad = pow(ndh, 28.0) * 0.25;
+    float specTight = ndh > 0.72 ? pow(ndh, 240.0) * 2.2 : 0.0;
+    float specBroad = ndh > 0.35 ? pow(ndh, 28.0) * 0.25 : 0.0;
     waterCol += uSunColor * (specTight + specBroad) * mix(1.25, 0.28, uNightFactor);
 
-    // Organic frothy shoreline surf hugging the curved Sol Beach coves
+    // Organic frothy shoreline surf hugging the curved Sol Beach coves (skipped on 95% offshore ocean pixels!)
     float beachZMask = smoothstep(-194.0, -180.0, vWorldPos.z) * smoothstep(198.0, 184.0, vWorldPos.z);
     float shoreBand = beachZMask * smoothstep(shoreX + 20.0, shoreX + 1.5, vWorldPos.x) * smoothstep(shoreX - 10.0, shoreX - 1.5, vWorldPos.x);
-    float foamNoise = noise(vWorldPos.xz * 0.38 + vec2(-uTime * 0.85, uTime * 0.2));
-    float surfWave = sin((vWorldPos.x - shoreX) * 0.42 - uTime * 2.4 + foamNoise * 3.0) * 0.5 + 0.5;
-    float foam = shoreBand * smoothstep(0.42, 0.80, surfWave * 0.65 + foamNoise * 0.55);
-    waterCol = mix(waterCol, vec3(0.94, 0.98, 1.0), foam * 0.72 * (1.0 - uNightFactor * 0.55));
+    if (shoreBand > 0.001) {
+      float foamNoise = noise(vWorldPos.xz * 0.38 + vec2(-uTime * 0.85, uTime * 0.2));
+      float surfWave = sin((vWorldPos.x - shoreX) * 0.42 - uTime * 2.4 + foamNoise * 3.0) * 0.5 + 0.5;
+      float foam = shoreBand * smoothstep(0.42, 0.80, surfWave * 0.65 + foamNoise * 0.55);
+      waterCol = mix(waterCol, vec3(0.94, 0.98, 1.0), foam * 0.72 * (1.0 - uNightFactor * 0.55));
+    }
 
     // Crisp distant horizon fog matching scene FogExp2
-    float dist = length(cameraPosition - vWorldPos);
     float fogFactor = 1.0 - exp(-pow(dist * 0.00044, 2.0));
     waterCol = mix(waterCol, uFogColor, clamp(fogFactor, 0.0, 1.0));
 
@@ -305,6 +316,11 @@ function buildArchedCauseway(
   });
   neonMaterials.push(neonRailMat);
 
+  // Merge all 26 bridge segments + rails + pillars + neon trims into 3 draw calls (was 142!)
+  const slabGeos: THREE.BufferGeometry[] = [];
+  const concreteGeos: THREE.BufferGeometry[] = [];
+  const neonGeos: THREE.BufferGeometry[] = [];
+
   for (let i = 0; i < segments; i++) {
     const x0 = startX + i * segLen;
     const x1 = x0 + segLen;
@@ -315,32 +331,35 @@ function buildArchedCauseway(
     const slope = Math.atan2(y1 - y0, segLen);
     const hyp = Math.hypot(segLen, y1 - y0) + 0.16;
 
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(hyp, 0.6, CAUSEWAY.halfWidth * 2), deckMat);
-    slab.position.set(xm, ym - 0.3, CAUSEWAY.centerZ);
-    slab.rotation.z = slope;
-    slab.receiveShadow = true;
-    group.add(slab);
+    const slabGeo = new THREE.BoxGeometry(hyp, 0.6, CAUSEWAY.halfWidth * 2);
+    slabGeo.rotateZ(slope);
+    slabGeo.translate(xm, ym - 0.3, CAUSEWAY.centerZ);
+    slabGeos.push(slabGeo);
 
     for (const side of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(hyp, 0.85, 0.55), concreteMat);
-      rail.position.set(xm, ym + 0.35, CAUSEWAY.centerZ + side * (CAUSEWAY.halfWidth - 0.35));
-      rail.rotation.z = slope;
-      group.add(rail);
+      const railGeo = new THREE.BoxGeometry(hyp, 0.85, 0.55);
+      railGeo.rotateZ(slope);
+      railGeo.translate(xm, ym + 0.35, CAUSEWAY.centerZ + side * (CAUSEWAY.halfWidth - 0.35));
+      concreteGeos.push(railGeo);
 
-      const trim = new THREE.Mesh(new THREE.BoxGeometry(hyp, 0.12, 0.16), neonRailMat);
-      trim.position.set(xm, ym + 0.82, CAUSEWAY.centerZ + side * (CAUSEWAY.halfWidth - 0.35));
-      trim.rotation.z = slope;
-      group.add(trim);
+      const trimGeo = new THREE.BoxGeometry(hyp, 0.12, 0.16);
+      trimGeo.rotateZ(slope);
+      trimGeo.translate(xm, ym + 0.82, CAUSEWAY.centerZ + side * (CAUSEWAY.halfWidth - 0.35));
+      neonGeos.push(trimGeo);
     }
 
     if (i > 1 && i < segments - 2 && i % 4 === 0) {
       for (const side of [-5.8, 5.8]) {
-        const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.98, ym + 5.5, 12), concreteMat);
-        pillar.position.set(xm, (ym - 5.5) * 0.5, CAUSEWAY.centerZ + side);
-        group.add(pillar);
+        const pillarGeo = new THREE.CylinderGeometry(0.72, 0.98, ym + 5.5, 12);
+        pillarGeo.translate(xm, (ym - 5.5) * 0.5, CAUSEWAY.centerZ + side);
+        concreteGeos.push(pillarGeo);
       }
     }
   }
+
+  addMergedGroup(group, slabGeos, deckMat, false, true);
+  addMergedGroup(group, concreteGeos, concreteMat);
+  addMergedGroup(group, neonGeos, neonRailMat);
 
   return group;
 }
@@ -400,6 +419,15 @@ function addMergedGroup(
   return mesh;
 }
 
+function scaleGeoUvs(geo: THREE.BufferGeometry, rx: number, ry: number): void {
+  if (rx === 1 && ry === 1) return;
+  const uv = geo.attributes.uv;
+  if (!uv) return;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, uv.getX(i) * rx, uv.getY(i) * ry);
+  }
+}
+
 function buildBuildingMesh(
   b: BuildingSpec,
   facadeCache: Map<string, THREE.MeshStandardMaterial>,
@@ -424,7 +452,9 @@ function buildBuildingMesh(
       : b.style === 'warehouse-mural'
         ? 1
         : Math.max(1, Math.round(b.height / 24));
-  const key = `${b.style}-${b.wallColor}-${rx}-${ry}`;
+  // Cache PBR facade textures & materials by (style, wallColor) ONLY — UV tiling (rx, ry) is baked
+  // directly into each building's BufferGeometry UVs! Cuts ~65 redundant 512px PBR sets down to ~20!
+  const key = `${b.style}-${b.wallColor}`;
 
   // Special Landmark: Circular Ribbed Sol Coast Stadium / Arena!
   if (b.style === 'stadium') {
@@ -511,7 +541,7 @@ function buildBuildingMesh(
         metalness: 0.06,
       });
     } else {
-      const pbr = createBuildingFacadePbr(b.wallColor, b.style, rx, ry);
+      const pbr = createBuildingFacadePbr(b.wallColor, b.style, 1, 1);
       wallMat = new THREE.MeshStandardMaterial({
         map: pbr.map,
         normalMap: pbr.normalMap,
@@ -578,7 +608,9 @@ function buildBuildingMesh(
   } else {
     const lobbyH = Math.min(3.6, b.height * 0.45);
     const upperH = Math.max(1.0, b.height - lobbyH);
-    const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(b.width, upperH, b.depth), wallMat);
+    const mainGeo = new THREE.BoxGeometry(b.width, upperH, b.depth);
+    scaleGeoUvs(mainGeo, rx, ry);
+    const mainMesh = new THREE.Mesh(mainGeo, wallMat);
     mainMesh.position.y = lobbyH + upperH * 0.5;
     mainMesh.castShadow = true;
     mainMesh.receiveShadow = true;
@@ -612,10 +644,9 @@ function buildBuildingMesh(
   if (b.style === 'art-deco') {
     // Classic Miami South Beach curved corner drum + eyebrow balconies + stepped penthouse
     const drumRadius = Math.min(b.width, b.depth) * 0.24;
-    const cornerDrum = new THREE.Mesh(
-      new THREE.CylinderGeometry(drumRadius, drumRadius, b.height + 1.4, 14),
-      wallMat,
-    );
+    const drumGeo = new THREE.CylinderGeometry(drumRadius, drumRadius, b.height + 1.4, 14);
+    scaleGeoUvs(drumGeo, rx, ry);
+    const cornerDrum = new THREE.Mesh(drumGeo, wallMat);
     cornerDrum.position.set(b.width * 0.44, (b.height + 1.4) * 0.5, b.depth * 0.44);
     cornerDrum.castShadow = true;
     group.add(cornerDrum);
@@ -640,10 +671,9 @@ function buildBuildingMesh(
     pushMergedBox(accentDetailGeos, b.width + 2.2, 0.18, b.depth + 2.2, 0, 3.7, 0);
   } else if (b.style === 'skyscraper') {
     // Architectural setback tier + mechanical penthouse + spire
-    const setback = new THREE.Mesh(
-      new THREE.BoxGeometry(b.width * 0.74, b.height * 0.18, b.depth * 0.74),
-      wallMat,
-    );
+    const setbackGeo = new THREE.BoxGeometry(b.width * 0.74, b.height * 0.18, b.depth * 0.74);
+    scaleGeoUvs(setbackGeo, rx, ry);
+    const setback = new THREE.Mesh(setbackGeo, wallMat);
     setback.position.y = b.height + b.height * 0.09;
     group.add(setback);
 
@@ -1086,8 +1116,18 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   keySand.receiveShadow = true;
   root.add(keySand);
 
-  // 6. PBR Normal- & Roughness-Mapped Asphalt Road Network
-  const roadMaterials: { mat: THREE.MeshStandardMaterial; repeatY: number }[] = [];
+  // 6. PBR Normal- & Roughness-Mapped Asphalt Road Network (all 22 segments merged into 1 single draw call & 1 shared material!)
+  const roadMat = new THREE.MeshStandardMaterial({
+    map: asphaltPbr.map,
+    normalMap: asphaltPbr.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughnessMap: asphaltPbr.roughnessMap,
+    roughness: 1.0,
+    metalness: 0.08,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
   const roadMarkingsGroup = new THREE.Group();
   const intersectionMat = new THREE.MeshStandardMaterial({
     color: 0x262a34,
@@ -1124,6 +1164,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     geo.computeVertexNormals();
   };
 
+  const roadRibbonGeos: THREE.BufferGeometry[] = [];
   const whiteStripeGeos: THREE.BufferGeometry[] = [];
   const yellowStripeGeos: THREE.BufferGeometry[] = [];
 
@@ -1137,40 +1178,16 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     const isKeySol = xm > 230;
     const rep = Math.max(1, len / 18);
 
-    const map = asphaltPbr.map.clone();
-    map.needsUpdate = true;
-    map.repeat.set(1, rep);
-    const norm = asphaltPbr.normalMap.clone();
-    norm.needsUpdate = true;
-    norm.repeat.set(1, rep);
-    const rough = asphaltPbr.roughnessMap.clone();
-    rough.needsUpdate = true;
-    rough.repeat.set(1, rep);
-
-    const roadMat = new THREE.MeshStandardMaterial({
-      map,
-      normalMap: norm,
-      normalScale: new THREE.Vector2(0.85, 0.85),
-      roughnessMap: rough,
-      roughness: 1.0,
-      metalness: 0.08,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    roadMaterials.push({ mat: roadMat, repeatY: rep });
-
     const isHoriz = Math.abs(dx) > Math.abs(dz);
     const segs = isKeySol ? 2 : Math.max(24, Math.round(len / 4));
     const widthSegs = isKeySol ? 2 : 4;
     const geo = new THREE.PlaneGeometry(road.width, len, widthSegs, segs);
+    scaleGeoUvs(geo, 1, rep);
     geo.rotateX(-Math.PI * 0.5);
     if (isHoriz) geo.rotateY(Math.PI * 0.5);
     drapeRibbonOnTerrain(geo, xm, zm, isKeySol ? 0.03 : 0.032, isKeySol);
-    const mesh = new THREE.Mesh(geo, roadMat);
-    mesh.position.set(xm, 0, zm);
-    mesh.receiveShadow = true;
-    root.add(mesh);
+    geo.translate(xm, 0, zm);
+    roadRibbonGeos.push(geo);
 
     // Painted double-yellow centerline & white shoulder decals draped smoothly over hills & merged into 2 single draw calls!
     const lineOff = isKeySol ? 0.044 : 0.048;
@@ -1192,6 +1209,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       yellowStripeGeos.push(csGeo);
     }
   }
+  addMergedGroup(root, roadRibbonGeos, roadMat, false, true);
   addMergedGroup(roadMarkingsGroup, whiteStripeGeos, whiteLineMat);
   addMergedGroup(roadMarkingsGroup, yellowStripeGeos, yellowLineMat);
   roadMarkingsGroup.visible = false; // Shown automatically once photo asphalt replaces procedural striped map
@@ -1297,17 +1315,22 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   deckMesh.castShadow = true;
   root.add(deckMesh);
 
+  // Merge South Pier pilings, railing posts & lamp bulbs into 3 draw calls (was 46!)
+  const pierPilingGeos: THREE.BufferGeometry[] = [];
+  const pierPostGeos: THREE.BufferGeometry[] = [];
   for (let px = SOUTH_PIER.rampEndX + 6; px <= SOUTH_PIER.endX - 2; px += 14) {
     for (const side of [-5.8, 5.8]) {
-      const piling = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 4.2, 8), pilingMat);
-      piling.position.set(px, SOUTH_PIER.deckY - 2.1, SOUTH_PIER.centerZ + side);
-      root.add(piling);
+      const pilingGeo = new THREE.CylinderGeometry(0.32, 0.36, 4.2, 8);
+      pilingGeo.translate(px, SOUTH_PIER.deckY - 2.1, SOUTH_PIER.centerZ + side);
+      pierPilingGeos.push(pilingGeo);
 
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.0, 0.24), seawallMat);
-      post.position.set(px, SOUTH_PIER.deckY + 0.5, SOUTH_PIER.centerZ + side * 1.15);
-      root.add(post);
+      const postGeo = new THREE.BoxGeometry(0.24, 1.0, 0.24);
+      postGeo.translate(px, SOUTH_PIER.deckY + 0.5, SOUTH_PIER.centerZ + side * 1.15);
+      pierPostGeos.push(postGeo);
     }
   }
+  addMergedGroup(root, pierPilingGeos, pilingMat);
+  addMergedGroup(root, pierPostGeos, seawallMat);
 
   const pierGlowMat = new THREE.MeshStandardMaterial({
     color: 0xffd17a,
@@ -1315,13 +1338,15 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     emissiveIntensity: 1.8,
   });
   streetLampMaterials.push(pierGlowMat);
+  const pierBulbGeos: THREE.BufferGeometry[] = [];
   for (let px = SOUTH_PIER.rampEndX + 8; px <= SOUTH_PIER.endX - 10; px += 22) {
     for (const side of [-6.4, 6.4]) {
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 10), pierGlowMat);
-      bulb.position.set(px, SOUTH_PIER.deckY + 1.15, SOUTH_PIER.centerZ + side);
-      root.add(bulb);
+      const bulbGeo = new THREE.SphereGeometry(0.26, 10, 10);
+      bulbGeo.translate(px, SOUTH_PIER.deckY + 1.15, SOUTH_PIER.centerZ + side);
+      pierBulbGeos.push(bulbGeo);
     }
   }
+  addMergedGroup(root, pierBulbGeos, pierGlowMat);
 
   const beaconMat = new THREE.MeshStandardMaterial({
     color: 0xfff0aa,
@@ -1396,7 +1421,8 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   // Outdoor Sculpted Fountain Varieties + Live Animated Water Jets & Ripples!
   const outdoorFountainsRoot = new THREE.Group();
   root.add(outdoorFountainsRoot);
-  const animatedOutdoorFountains: AnimatedFountainWater[] = [];
+  const animatedOutdoorFountains: { fx: AnimatedFountainWater; x: number; z: number }[] = [];
+  const culledWorldProps: { obj: THREE.Object3D; x: number; z: number; maxDistSq: number }[] = [];
 
   const outdoorFountainSpecs: {
     kind: InteriorPropKind;
@@ -1422,7 +1448,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     fx.group.position.set(spec.x, spec.y, spec.z);
     if (spec.rotY) fx.group.rotation.y = spec.rotY;
     outdoorFountainsRoot.add(fx.group);
-    animatedOutdoorFountains.push(fx);
+    animatedOutdoorFountains.push({ fx, x: spec.x, z: spec.z });
   }
 
   // 10b. Coral Park & Outdoor Miami Basketball Court (-380..-290, -20..70 -> center -335, 25)
@@ -1781,9 +1807,23 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       pc.group.rotation.x = Math.cos(elapsed * 0.85 + pc.phase) * 0.03;
     }
 
-    // Live animated arching water jets & ripples on all outdoor city fountains!
-    for (const fx of animatedOutdoorFountains) {
-      fx.update(elapsed);
+    // Distance-cull beach umbrellas, lifeguards, and hoops beyond detail range
+    for (let i = 0; i < culledWorldProps.length; i++) {
+      const cp = culledWorldProps[i];
+      const dx = cp.x - focusX;
+      const dz = cp.z - focusZ;
+      cp.obj.visible = dx * dx + dz * dz < cp.maxDistSq;
+    }
+
+    // Distance-cull & animate outdoor city fountains (only update visible fountains within 175m!)
+    const FOUNTAIN_DIST_SQ = 175 * 175;
+    for (let i = 0; i < animatedOutdoorFountains.length; i++) {
+      const entry = animatedOutdoorFountains[i];
+      const dx = entry.x - focusX;
+      const dz = entry.z - focusZ;
+      const vis = dx * dx + dz * dz < FOUNTAIN_DIST_SQ;
+      entry.fx.group.visible = vis;
+      if (vis) entry.fx.update(elapsed);
     }
   };
 
@@ -1793,6 +1833,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       mainlandMat.normalMap = textures.concrete.normalMap;
       mainlandMat.roughnessMap = textures.concrete.roughnessMap;
       mainlandMat.needsUpdate = true;
+      sidewalkPbr.map.dispose();
+      sidewalkPbr.normalMap.dispose();
+      sidewalkPbr.roughnessMap.dispose();
     }
     if (textures.sand) {
       beachMat.map = textures.sand.map;
@@ -1805,37 +1848,53 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       keySandMat.normalMap = textures.sand.normalMap;
       keySandMat.roughnessMap = textures.sand.roughnessMap;
       keySandMat.needsUpdate = true;
+      sandPbr.map.dispose();
+      sandPbr.normalMap.dispose();
+      sandPbr.roughnessMap.dispose();
     }
     if (textures.wood) {
       boardwalkMat.map = textures.wood.map;
       boardwalkMat.normalMap = textures.wood.normalMap;
       boardwalkMat.roughnessMap = textures.wood.roughnessMap;
       boardwalkMat.needsUpdate = true;
+      woodPbr.map.dispose();
+      woodPbr.normalMap.dispose();
+      woodPbr.roughnessMap.dispose();
     }
     if (textures.asphalt) {
-      for (const entry of roadMaterials) {
-        const m = textures.asphalt.map.clone();
-        m.needsUpdate = true;
-        m.repeat.set(1.5, entry.repeatY * 0.85);
-        const n = textures.asphalt.normalMap.clone();
-        n.needsUpdate = true;
-        n.repeat.set(1.5, entry.repeatY * 0.85);
-        const r = textures.asphalt.roughnessMap.clone();
-        r.needsUpdate = true;
-        r.repeat.set(1.5, entry.repeatY * 0.85);
-        entry.mat.map = m;
-        entry.mat.normalMap = n;
-        entry.mat.roughnessMap = r;
-        entry.mat.color.setHex(0xb8bec8);
-        entry.mat.needsUpdate = true;
-      }
+      // Road ribbon UVs already store (1, rep), so a single shared photo asphalt repeat (1.5, 0.85) covers ALL 22 roads!
+      const roadMap = textures.asphalt.map.clone();
+      roadMap.repeat.set(1.5, 0.85);
+      roadMap.needsUpdate = true;
+      const roadNorm = textures.asphalt.normalMap.clone();
+      roadNorm.repeat.set(1.5, 0.85);
+      roadNorm.needsUpdate = true;
+      const roadRough = textures.asphalt.roughnessMap.clone();
+      roadRough.repeat.set(1.5, 0.85);
+      roadRough.needsUpdate = true;
+      roadMat.map = roadMap;
+      roadMat.normalMap = roadNorm;
+      roadMat.roughnessMap = roadRough;
+      roadMat.color.setHex(0xb8bec8);
+      roadMat.needsUpdate = true;
+
       intersectionMat.map = textures.asphalt.map;
       intersectionMat.normalMap = textures.asphalt.normalMap;
       intersectionMat.roughnessMap = textures.asphalt.roughnessMap;
       intersectionMat.color.setHex(0xa8aeb8);
       intersectionMat.needsUpdate = true;
       roadMarkingsGroup.visible = true;
+      asphaltPbr.map.dispose();
+      asphaltPbr.normalMap.dispose();
+      asphaltPbr.roughnessMap.dispose();
     }
+  };
+
+  const disposeSubtree = (obj: THREE.Object3D) => {
+    if (obj.parent) obj.parent.remove(obj);
+    obj.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.geometry.dispose();
+    });
   };
 
   const attachGltfFountains = (propsMap: Map<InteriorPropKind, THREE.Group>) => {
@@ -1851,7 +1910,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       if (spec.kind === 'fountain_plaza_grand') attachedGrand = true;
     }
     if (attachedGrand) {
-      fallbackFountainGroup.visible = false;
+      disposeSubtree(fallbackFountainGroup);
     }
   };
 
@@ -1869,6 +1928,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     const lifeguardSrc = propsMap.get('prop_lifeguard_tower');
     const umbrellaSrc = propsMap.get('prop_beach_umbrella');
     let attachedBeach = false;
+    const tintCache = new Map<string, THREE.MeshStandardMaterial>();
 
     if (lifeguardSrc || umbrellaSrc) {
       for (const prop of blueprint.beachProps) {
@@ -1885,19 +1945,30 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
           const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
           const cloned = mats.map((m) => {
             if (m instanceof THREE.MeshStandardMaterial && m.name === tintName) {
-              const c = m.clone();
-              c.color.setHex(prop.color);
-              return c;
+              const ck = `${m.uuid}:${prop.color}`;
+              let cached = tintCache.get(ck);
+              if (!cached) {
+                cached = m.clone();
+                cached.color.setHex(prop.color);
+                tintCache.set(ck, cached);
+              }
+              return cached;
             }
             return m;
           });
           obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
         });
         worldPropsGltfRoot.add(inst);
+        culledWorldProps.push({
+          obj: inst,
+          x: prop.x,
+          z: prop.z,
+          maxDistSq: prop.kind === 'lifeguard' ? 280 * 280 : 155 * 155,
+        });
         attachedBeach = true;
       }
       if (attachedBeach && lifeguardSrc && umbrellaSrc) {
-        fallbackBeachPropsRoot.visible = false;
+        disposeSubtree(fallbackBeachPropsRoot);
       }
     }
 
@@ -1914,8 +1985,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
           }
         });
         worldPropsGltfRoot.add(inst);
+        culledWorldProps.push({ obj: inst, x: -335, z: 25 + side * 14.4, maxDistSq: 185 * 185 });
       }
-      fallbackHoopsGroup.visible = false;
+      disposeSubtree(fallbackHoopsGroup);
     }
 
     const lhSrc = propsMap.get('prop_lighthouse_pavilion');
@@ -1935,7 +2007,7 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
       });
       worldPropsGltfRoot.add(inst);
       hasGltfLighthouse = true;
-      if (fallbackLighthouseMesh) fallbackLighthouseMesh.visible = false;
+      if (fallbackLighthouseMesh) disposeSubtree(fallbackLighthouseMesh);
       lighthouseBeacon.position.set(
         fallbackLighthouseSpec.x,
         fallbackLighthouseSpec.baseY + 13.25,
@@ -1978,9 +2050,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
         attachedLampMeshes++;
       });
       if (attachedLampMeshes > 0) {
-        poleInst.visible = false;
-        armInst.visible = false;
-        bulbInst.visible = false;
+        disposeSubtree(poleInst);
+        disposeSubtree(armInst);
+        disposeSubtree(bulbInst);
       }
     }
   };
@@ -2032,7 +2104,16 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   });
   neonMaterials.push(lotNeonPinkMat, lotNeonCyanMat);
 
-  // Paved L-shaped VIP lot tarmac + East & North driveway curb-cut aprons connecting straight to the avenues!
+  // Paved L-shaped VIP lot tarmac + parking stripes + wheel stops + floodlights + arch merged by material (~104 draws -> 9 draws!)
+  const lotAsphaltGeos: THREE.BufferGeometry[] = [];
+  const lotWhiteStripeGeos: THREE.BufferGeometry[] = [];
+  const lotVipStripeGeos: THREE.BufferGeometry[] = [];
+  const lotStopGeos: THREE.BufferGeometry[] = [];
+  const lotPoleGeos: THREE.BufferGeometry[] = [];
+  const lotFloodGeos: THREE.BufferGeometry[] = [];
+  const lotPinkGeos: THREE.BufferGeometry[] = [];
+  const lotCyanGeos: THREE.BufferGeometry[] = [];
+
   for (const [w, d, cx, cz] of [
     [22.0, 65.4, 50.0, -65.0], // Main East VIP Lot (X: 39..61, Z: -97.7..-32.3)
     [10.2, 27.6, 34.4, -46.1], // Rear Main-Hall Valet Bay (X: 29.3..39.5, Z: -59.9..-32.3)
@@ -2040,37 +2121,30 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     [3.0, 12.0, 61.5, -50.0], // East Avenue Driveway Apron (connects to X = 62 road curb!)
     [12.0, 4.6, 22.0, -99.8], // North Street Driveway Apron (connects to Z = -102 road curb!)
   ] as const) {
-    const pad = new THREE.Mesh(new THREE.PlaneGeometry(w, d), lotAsphaltMat);
-    pad.rotation.x = -Math.PI * 0.5;
-    pad.position.set(cx, lotY, cz);
-    pad.receiveShadow = true;
-    lotGroup.add(pad);
+    const padGeo = new THREE.PlaneGeometry(w, d);
+    padGeo.rotateX(-Math.PI * 0.5);
+    padGeo.translate(cx, lotY, cz);
+    lotAsphaltGeos.push(padGeo);
   }
 
   const addParkingStall = (cx: number, cz: number, horizontal: boolean, vip = false, stopSign: 1 | -1 = 1) => {
-    const sMat = vip ? lotVipStripeMat : lotStripeMat;
+    const sList = vip ? lotVipStripeGeos : lotWhiteStripeGeos;
     if (horizontal) {
-      // Stall oriented East-West (width 5.4m along X, bay width 3.4m along Z)
       for (const dz of [-1.7, 1.7]) {
-        const line = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 0.12), sMat);
-        line.rotation.x = -Math.PI * 0.5;
-        line.position.set(cx, lotY + 0.012, cz + dz);
-        lotGroup.add(line);
+        const g = new THREE.PlaneGeometry(5.4, 0.12);
+        g.rotateX(-Math.PI * 0.5);
+        g.translate(cx, lotY + 0.012, cz + dz);
+        sList.push(g);
       }
-      const stop = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 2.2), lotStopMat);
-      stop.position.set(cx + stopSign * 2.15, SIDEWALK_HEIGHT + 0.08, cz);
-      lotGroup.add(stop);
+      pushMergedBox(lotStopGeos, 0.24, 0.14, 2.2, cx + stopSign * 2.15, SIDEWALK_HEIGHT + 0.08, cz);
     } else {
-      // Stall oriented North-South (width 3.4m along X, length 5.4m along Z)
       for (const dx of [-1.7, 1.7]) {
-        const line = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 5.4), sMat);
-        line.rotation.x = -Math.PI * 0.5;
-        line.position.set(cx + dx, lotY + 0.012, cz);
-        lotGroup.add(line);
+        const g = new THREE.PlaneGeometry(0.12, 5.4);
+        g.rotateX(-Math.PI * 0.5);
+        g.translate(cx + dx, lotY + 0.012, cz);
+        sList.push(g);
       }
-      const stop = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 0.24), lotStopMat);
-      stop.position.set(cx, SIDEWALK_HEIGHT + 0.08, cz + stopSign * 2.15);
-      lotGroup.add(stop);
+      pushMergedBox(lotStopGeos, 2.2, 0.14, 0.24, cx, SIDEWALK_HEIGHT + 0.08, cz + stopSign * 2.15);
     }
   };
 
@@ -2116,34 +2190,30 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
     [47.5, -39.0],
     [22.0, -78.5],
   ] as const) {
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.7, 10), lotStopMat);
-    base.position.set(lx, SIDEWALK_HEIGHT + 0.35, lz);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 7.2, 10), lotPoleMat);
-    pole.position.set(lx, SIDEWALK_HEIGHT + 3.9, lz);
-    const crossArm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.14, 0.16), lotPoleMat);
-    crossArm.position.set(lx, SIDEWALK_HEIGHT + 7.4, lz);
-    const neonCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.25, 10), lotNeonCyanMat);
-    neonCollar.position.set(lx, SIDEWALK_HEIGHT + 6.9, lz);
+    const baseGeo = new THREE.CylinderGeometry(0.28, 0.34, 0.7, 10);
+    baseGeo.translate(lx, SIDEWALK_HEIGHT + 0.35, lz);
+    lotStopGeos.push(baseGeo);
+    const pGeo = new THREE.CylinderGeometry(0.11, 0.16, 7.2, 10);
+    pGeo.translate(lx, SIDEWALK_HEIGHT + 3.9, lz);
+    lotPoleGeos.push(pGeo);
+    pushMergedBox(lotPoleGeos, 2.4, 0.14, 0.16, lx, SIDEWALK_HEIGHT + 7.4, lz);
+    const colGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.25, 10);
+    colGeo.translate(lx, SIDEWALK_HEIGHT + 6.9, lz);
+    lotCyanGeos.push(colGeo);
     for (const dx of [-1.05, 1.05]) {
-      const lampHead = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.14, 0.34), lotPoleMat);
-      lampHead.position.set(lx + dx, SIDEWALK_HEIGHT + 7.36, lz);
-      const lens = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.05, 0.26), lotFloodMat);
-      lens.position.set(lx + dx, SIDEWALK_HEIGHT + 7.27, lz);
-      lotGroup.add(lampHead, lens);
+      pushMergedBox(lotPoleGeos, 0.55, 0.14, 0.34, lx + dx, SIDEWALK_HEIGHT + 7.36, lz);
+      pushMergedBox(lotFloodGeos, 0.46, 0.05, 0.26, lx + dx, SIDEWALK_HEIGHT + 7.27, lz);
     }
-    lotGroup.add(base, pole, crossArm, neonCollar);
   }
 
   // Glowing "CLUB NEON · VIP PARKING" Overhead Driveway Gantry Arch over the East entrance (X = 59.8, Z = -50)
   for (const gz of [-56.4, -43.6]) {
-    const col = new THREE.Mesh(new THREE.BoxGeometry(0.42, 4.8, 0.42), lotPoleMat);
-    col.position.set(59.8, SIDEWALK_HEIGHT + 2.4, gz);
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.46, 4.4, 0.1), lotNeonPinkMat);
-    strip.position.set(59.8, SIDEWALK_HEIGHT + 2.4, gz);
-    lotGroup.add(col, strip);
+    pushMergedBox(lotPoleGeos, 0.42, 4.8, 0.42, 59.8, SIDEWALK_HEIGHT + 2.4, gz);
+    pushMergedBox(lotPinkGeos, 0.46, 4.4, 0.1, 59.8, SIDEWALK_HEIGHT + 2.4, gz);
   }
-  const archBeam = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.15, 13.4), lotPoleMat);
-  archBeam.position.set(59.8, SIDEWALK_HEIGHT + 5.1, -50.0);
+  pushMergedBox(lotPoleGeos, 0.5, 1.15, 13.4, 59.8, SIDEWALK_HEIGHT + 5.1, -50.0);
+  pushMergedBox(lotCyanGeos, 0.56, 0.1, 13.4, 59.8, SIDEWALK_HEIGHT + 4.48, -50.0);
+
   const archSignCanvas = document.createElement('canvas');
   archSignCanvas.width = 512;
   archSignCanvas.height = 96;
@@ -2161,15 +2231,22 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
   const archTex = new THREE.CanvasTexture(archSignCanvas);
   archTex.colorSpace = THREE.SRGBColorSpace;
   const archSignMat = new THREE.MeshBasicMaterial({ map: archTex });
+  const signFaceGeos: THREE.BufferGeometry[] = [];
   for (const sx of [0.27, -0.27]) {
-    const signFace = new THREE.Mesh(new THREE.PlaneGeometry(11.6, 0.92), archSignMat);
-    signFace.rotation.y = sx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
-    signFace.position.set(59.8 + sx, SIDEWALK_HEIGHT + 5.1, -50.0);
-    lotGroup.add(signFace);
+    const sfGeo = new THREE.PlaneGeometry(11.6, 0.92);
+    sfGeo.rotateY(sx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5);
+    sfGeo.translate(59.8 + sx, SIDEWALK_HEIGHT + 5.1, -50.0);
+    signFaceGeos.push(sfGeo);
   }
-  const archNeonBottom = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.1, 13.4), lotNeonCyanMat);
-  archNeonBottom.position.set(59.8, SIDEWALK_HEIGHT + 4.48, -50.0);
-  lotGroup.add(archBeam, archNeonBottom);
+  addMergedGroup(lotGroup, signFaceGeos, archSignMat);
+  addMergedGroup(lotGroup, lotAsphaltGeos, lotAsphaltMat, false, true);
+  addMergedGroup(lotGroup, lotWhiteStripeGeos, lotStripeMat);
+  addMergedGroup(lotGroup, lotVipStripeGeos, lotVipStripeMat);
+  addMergedGroup(lotGroup, lotStopGeos, lotStopMat);
+  addMergedGroup(lotGroup, lotPoleGeos, lotPoleMat);
+  addMergedGroup(lotGroup, lotFloodGeos, lotFloodMat);
+  addMergedGroup(lotGroup, lotPinkGeos, lotNeonPinkMat);
+  addMergedGroup(lotGroup, lotCyanGeos, lotNeonCyanMat);
 
   const parkedLotCarsRoot = new THREE.Group();
   lotGroup.add(parkedLotCarsRoot);
@@ -2185,8 +2262,9 @@ export function buildCityScene(scene: THREE.Scene, blueprint: CityBlueprint): Ci
 
   const hideFallbackYachts = () => {
     for (const y of yachts) {
-      y.group.visible = false;
+      disposeSubtree(y.group);
     }
+    yachts.length = 0;
   };
 
   return {

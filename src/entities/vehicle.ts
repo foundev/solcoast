@@ -9,6 +9,7 @@ import {
   type OBB2D,
 } from '../core/math';
 import { resolveCarVsBuildingSAT, resolveCarVsCarSAT, resolveCarVsObbSAT } from '../core/physics';
+import { forEachNearbyAABB, forEachNearbyOBB } from '../core/spatialGrid';
 import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
@@ -559,7 +560,7 @@ export function stepVehiclePhysics(
   v.x += v.vx * safeDt;
   v.z += v.vz * safeDt;
 
-  for (const box of colliders) {
+  forEachNearbyAABB(colliders, v.x, v.z, 4.0, (box) => {
     const contact = resolveCarVsBuildingSAT(v, box);
     if (contact.hit && contact.closingSpeed > 0.1) {
       const impact = contact.closingSpeed;
@@ -574,8 +575,8 @@ export function stepVehiclePhysics(
       v.pitchVel -= clamp(impact * 0.042, 0, 0.9);
       v.suspVel -= clamp(impact * 0.065, 0, 1.3);
     }
-  }
-  for (const obb of propObbs) {
+  });
+  forEachNearbyOBB(propObbs, v.x, v.z, 4.0, (obb) => {
     const contact = resolveCarVsObbSAT(v, obb);
     if (contact.hit && contact.closingSpeed > 0.1) {
       const impact = contact.closingSpeed;
@@ -589,7 +590,7 @@ export function stepVehiclePhysics(
       v.pitchVel -= clamp(impact * 0.036, 0, 0.75);
       v.suspVel -= clamp(impact * 0.055, 0, 1.1);
     }
-  }
+  });
 
   let nextX = v.x;
   let nextZ = v.z;
@@ -907,7 +908,14 @@ export interface VehicleMeshHandles {
   headlightMaterial: THREE.MeshStandardMaterial;
   wheelMeshes: THREE.Object3D[];
   frontWheelPivots: THREE.Object3D[];
-  syncFromState: (state: VehicleState, nightFactor: number, dt?: number, isOccupied?: boolean) => void;
+  syncFromState: (
+    state: VehicleState,
+    nightFactor: number,
+    dt?: number,
+    isOccupied?: boolean,
+    focusX?: number,
+    focusZ?: number,
+  ) => void;
   applyPaint: (paintIndex: number) => void;
   attachGltfSupercar: (ferrariRoot: THREE.Group) => void;
   attachGltfCar: (carRoot: THREE.Group, isFerrari?: boolean) => void;
@@ -1273,9 +1281,12 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     }
   }
 
-  // Drift tire smoke + persistent asphalt skid marks ring buffer!
-  const smokePool: DriftSmokeParticle[] = [];
-  const skidMarks: THREE.Mesh[] = [];
+  // Instanced persistent asphalt skid marks ring buffer (1 draw call instead of 160!) + pooled drift smoke!
+  const MAX_SKIDS = 160;
+  let skidInst: THREE.InstancedMesh | null = null;
+  let skidWriteIdx = 0;
+  let skidCount = 0;
+  const skidDummy = new THREE.Object3D();
   const skidGeo = new THREE.PlaneGeometry(0.32, 0.92);
   skidGeo.rotateX(-Math.PI * 0.5);
   const skidMat = new THREE.MeshBasicMaterial({
@@ -1284,6 +1295,11 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     opacity: 0.42,
     depthWrite: false,
   });
+
+  const smokePool: DriftSmokeParticle[] = [];
+  const freeSmokeSprites: THREE.Sprite[] = [];
+  const shadowCasterMeshes: THREE.Mesh[] = [];
+  let lastCastShadow = true;
   let smokeTimer = 0;
   let skidTimer = 0;
 
@@ -1296,7 +1312,39 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
     caliperMaterial.color.setHex(p.caliperHex);
   };
 
-  const syncFromState = (s: VehicleState, nightFactor: number, dt = 1 / 60, _isOccupied = false) => {
+  const syncFromState = (
+    s: VehicleState,
+    nightFactor: number,
+    dt = 1 / 60,
+    isOccupied = false,
+    focusX?: number,
+    focusZ?: number,
+  ) => {
+    // Distance-cull far unoccupied fleet/VIP cars (>225m) and shadow-cull outside the 92m shadow box!
+    if (!isOccupied && focusX !== undefined && focusZ !== undefined) {
+      const dx = s.x - focusX;
+      const dz = s.z - focusZ;
+      const dSq = dx * dx + dz * dz;
+      const vis = dSq <= 225 * 225;
+      root.visible = vis;
+      if (!vis) return;
+      const wantShadow = dSq <= 96 * 96;
+      if (wantShadow !== lastCastShadow) {
+        lastCastShadow = wantShadow;
+        for (let i = 0; i < shadowCasterMeshes.length; i++) {
+          shadowCasterMeshes[i].castShadow = wantShadow;
+        }
+      }
+    } else if (isOccupied) {
+      root.visible = true;
+      if (!lastCastShadow) {
+        lastCastShadow = true;
+        for (let i = 0; i < shadowCasterMeshes.length; i++) {
+          shadowCasterMeshes[i].castShadow = true;
+        }
+      }
+    }
+
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = -s.yaw;
     bodyGroup.position.y = s.suspOffset;
@@ -1325,7 +1373,7 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       sp.scale.set(sc, sc * 0.65, 1);
     }
 
-    // Drift tire smoke & asphalt skid marks
+    // Drift tire smoke (recycled pool) & instanced asphalt skid marks (1 draw call!)
     if (s.drifting) {
       const fwd = forwardFromYaw(s.yaw);
       const right = rightFromYaw(s.yaw);
@@ -1334,20 +1382,26 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       if (smokeTimer >= 0.04 && sharedSmokeTex) {
         smokeTimer = 0;
         for (const side of [-0.96, 0.96]) {
-          const mat = new THREE.SpriteMaterial({
-            map: sharedSmokeTex,
-            transparent: true,
-            opacity: 0.45,
-            depthWrite: false,
-          });
-          const sp = new THREE.Sprite(mat);
+          let sp = freeSmokeSprites.pop();
+          if (!sp) {
+            const mat = new THREE.SpriteMaterial({
+              map: sharedSmokeTex,
+              transparent: true,
+              opacity: 0.45,
+              depthWrite: false,
+            });
+            sp = new THREE.Sprite(mat);
+            scene.add(sp);
+          } else {
+            sp.visible = true;
+            sp.material.opacity = 0.45;
+          }
           sp.position.set(
             s.x - fwd.x * 1.45 + right.x * side,
             s.y + 0.22,
             s.z - fwd.z * 1.45 + right.z * side,
           );
           sp.scale.set(0.8, 0.8, 1);
-          scene.add(sp);
           smokePool.push({
             sprite: sp,
             vx: (Math.random() - 0.5) * 1.1,
@@ -1362,21 +1416,27 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       skidTimer += dt;
       if (skidTimer >= 0.032) {
         skidTimer = 0;
+        if (!skidInst) {
+          skidInst = new THREE.InstancedMesh(skidGeo, skidMat, MAX_SKIDS);
+          skidInst.frustumCulled = false;
+          skidInst.count = 0;
+          scene.add(skidInst);
+        }
         for (const side of [-0.96, 0.96]) {
-          const mark = new THREE.Mesh(skidGeo, skidMat);
-          mark.position.set(
+          skidDummy.position.set(
             s.x - fwd.x * 1.42 + right.x * side,
             s.y + 0.058,
             s.z - fwd.z * 1.42 + right.z * side,
           );
-          mark.rotation.y = -s.yaw;
-          scene.add(mark);
-          skidMarks.push(mark);
-          if (skidMarks.length > 160) {
-            const oldest = skidMarks.shift()!;
-            scene.remove(oldest);
-          }
+          skidDummy.rotation.set(0, -s.yaw, 0);
+          skidDummy.scale.set(1, 1, 1);
+          skidDummy.updateMatrix();
+          skidInst.setMatrixAt(skidWriteIdx, skidDummy.matrix);
+          skidWriteIdx = (skidWriteIdx + 1) % MAX_SKIDS;
+          if (skidCount < MAX_SKIDS) skidCount++;
         }
+        skidInst.count = skidCount;
+        skidInst.instanceMatrix.needsUpdate = true;
       }
     }
 
@@ -1384,8 +1444,8 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
       const p = smokePool[i];
       p.age += dt;
       if (p.age >= p.maxAge) {
-        scene.remove(p.sprite);
-        p.sprite.material.dispose();
+        p.sprite.visible = false;
+        freeSmokeSprites.push(p.sprite);
         smokePool.splice(i, 1);
       } else {
         const life = p.age / p.maxAge;
@@ -1400,20 +1460,29 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
   };
 
   const attachGltfCar = (carRoot: THREE.Group, isFerrari = false) => {
-    // Hide procedural car shell & procedural wheel pivots while preserving glow halos, spotlights & contact shadow
-    for (const child of bodyGroup.children) {
-      if (!(child instanceof THREE.Sprite)) {
-        child.visible = false;
-      }
+    // Remove & dispose procedural car shell & procedural wheel pivots while preserving glow halos & contact shadow
+    for (let i = bodyGroup.children.length - 1; i >= 0; i--) {
+      const child = bodyGroup.children[i];
+      if (child instanceof THREE.Sprite || child === shadowPlane) continue;
+      bodyGroup.remove(child);
+      child.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
     }
     for (const wp of proceduralWheelPivots) {
-      wp.visible = false;
+      root.remove(wp);
+      wp.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
     }
+    proceduralWheelPivots.length = 0;
+    shadowCasterMeshes.length = 0;
 
     carRoot.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
-      obj.castShadow = true;
+      obj.castShadow = lastCastShadow;
       obj.receiveShadow = true;
+      shadowCasterMeshes.push(obj);
 
       const name = obj.name.toLowerCase();
       const matName = Array.isArray(obj.material)
@@ -1489,10 +1558,37 @@ export function createVehicleMesh(state: VehicleState, scene: THREE.Scene): Vehi
 
   const dispose = () => {
     scene.remove(root);
-    for (const sm of skidMarks) scene.remove(sm);
-    for (const p of smokePool) scene.remove(p.sprite);
-    skidMarks.length = 0;
+    if (skidInst) {
+      scene.remove(skidInst);
+      skidInst = null;
+    }
+    skidGeo.dispose();
+    skidMat.dispose();
+    for (const p of smokePool) {
+      scene.remove(p.sprite);
+      p.sprite.material.dispose();
+    }
+    for (const sp of freeSmokeSprites) {
+      scene.remove(sp);
+      sp.material.dispose();
+    }
+    for (const sp of headGlowSprites) sp.material.dispose();
+    for (const sp of tailGlowSprites) sp.material.dispose();
+    paintMaterial.dispose();
+    accentMaterial.dispose();
+    caliperMaterial.dispose();
+    carbonMat.dispose();
+    chromeMat.dispose();
+    glassMat.dispose();
+    interiorMat.dispose();
+    headlightMaterial.dispose();
+    brakeLightMaterial.dispose();
+    tireMat.dispose();
+    rotorMat.dispose();
+    shadowPlane.geometry.dispose();
+    (shadowPlane.material as THREE.Material).dispose();
     smokePool.length = 0;
+    freeSmokeSprites.length = 0;
   };
 
   syncFromState(state, 0.2, 0.016, false);

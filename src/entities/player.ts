@@ -19,7 +19,9 @@ import {
   stepHumanRagdollPhysics,
   type HumanBodyPhysics,
   type HumanRagdollMode,
+  type OrientedCarHull,
 } from '../core/physics';
+import { forEachNearbyAABB, forEachNearbyOBB } from '../core/spatialGrid';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createContactShadowTexture } from '../world/textures';
 import { createHumanRigController, type HumanRigController } from './humanRig';
@@ -124,6 +126,16 @@ export function createInitialPlayerState(startingVehicle: VehicleState | null): 
   };
 }
 
+const _playerTcHull: OrientedCarHull = {
+  x: 0,
+  z: 0,
+  yaw: 0,
+  vx: 0,
+  vz: 0,
+  halfWidth: 1.06,
+  halfLength: 2.28,
+};
+
 export function stepPlayerOnFoot(
   p: PlayerState,
   input: FootMoveInput,
@@ -187,66 +199,70 @@ export function stepPlayerOnFoot(
   let nextZ = p.z + desiredVz * safeDt;
 
   const radius = 0.34;
-  for (const box of colliders) {
+  forEachNearbyAABB(colliders, nextX, nextZ, radius + 0.5, (box) => {
     const res = resolveCircleAABB(nextX, nextZ, radius, box);
     if (res.hit) {
       nextX += res.dx;
       nextZ += res.dz;
     }
-  }
-  for (const obb of propObbs) {
+  });
+  forEachNearbyOBB(propObbs, nextX, nextZ, radius + 0.5, (obb) => {
     const res = resolveCircleOBB(nextX, nextZ, radius, obb);
     if (res.hit) {
       nextX += res.dx;
       nextZ += res.dz;
     }
-  }
+  });
 
   // 2-pass solid oriented hull collisions against ALL player vehicles & ALL AI traffic cars
   // (guarantees you can NEVER walk through parked fleet cars, traffic cars, or wedged pairs!)
   p.x = nextX;
   p.z = nextZ;
   for (let pass = 0; pass < 2; pass++) {
-    for (const v of vehicles) {
+    for (let vi = 0; vi < vehicles.length; vi++) {
+      const v = vehicles[vi];
+      const dxv = p.x - v.x;
+      const dzv = p.z - v.z;
+      if (dxv * dxv + dzv * dzv > 16) continue;
       const hit = resolveCircleOrientedCar(p.x, p.z, radius, v);
       if (hit.hit) {
         applyCarHitToHuman(p, v, hit, true);
       }
     }
 
-    for (const tc of trafficCars) {
-      const tcHull = {
-        x: tc.x,
-        z: tc.z,
-        yaw: tc.yaw,
-        vx: tc.vx,
-        vz: tc.vz,
-        halfWidth: 1.06,
-        halfLength: 2.28,
-      };
-      const hit = resolveCircleOrientedCar(p.x, p.z, radius, tcHull);
+    for (let ti = 0; ti < trafficCars.length; ti++) {
+      const tc = trafficCars[ti];
+      const dxt = p.x - tc.x;
+      const dzt = p.z - tc.z;
+      if (dxt * dxt + dzt * dzt > 16) continue;
+      _playerTcHull.x = tc.x;
+      _playerTcHull.z = tc.z;
+      _playerTcHull.yaw = tc.yaw;
+      _playerTcHull.vx = tc.vx;
+      _playerTcHull.vz = tc.vz;
+      const hit = resolveCircleOrientedCar(p.x, p.z, radius, _playerTcHull);
       if (hit.hit) {
-        const impact = applyCarHitToHuman(p, tcHull, hit, true);
+        const impact = applyCarHitToHuman(p, _playerTcHull, hit, true);
         if (impact > 2.2) {
           tc.speed *= 0.35;
         }
       }
     }
 
-    for (const box of colliders) {
+    forEachNearbyAABB(colliders, p.x, p.z, radius + 0.5, (box) => {
       const res = resolveCircleAABB(p.x, p.z, radius, box);
       if (res.hit) {
         p.x += res.dx;
         p.z += res.dz;
       }
-    }
-    for (const obb of propObbs) {
+    });
+    forEachNearbyOBB(propObbs, p.x, p.z, radius + 0.5, (obb) => {
       const res = resolveCircleOBB(p.x, p.z, radius, obb);
       if (res.hit) {
         p.x += res.dx;
         p.z += res.dz;
       }
-    }
+    });
   }
 
   // Solid shoulder-to-shoulder & sprint-tackle collisions with ALL sidewalk pedestrians!
@@ -564,30 +580,78 @@ const _seatReclineQ = new THREE.Quaternion();
 const _seatHeadTurnQ = new THREE.Quaternion();
 const _seatEul = new THREE.Euler(0, 0, 0, 'XYZ');
 
+interface SeatedBoneCache {
+  all: { name: string; bone: THREE.Object3D }[];
+  hips?: THREE.Object3D;
+  head?: THREE.Object3D;
+  lUpLeg?: THREE.Object3D;
+  lLeg?: THREE.Object3D;
+  lFoot?: THREE.Object3D;
+  rUpLeg?: THREE.Object3D;
+  rLeg?: THREE.Object3D;
+  rFoot?: THREE.Object3D;
+  lArm?: THREE.Object3D;
+  lFore?: THREE.Object3D;
+  lHand?: THREE.Object3D;
+  rArm?: THREE.Object3D;
+  rFore?: THREE.Object3D;
+  rHand?: THREE.Object3D;
+}
+
+const seatedBoneCache = new WeakMap<THREE.Object3D, SeatedBoneCache>();
+
+function getSeatedBoneCache(avatarRoot: THREE.Object3D): SeatedBoneCache {
+  let cache = seatedBoneCache.get(avatarRoot);
+  if (cache) return cache;
+  const all: { name: string; bone: THREE.Object3D }[] = [];
+  for (const name of SEATED_BONES) {
+    const bone = avatarRoot.getObjectByName(name);
+    if (bone) all.push({ name, bone });
+  }
+  cache = {
+    all,
+    hips: avatarRoot.getObjectByName('Hips') ?? undefined,
+    head: avatarRoot.getObjectByName('Head') ?? undefined,
+    lUpLeg: avatarRoot.getObjectByName('LeftUpLeg') ?? undefined,
+    lLeg: avatarRoot.getObjectByName('LeftLeg') ?? undefined,
+    lFoot: avatarRoot.getObjectByName('LeftFoot') ?? undefined,
+    rUpLeg: avatarRoot.getObjectByName('RightUpLeg') ?? undefined,
+    rLeg: avatarRoot.getObjectByName('RightLeg') ?? undefined,
+    rFoot: avatarRoot.getObjectByName('RightFoot') ?? undefined,
+    lArm: avatarRoot.getObjectByName('LeftArm') ?? undefined,
+    lFore: avatarRoot.getObjectByName('LeftForeArm') ?? undefined,
+    lHand: avatarRoot.getObjectByName('LeftHand') ?? undefined,
+    rArm: avatarRoot.getObjectByName('RightArm') ?? undefined,
+    rFore: avatarRoot.getObjectByName('RightForeArm') ?? undefined,
+    rHand: avatarRoot.getObjectByName('RightHand') ?? undefined,
+  };
+  seatedBoneCache.set(avatarRoot, cache);
+  return cache;
+}
+
 function aimBoneInAvatarSpace(
-  avatarRoot: THREE.Object3D,
+  refWorldQuat: THREE.Quaternion,
   bone: THREE.Object3D,
   child: THREE.Object3D,
   targetDirLocalToRoot: THREE.Vector3,
 ): void {
   if (!bone.parent) return;
-  avatarRoot.updateMatrixWorld(true);
   bone.getWorldPosition(_aimP0);
   child.getWorldPosition(_aimP1);
   _aimCurDir.subVectors(_aimP1, _aimP0).normalize();
 
-  // Convert desired direction from avatar's parent (entityRoot, facing -Z) space to world space
-  const refObj = avatarRoot.parent ?? avatarRoot;
-  refObj.getWorldQuaternion(_aimWorldQ);
-  _aimDesDir.copy(targetDirLocalToRoot).normalize().applyQuaternion(_aimWorldQ);
+  _aimDesDir.copy(targetDirLocalToRoot).normalize().applyQuaternion(refWorldQuat);
 
   _aimDelta.setFromUnitVectors(_aimCurDir, _aimDesDir);
   bone.getWorldQuaternion(_aimWorldQ);
   _aimWorldQ.premultiply(_aimDelta);
   bone.parent.getWorldQuaternion(_aimParentQ);
   bone.quaternion.copy(_aimParentQ).invert().multiply(_aimWorldQ);
+  // Only update this bone and its direct descendants (instead of whole 70-bone avatar 8 times!)
   bone.updateMatrixWorld(true);
 }
+
+const _seatRefWorldQ = new THREE.Quaternion();
 
 /**
  * Poses the Ready Player Me street-tough protagonist cleanly seated in the driver's bucket seat,
@@ -599,27 +663,16 @@ export function applySeatedDrivingPose(
   restQuats: Map<string, THREE.Quaternion>,
   steerAngle: number,
 ): void {
+  const bones = getSeatedBoneCache(avatarRoot);
+
   // Start from clean rest pose so AnimationMixer tracks don't fight or drift
-  for (const name of SEATED_BONES) {
-    const b = avatarRoot.getObjectByName(name);
-    const rq = restQuats.get(name);
-    if (b && rq) b.quaternion.copy(rq);
+  for (let i = 0; i < bones.all.length; i++) {
+    const entry = bones.all[i];
+    const rq = restQuats.get(entry.name);
+    if (rq) entry.bone.quaternion.copy(rq);
   }
 
-  const hips = avatarRoot.getObjectByName('Hips');
-  const head = avatarRoot.getObjectByName('Head');
-  const lUpLeg = avatarRoot.getObjectByName('LeftUpLeg');
-  const lLeg = avatarRoot.getObjectByName('LeftLeg');
-  const lFoot = avatarRoot.getObjectByName('LeftFoot');
-  const rUpLeg = avatarRoot.getObjectByName('RightUpLeg');
-  const rLeg = avatarRoot.getObjectByName('RightLeg');
-  const rFoot = avatarRoot.getObjectByName('RightFoot');
-  const lArm = avatarRoot.getObjectByName('LeftArm');
-  const lFore = avatarRoot.getObjectByName('LeftForeArm');
-  const lHand = avatarRoot.getObjectByName('LeftHand');
-  const rArm = avatarRoot.getObjectByName('RightArm');
-  const rFore = avatarRoot.getObjectByName('RightForeArm');
-  const rHand = avatarRoot.getObjectByName('RightHand');
+  const { hips, head, lUpLeg, lLeg, lFoot, rUpLeg, rLeg, rFoot, lArm, lFore, lHand, rArm, rFore, rHand } = bones;
 
   if (hips) {
     // Anchor pelvis right at local (0, 0, 0) (aligned to DRIVER_SEAT_OFFSETS) with sporty recline
@@ -635,27 +688,29 @@ export function applySeatedDrivingPose(
     head.quaternion.multiply(_seatHeadTurnQ);
   }
 
-  // Update ancestor chain (entity root + tumblePivot) AND descendants so bone aiming uses current-frame car orientation
+  // Update ancestor chain (entity root + tumblePivot) AND descendants once before bone aiming
   avatarRoot.updateWorldMatrix(true, true);
+  const refObj = avatarRoot.parent ?? avatarRoot;
+  refObj.getWorldQuaternion(_seatRefWorldQ);
 
   if (lUpLeg && lLeg && lFoot) {
-    aimBoneInAvatarSpace(avatarRoot, lUpLeg, lLeg, _seatPos.set(-0.06, -0.02, -0.998));
-    aimBoneInAvatarSpace(avatarRoot, lLeg, lFoot, _seatPos.set(0, -0.68, -0.73));
+    aimBoneInAvatarSpace(_seatRefWorldQ, lUpLeg, lLeg, _seatPos.set(-0.06, -0.02, -0.998));
+    aimBoneInAvatarSpace(_seatRefWorldQ, lLeg, lFoot, _seatPos.set(0, -0.68, -0.73));
   }
   if (rUpLeg && rLeg && rFoot) {
-    aimBoneInAvatarSpace(avatarRoot, rUpLeg, rLeg, _seatPos.set(0.06, -0.02, -0.998));
-    aimBoneInAvatarSpace(avatarRoot, rLeg, rFoot, _seatPos.set(0, -0.68, -0.73));
+    aimBoneInAvatarSpace(_seatRefWorldQ, rUpLeg, rLeg, _seatPos.set(0.06, -0.02, -0.998));
+    aimBoneInAvatarSpace(_seatRefWorldQ, rLeg, rFoot, _seatPos.set(0, -0.68, -0.73));
   }
 
   // Dynamic steering wheel hand motion: elbows tucked inside cabin bolsters while hands grip wheel at 10-and-2
   const steerShift = clamp(steerAngle * 0.48, -0.22, 0.22);
   if (lArm && lFore && lHand) {
-    aimBoneInAvatarSpace(avatarRoot, lArm, lFore, _seatPos.set(-0.1, -0.46 + steerShift * 0.35, -0.88));
-    aimBoneInAvatarSpace(avatarRoot, lFore, lHand, _seatPos.set(0.14, 0.26 + steerShift, -0.95));
+    aimBoneInAvatarSpace(_seatRefWorldQ, lArm, lFore, _seatPos.set(-0.1, -0.46 + steerShift * 0.35, -0.88));
+    aimBoneInAvatarSpace(_seatRefWorldQ, lFore, lHand, _seatPos.set(0.14, 0.26 + steerShift, -0.95));
   }
   if (rArm && rFore && rHand) {
-    aimBoneInAvatarSpace(avatarRoot, rArm, rFore, _seatPos.set(0.1, -0.46 - steerShift * 0.35, -0.88));
-    aimBoneInAvatarSpace(avatarRoot, rFore, rHand, _seatPos.set(-0.14, 0.26 - steerShift, -0.95));
+    aimBoneInAvatarSpace(_seatRefWorldQ, rArm, rFore, _seatPos.set(0.1, -0.46 - steerShift * 0.35, -0.88));
+    aimBoneInAvatarSpace(_seatRefWorldQ, rFore, rHand, _seatPos.set(-0.14, 0.26 - steerShift, -0.95));
   }
 }
 
@@ -932,7 +987,12 @@ export function createPlayerMesh(scene: THREE.Scene): PlayerMeshHandles {
   let wasSeated = false;
 
   const attachGltfCharacter = (model: THREE.Object3D, animations: THREE.AnimationClip[]) => {
-    body.visible = false;
+    if (body.parent) {
+      body.parent.remove(body);
+      body.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+    }
     model.position.y = -0.92;
     model.traverse((obj) => {
       if (obj instanceof THREE.Mesh && obj.visible) {

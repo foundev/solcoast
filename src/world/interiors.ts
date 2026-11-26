@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
   clamp,
   distXZ,
@@ -2759,6 +2760,8 @@ interface BuiltNpcHandle {
   def: InteriorNpcDef;
   root: THREE.Group;
   rig: HumanRigController | null;
+  prevX: number;
+  prevZ: number;
 }
 
 interface BuiltDoorHandle {
@@ -2767,13 +2770,12 @@ interface BuiltDoorHandle {
   pivotB?: THREE.Group;
   openProgress: number;
   readerLedMat?: THREE.MeshBasicMaterial;
+  lastLedHex?: number;
 }
 
 interface PbrSurfaceBinding {
   mat: THREE.MeshStandardMaterial;
   key: InteriorTextureKey;
-  repeatX: number;
-  repeatY: number;
   tintHex: number;
 }
 
@@ -2791,17 +2793,130 @@ interface BuiltVenue {
   def: InteriorDef;
   group: THREE.Group;
   propsRoot: THREE.Group;
+  propsByFloor: Map<number, THREE.Group>;
   pbrBindings: PbrSurfaceBinding[];
   fountainEffects: AnimatedFountainWater[];
+  fountainFloors: number[];
   npcs: BuiltNpcHandle[];
   doors: BuiltDoorHandle[];
   roomLights: RoomLightSpec[];
+  roomLightsByFloor: Map<number, RoomLightSpec[]>;
   danceFloorMat?: THREE.MeshStandardMaterial;
   lasers?: THREE.Mesh[];
   monolithMats?: THREE.MeshStandardMaterial[];
   exitRing: THREE.Mesh;
   elevatorRings: THREE.Mesh[];
 }
+
+const EMPTY_ROOM_LIGHTS: RoomLightSpec[] = [];
+
+function scaleGeoUvs(geo: THREE.BufferGeometry, repeatX: number, repeatY: number): THREE.BufferGeometry {
+  const uv = geo.attributes.uv;
+  if (uv) {
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, uv.getX(i) * repeatX, uv.getY(i) * repeatY);
+    }
+    uv.needsUpdate = true;
+  }
+  return geo;
+}
+
+/**
+ * Merges all static opaque meshes in `srcGroup` by shared material into `targetGroup`,
+ * collapsing hundreds of individual walls, trim moldings, beams, and frames into ~1 draw call
+ * per material while preserving transparent panes individually for clean alpha sorting.
+ */
+function mergeStaticArchitectureGroup(srcGroup: THREE.Group, targetGroup: THREE.Group): void {
+  srcGroup.updateMatrixWorld(true);
+  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const passthrough: THREE.Mesh[] = [];
+
+  srcGroup.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const mat = obj.material;
+    if (
+      Array.isArray(mat) ||
+      mat.transparent ||
+      obj.matrixWorld.determinant() < 0
+    ) {
+      passthrough.push(obj);
+      return;
+    }
+    const geo = obj.geometry;
+    geo.applyMatrix4(obj.matrixWorld);
+    let list = buckets.get(mat);
+    if (!list) {
+      list = [];
+      buckets.set(mat, list);
+    }
+    list.push(geo);
+  });
+
+  for (const mesh of passthrough) {
+    mesh.matrixWorld.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    targetGroup.add(mesh);
+  }
+
+  for (const [mat, geos] of buckets) {
+    if (geos.length === 1) {
+      targetGroup.add(new THREE.Mesh(geos[0], mat));
+      continue;
+    }
+    let hasIndexed = false;
+    let hasNonIndexed = false;
+    for (const g of geos) {
+      if (g.index) hasIndexed = true;
+      else hasNonIndexed = true;
+    }
+    const prepared =
+      hasIndexed && hasNonIndexed
+        ? geos.map((g) => {
+            if (!g.index) return g;
+            const ni = g.toNonIndexed();
+            g.dispose();
+            return ni;
+          })
+        : geos;
+    const merged = mergeGeometries(prepared, false);
+    if (merged) {
+      for (const g of prepared) g.dispose();
+      targetGroup.add(new THREE.Mesh(merged, mat));
+    } else {
+      for (const g of prepared) {
+        targetGroup.add(new THREE.Mesh(g, mat));
+      }
+    }
+  }
+}
+
+const rugMatCache = new Map<string, THREE.MeshStandardMaterial>();
+function getRugMat(hex: number, roughness: number, offset: number): THREE.MeshStandardMaterial {
+  const key = `${hex}|${roughness}|${offset}`;
+  let m = rugMatCache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color: hex,
+      roughness,
+      polygonOffset: true,
+      polygonOffsetFactor: offset,
+      polygonOffsetUnits: offset,
+    });
+    rugMatCache.set(key, m);
+  }
+  return m;
+}
+
+const sharedPlaqueBackMat = new THREE.MeshStandardMaterial({ color: 0xd9a84e, metalness: 0.88, roughness: 0.22 });
+const sharedClosedDoorWoodMat = new THREE.MeshStandardMaterial({ color: 0x452617, roughness: 0.44, metalness: 0.1 });
+const sharedShowerGlassMat = new THREE.MeshPhysicalMaterial({
+  color: 0xdaf6ff,
+  roughness: 0.06,
+  metalness: 0.05,
+  transparent: true,
+  opacity: 0.34,
+});
+const sharedShowerChromeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0e8, metalness: 0.94, roughness: 0.16 });
+const sharedShowerMarbleMat = new THREE.MeshStandardMaterial({ color: 0xeee9e0, roughness: 0.2 });
 
 export interface InteriorSystemHandles {
   outdoorMarkersRoot: THREE.Group;
@@ -2835,30 +2950,12 @@ function addAreaRug(
 ): void {
   const outerGeo = new THREE.PlaneGeometry(w, d);
   outerGeo.rotateX(-Math.PI * 0.5);
-  const outer = new THREE.Mesh(
-    outerGeo,
-    new THREE.MeshStandardMaterial({
-      color: borderHex,
-      roughness: 0.92,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    }),
-  );
+  const outer = new THREE.Mesh(outerGeo, getRugMat(borderHex, 0.92, -1));
   outer.position.set(cx, baseY + 0.012, cz);
 
   const innerGeo = new THREE.PlaneGeometry(w - 0.34, d - 0.34);
   innerGeo.rotateX(-Math.PI * 0.5);
-  const inner = new THREE.Mesh(
-    innerGeo,
-    new THREE.MeshStandardMaterial({
-      color: mainHex,
-      roughness: 0.95,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-    }),
-  );
+  const inner = new THREE.Mesh(innerGeo, getRugMat(mainHex, 0.95, -2));
   inner.position.set(cx, baseY + 0.024, cz);
   group.add(outer, inner);
 }
@@ -2876,10 +2973,7 @@ function addRoomNumberPlaque(
   const plaqueGroup = new THREE.Group();
   plaqueGroup.position.set(x, y, z);
   plaqueGroup.rotation.y = rotY;
-  const back = new THREE.Mesh(
-    new THREE.BoxGeometry(0.56, 0.3, 0.04),
-    new THREE.MeshStandardMaterial({ color: 0xd9a84e, metalness: 0.88, roughness: 0.22 }),
-  );
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.3, 0.04), sharedPlaqueBackMat);
   const face = new THREE.Mesh(
     new THREE.PlaneGeometry(0.5, 0.24),
     new THREE.MeshBasicMaterial({ map: tex }),
@@ -2900,17 +2994,15 @@ function addClosedHotelDoor(
   const doorGroup = new THREE.Group();
   doorGroup.position.set(x, baseY, z);
   doorGroup.rotation.y = rotY;
-  const woodMat = new THREE.MeshStandardMaterial({ color: 0x452617, roughness: 0.44, metalness: 0.1 });
-  const trimMat = new THREE.MeshStandardMaterial({ color: 0xd9a84e, metalness: 0.88, roughness: 0.22 });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.36, 2.48, 0.1), trimMat);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.36, 2.48, 0.1), sharedPlaqueBackMat);
   frame.position.set(0, 1.24, 0.05);
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.18, 2.38, 0.08), woodMat);
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.18, 2.38, 0.08), sharedClosedDoorWoodMat);
   slab.position.set(0, 1.19, 0.09);
-  const panelTop = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.9, 0.03), trimMat);
+  const panelTop = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.9, 0.03), sharedPlaqueBackMat);
   panelTop.position.set(0, 1.72, 0.13);
-  const panelBot = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.8, 0.03), trimMat);
+  const panelBot = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.8, 0.03), sharedPlaqueBackMat);
   panelBot.position.set(0, 0.68, 0.13);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), trimMat);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), sharedPlaqueBackMat);
   knob.position.set(0.42, 1.05, 0.18);
   doorGroup.add(frame, slab, panelTop, panelBot, knob);
   group.add(doorGroup);
@@ -2926,37 +3018,27 @@ function addGlassShower(
   d: number,
   glassSide: 'west' | 'east',
 ): void {
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xdaf6ff,
-    roughness: 0.06,
-    metalness: 0.05,
-    transparent: true,
-    opacity: 0.34,
-  });
-  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xd8e0e8, metalness: 0.94, roughness: 0.16 });
-  const marbleCurbMat = new THREE.MeshStandardMaterial({ color: 0xeee9e0, roughness: 0.2 });
-
   // Shower tray curb
-  const tray = new THREE.Mesh(new THREE.BoxGeometry(w, 0.09, d), marbleCurbMat);
+  const tray = new THREE.Mesh(new THREE.BoxGeometry(w, 0.09, d), sharedShowerMarbleMat);
   tray.position.set(x, baseY + 0.045, z);
   group.add(tray);
 
   // Frameless tempered glass partition + chrome rail
   const gx = glassSide === 'west' ? x - w * 0.5 + 0.03 : x + w * 0.5 - 0.03;
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.32, d), glassMat);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.32, d), sharedShowerGlassMat);
   panel.position.set(gx, baseY + 1.25, z);
-  const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, d), chromeMat);
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, d), sharedShowerChromeMat);
   topBar.position.set(gx, baseY + 2.41, z);
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), chromeMat);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), sharedShowerChromeMat);
   handle.position.set(gx, baseY + 1.15, z + d * 0.25);
 
   // Overhead rain shower pipe & wide square chrome rain head!
-  const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 10), chromeMat);
+  const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 10), sharedShowerChromeMat);
   riser.position.set(x, baseY + 1.72, z - d * 0.42);
-  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), chromeMat);
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 10), sharedShowerChromeMat);
   arm.rotation.x = Math.PI * 0.5;
   arm.position.set(x, baseY + 2.42, z - d * 0.22);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 0.32), chromeMat);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 0.32), sharedShowerChromeMat);
   head.position.set(x, baseY + 2.38, z);
 
   group.add(panel, topBar, handle, riser, arm, head);
@@ -2964,6 +3046,8 @@ function addGlassShower(
 
 function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const group = new THREE.Group();
+  // Temporary container for all static non-animated architecture; merged by material at the end of buildVenueGeometry!
+  const staticArch = new THREE.Group();
   // Anchor the unified building permanently at its real 3D world position & keep it visible at all times
   // so every window inside and outside is literally the exact same window at the exact same 3D coordinates!
   const anchor0 = getInteriorWorldAnchor(def, 0);
@@ -2974,6 +3058,69 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   const roomLights: RoomLightSpec[] = [];
   const cosAnchor = Math.cos(anchor0.worldRotY);
   const sinAnchor = Math.sin(anchor0.worldRotY);
+
+  // Venue-scoped material caches to deduplicate hundreds of identical materials & enable static mesh batching
+  const stdMatCache = new Map<string, THREE.MeshStandardMaterial>();
+  const getStdMat = (
+    color: number,
+    roughness: number,
+    metalness = 0,
+    side: THREE.Side = THREE.FrontSide,
+  ): THREE.MeshStandardMaterial => {
+    const k = `${color}|${roughness}|${metalness}|${side}`;
+    let m = stdMatCache.get(k);
+    if (!m) {
+      m = new THREE.MeshStandardMaterial({ color, roughness, metalness, side });
+      stdMatCache.set(k, m);
+    }
+    return m;
+  };
+  const basicMatCache = new Map<string, THREE.MeshBasicMaterial>();
+  const getBasicMat = (color: number, side: THREE.Side = THREE.FrontSide): THREE.MeshBasicMaterial => {
+    const k = `${color}|${side}`;
+    let m = basicMatCache.get(k);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({ color, side });
+      basicMatCache.set(k, m);
+    }
+    return m;
+  };
+  const glassMatCache = new Map<string, THREE.MeshPhysicalMaterial>();
+  const getGlassMat = (key: string, create: () => THREE.MeshPhysicalMaterial): THREE.MeshPhysicalMaterial => {
+    let m = glassMatCache.get(key);
+    if (!m) {
+      m = create();
+      glassMatCache.set(key, m);
+    }
+    return m;
+  };
+  const pbrMatCache = new Map<string, THREE.MeshStandardMaterial>();
+  const getPbrMat = (
+    key: InteriorTextureKey,
+    fallbackColor: number,
+    tintHex: number,
+    roughness: number,
+    metalness: number,
+    fallbackFloorColors?: [string, string],
+  ): THREE.MeshStandardMaterial => {
+    const k = `${key}|${tintHex}|${roughness}|${metalness}`;
+    let m = pbrMatCache.get(k);
+    if (!m) {
+      const opts: THREE.MeshStandardMaterialParameters = {
+        color: fallbackFloorColors ? 0xffffff : fallbackColor,
+        roughness,
+        metalness,
+        side: THREE.FrontSide,
+      };
+      if (fallbackFloorColors) {
+        opts.map = createFloorTileTexture(fallbackFloorColors[0], fallbackFloorColors[1], 4);
+      }
+      m = new THREE.MeshStandardMaterial(opts);
+      pbrMatCache.set(k, m);
+      pbrBindings.push({ mat: m, key, tintHex });
+    }
+    return m;
+  };
 
   const EXT_Z = -0.26;
   const getStoryExtH = (r: InteriorRoomDef): number =>
@@ -3000,18 +3147,17 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     return { pbr: 'plaster', tint: 0xf0f2f7, trimHex: 0x1b1e28, plinthHex: 0x262a35 };
   };
 
-  const extStoneMat = new THREE.MeshStandardMaterial({
-    color:
-      def.id === 'hotel-solaire'
-        ? 0xf4e6d8
-        : def.id === 'club-neon'
-          ? 0x12101e
-          : def.id === 'cafe-habana'
-            ? 0xc25435
-            : 0x262a35,
-    roughness: 0.58,
-    metalness: 0.14,
-  });
+  const extStoneMat = getStdMat(
+    def.id === 'hotel-solaire'
+      ? 0xf4e6d8
+      : def.id === 'club-neon'
+        ? 0x12101e
+        : def.id === 'cafe-habana'
+          ? 0xc25435
+          : 0x262a35,
+    0.58,
+    0.14,
+  );
 
   // 1. Build every individual room's PBR floor, architectural ceiling structure, exterior roof/terrace slabs & lighting!
   const maxVenueFloor = def.rooms.reduce((mx, r) => Math.max(mx, r.floor ?? 0), 0);
@@ -3026,25 +3172,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const cz = (room.minZ + room.maxZ) * 0.5;
     const slabStagger = roomIdx * 0.0025;
 
-    const floorTex = createFloorTileTexture(room.floorColorA, room.floorColorB, 4);
-    floorTex.repeat.set(Math.max(2, Math.round(rw / 3)), Math.max(2, Math.round(rd / 3)));
+    const floorMat = getPbrMat(
+      room.floorPbr,
+      0xffffff,
+      room.floorTint ?? 0xffffff,
+      room.floorRoughness ?? 0.4,
+      room.floorMetalness ?? 0.08,
+      [room.floorColorA, room.floorColorB],
+    );
 
-    const floorMat = new THREE.MeshStandardMaterial({
-      map: floorTex,
-      roughness: room.floorRoughness ?? 0.4,
-      metalness: room.floorMetalness ?? 0.08,
-    });
-    pbrBindings.push({
-      mat: floorMat,
-      key: room.floorPbr,
-      repeatX: Math.max(2, rw / 2.2),
-      repeatY: Math.max(2, rd / 2.2),
-      tintHex: room.floorTint ?? 0xffffff,
-    });
-
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(rw, 0.12, rd), floorMat);
+    const floorGeo = scaleGeoUvs(
+      new THREE.BoxGeometry(rw, 0.12, rd),
+      Math.max(2, rw / 2.2),
+      Math.max(2, rd / 2.2),
+    );
+    const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.position.set(cx, baseY - 0.06, cz);
-    group.add(floor);
+    staticArch.add(floor);
 
     // Exterior foundation plinth (Floor 0), clean inter-floor exterior belt course (upper floors), & top roof cap
     // Staggered by 3mm per room & kept strictly outside interior floor/ceiling planes so slabs NEVER Z-fight or flash!
@@ -3054,14 +3198,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         extStoneMat,
       );
       basePlinth.position.set(cx, baseY - 0.14 - slabStagger, cz);
-      group.add(basePlinth);
+      staticArch.add(basePlinth);
     } else {
       const beltSlab = new THREE.Mesh(
         new THREE.BoxGeometry(rw + 0.58, 0.14, rd + 0.58),
         extStoneMat,
       );
       beltSlab.position.set(cx, baseY - 0.18 - slabStagger, cz);
-      group.add(beltSlab);
+      staticArch.add(beltSlab);
     }
     if (rFloor >= maxVenueFloor) {
       const roofCap = new THREE.Mesh(
@@ -3069,23 +3213,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         extStoneMat,
       );
       roofCap.position.set(cx, baseY + storyExtH + 0.12 + slabStagger, cz);
-      group.add(roofCap);
+      staticArch.add(roofCap);
     }
 
     const ceil = new THREE.Mesh(
       new THREE.PlaneGeometry(rw, rd),
-      new THREE.MeshStandardMaterial({ color: room.ceilingColor, roughness: 0.85, side: THREE.DoubleSide }),
+      getStdMat(room.ceilingColor, 0.85, 0, THREE.DoubleSide),
     );
     ceil.rotation.x = Math.PI * 0.5;
     ceil.position.set(cx, baseY + room.height, cz);
-    group.add(ceil);
+    staticArch.add(ceil);
 
     // Architectural Ceiling Structure tailored per room style!
-    const beamMat = new THREE.MeshStandardMaterial({
-      color: room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight' ? 0x452817 : room.crownColor ?? 0x262934,
-      roughness: room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.35 : 0.65,
-      metalness: room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.65 : 0.1,
-    });
+    const beamMat = getStdMat(
+      room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight' ? 0x452817 : room.crownColor ?? 0x262934,
+      room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.35 : 0.65,
+      room.ceilingStyle === 'trusses' || room.ceilingStyle === 'gallery-track' ? 0.65 : 0.1,
+    );
 
     if (room.ceilingStyle === 'coffered') {
       // Art Deco coffered ceiling grid: primary girders slightly deeper than cross-beams (zero Z-fighting!)
@@ -3094,14 +3238,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         const bx = room.minX + (i / stepsX) * rw;
         const beam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, rd - 0.36), beamMat);
         beam.position.set(bx, baseY + room.height - 0.13, cz);
-        group.add(beam);
+        staticArch.add(beam);
       }
       const stepsZ = Math.max(2, Math.round(rd / 4.5));
       for (let j = 1; j < stepsZ; j++) {
         const bz = room.minZ + (j / stepsZ) * rd;
         const beam = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.17, 0.26), beamMat);
         beam.position.set(cx, baseY + room.height - 0.105, bz);
-        group.add(beam);
+        staticArch.add(beam);
       }
     } else if (room.ceilingStyle === 'rafters' || room.ceilingStyle === 'skylight') {
       // Exposed timber ceiling rafters spanning cleanly inside crown molding
@@ -3110,40 +3254,40 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         const bz = room.minZ + (i / count) * rd;
         const rafter = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.36, 0.22, 0.18), beamMat);
         rafter.position.set(cx, baseY + room.height - 0.14, bz);
-        group.add(rafter);
+        staticArch.add(rafter);
       }
     } else if (room.ceilingStyle === 'trusses') {
       // Exposed industrial black steel ceiling trusses
       for (let bz = room.minZ + 3.2; bz < room.maxZ - 2.0; bz += 4.5) {
         const truss = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.44, 0.34, 0.28), beamMat);
         truss.position.set(cx, baseY + room.height - 0.38, bz);
-        group.add(truss);
+        staticArch.add(truss);
       }
     } else if (room.ceilingStyle === 'gallery-track') {
       // Contemporary museum black track-lighting rails + glowing recessed cans
-      const railMat = new THREE.MeshStandardMaterial({ color: 0x161820, metalness: 0.75, roughness: 0.3 });
-      const glowMat = new THREE.MeshBasicMaterial({ color: 0xfff6e0 });
+      const railMat = getStdMat(0x161820, 0.3, 0.75);
+      const glowMat = getBasicMat(0xfff6e0);
       for (const offset of [-0.26, 0.26]) {
         const rail = new THREE.Mesh(new THREE.BoxGeometry(rw - 2.4, 0.08, 0.1), railMat);
         rail.position.set(cx, baseY + room.height - 0.18, cz + rd * offset);
-        group.add(rail);
+        staticArch.add(rail);
         for (let sx = room.minX + 2.8; sx <= room.maxX - 2.8; sx += 3.2) {
           const spot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.18, 10), railMat);
           spot.position.set(sx, baseY + room.height - 0.31, cz + rd * offset);
           const bulb = new THREE.Mesh(new THREE.CircleGeometry(0.068, 10), glowMat);
           bulb.rotation.x = Math.PI * 0.5;
           bulb.position.set(sx, baseY + room.height - 0.415, cz + rd * offset);
-          group.add(spot, bulb);
+          staticArch.add(spot, bulb);
         }
       }
     } else if (room.ceilingStyle === 'neon-cove') {
       // Glowing perimeter neon ceiling cove strips
-      const coveMat = new THREE.MeshBasicMaterial({ color: room.crownColor ?? 0xff2e93 });
+      const coveMat = getBasicMat(room.crownColor ?? 0xff2e93);
       const barN = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.6, 0.07, 0.08), coveMat);
       barN.position.set(cx, baseY + room.height - 0.24, room.minZ + 0.18);
-      const barS = barN.clone();
-      barS.position.z = room.maxZ - 0.18;
-      group.add(barN, barS);
+      const barS = new THREE.Mesh(new THREE.BoxGeometry(rw - 0.6, 0.07, 0.08), coveMat);
+      barS.position.set(cx, baseY + room.height - 0.24, room.maxZ - 0.18);
+      staticArch.add(barN, barS);
     }
 
     // Record room light coordinates for the shared 8-light floor-locked interior pool
@@ -3194,8 +3338,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     frameColor: w.frameColor,
   }));
   const wallSegs = computeRoomWallSegments(def.rooms, [...def.doorways, exitDoorCut, ...windowCuts]);
-  const baseboardMat = new THREE.MeshStandardMaterial({ color: 0x221a16, roughness: 0.48, metalness: 0.15 });
-  const sconceMetalMat = new THREE.MeshStandardMaterial({ color: 0xd4a44a, metalness: 0.88, roughness: 0.22 });
+  const baseboardMat = getStdMat(0x221a16, 0.48, 0.15);
+  const sconceMetalMat = getStdMat(0xd4a44a, 0.22, 0.88);
 
   let extWallIdx = 0;
   for (const seg of wallSegs) {
@@ -3206,18 +3350,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const baseY = getVisualFloorBaseY(seg.floor);
     const storyExtH = getStoryExtH(room);
 
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: seg.wallColor,
-      roughness: 0.82,
-      side: THREE.FrontSide,
-    });
-    pbrBindings.push({
-      mat: wallMat,
-      key: room.wallPbr,
-      repeatX: Math.max(1, len / 2.6),
-      repeatY: Math.max(1, seg.height / 2.6),
-      tintHex: room.wallTint ?? seg.wallColor,
-    });
+    const wallMat = getPbrMat(
+      room.wallPbr,
+      seg.wallColor,
+      room.wallTint ?? seg.wallColor,
+      0.82,
+      0,
+    );
 
     const segGroup = new THREE.Group();
     if (seg.axis === 'x') {
@@ -3235,7 +3374,10 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const axisZStagger = seg.axis === 'x' ? -0.002 : 0;
 
     // Main PBR textured interior wall plane (strictly FrontSide facing local +Z inward into room)
-    const wallMesh = new THREE.Mesh(new THREE.PlaneGeometry(len, seg.height), wallMat);
+    const wallMesh = new THREE.Mesh(
+      scaleGeoUvs(new THREE.PlaneGeometry(len, seg.height), Math.max(1, len / 2.6), Math.max(1, seg.height / 2.6)),
+      wallMat,
+    );
     wallMesh.position.set(0, seg.height * 0.5, inZ);
     segGroup.add(wallMesh);
 
@@ -3251,25 +3393,17 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const extShiftX =
         seg.axis === 'z' ? (seg.outwardSign > 0 ? (extStart - extEnd) * 0.5 : (extEnd - extStart) * 0.5) : 0;
       const extZ = EXT_Z + (seg.axis === 'x' ? -0.004 : 0);
-      const extMat = new THREE.MeshStandardMaterial({
-        color: extCfg.tint,
-        roughness: 0.72,
-        side: THREE.FrontSide,
-      });
-      pbrBindings.push({
-        mat: extMat,
-        key: extCfg.pbr,
-        repeatX: Math.max(1, extLen / 2.8),
-        repeatY: Math.max(1, storyExtH / 2.8),
-        tintHex: extCfg.tint,
-      });
-      const extFace = new THREE.Mesh(new THREE.PlaneGeometry(extLen, storyExtH), extMat);
+      const extMat = getPbrMat(extCfg.pbr, extCfg.tint, extCfg.tint, 0.72, 0);
+      const extFace = new THREE.Mesh(
+        scaleGeoUvs(new THREE.PlaneGeometry(extLen, storyExtH), Math.max(1, extLen / 2.8), Math.max(1, storyExtH / 2.8)),
+        extMat,
+      );
       extFace.rotation.y = Math.PI;
       extFace.position.set(extShiftX, storyExtH * 0.5, extZ);
       segGroup.add(extFace);
 
-      const trimMat = new THREE.MeshStandardMaterial({ color: extCfg.trimHex, roughness: 0.45, metalness: 0.25 });
-      const plinthMat = new THREE.MeshStandardMaterial({ color: extCfg.plinthHex, roughness: 0.35, metalness: 0.45 });
+      const trimMat = getStdMat(extCfg.trimHex, 0.45, 0.25);
+      const plinthMat = getStdMat(extCfg.plinthHex, 0.35, 0.45);
 
       const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(extLen, 0.22, 0.08), trimMat);
       topFrieze.position.set(extShiftX, storyExtH - 0.14 + axisYStagger, extZ - 0.04);
@@ -3285,7 +3419,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         const neonCol = extWallIdx % 2 === 0 ? 0xff2e93 : 0x2cf3ff;
         const tube = new THREE.Mesh(
           new THREE.BoxGeometry(0.1, storyExtH - 0.8, 0.1),
-          new THREE.MeshBasicMaterial({ color: neonCol }),
+          getBasicMat(neonCol),
         );
         tube.position.set(0, storyExtH * 0.5, extZ - 0.06);
         segGroup.add(tube);
@@ -3318,20 +3452,12 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     // Architectural Wainscoting (y: 0.20..1.06) + Chair Rail (y: 1.07..1.15) with clean vertical separation!
     if (room.wainscotColor !== undefined) {
-      const wainMat = new THREE.MeshStandardMaterial({
-        color: room.wainscotColor,
-        roughness: 0.55,
-        metalness: 0.1,
-      });
+      const wainMat = getStdMat(room.wainscotColor, 0.55, 0.1);
       const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.85, 0.028), wainMat);
       wainPanel.position.set(0, 0.625 + axisYStagger, inZ + 0.032 + axisZStagger);
       const rail = new THREE.Mesh(
         new THREE.BoxGeometry(trimLen, 0.075, 0.066),
-        new THREE.MeshStandardMaterial({
-          color: room.crownColor ?? room.wainscotColor,
-          roughness: 0.32,
-          metalness: 0.45,
-        }),
+        getStdMat(room.crownColor ?? room.wainscotColor, 0.32, 0.45),
       );
       rail.position.set(0, 1.11 + axisYStagger, inZ + 0.054 + axisZStagger);
       segGroup.add(wainPanel, rail);
@@ -3339,11 +3465,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     // Crown Molding cleanly separated from ceiling & wall (zero Z-fighting!)
     if (room.crownColor !== undefined) {
-      const crownMat = new THREE.MeshStandardMaterial({
-        color: room.crownColor,
-        roughness: 0.35,
-        metalness: 0.3,
-      });
+      const crownMat = getStdMat(room.crownColor, 0.35, 0.3);
       const crown = new THREE.Mesh(new THREE.BoxGeometry(trimLen, 0.135, 0.095), crownMat);
       crown.position.set(0, seg.height - 0.105 - axisYStagger, inZ + 0.078 + axisZStagger);
       segGroup.add(crown);
@@ -3351,7 +3473,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     // Architectural Wall Sconces spaced cleanly along longer walls!
     if (room.sconceColor !== undefined && len >= 4.2) {
-      const glowMat = new THREE.MeshBasicMaterial({ color: room.sconceColor });
+      const glowMat = getBasicMat(room.sconceColor);
       const sconceCount = Math.min(3, Math.floor(len / 4.2));
       for (let si = 0; si < sconceCount; si++) {
         const sx = -len * 0.5 + ((si + 0.5) / sconceCount) * len;
@@ -3363,7 +3485,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }
     }
 
-    group.add(segGroup);
+    staticArch.add(segGroup);
   }
 
   // 2b. Build real 1-to-1 cut-out Transparent Architectural Windows shared identically between inside (z=0) and outside (z=-0.26)!
@@ -3389,8 +3511,8 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     const storyExtH = getStoryExtH(ownerRoom);
     const extCfg = getRoomExteriorConfig(ownerRoom);
-    const extTrimMat = new THREE.MeshStandardMaterial({ color: extCfg.trimHex, roughness: 0.45, metalness: 0.25 });
-    const extPlinthMat = new THREE.MeshStandardMaterial({ color: extCfg.plinthHex, roughness: 0.35, metalness: 0.45 });
+    const extTrimMat = getStdMat(extCfg.trimHex, 0.45, 0.25);
+    const extPlinthMat = getStdMat(extCfg.plinthHex, 0.35, 0.45);
 
     const outwardSign: 1 | -1 =
       win.axis === 'x'
@@ -3416,36 +3538,26 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const winAxisZ = win.axis === 'x' ? -0.002 : 0;
     const winExtZ = EXT_Z + (win.axis === 'x' ? -0.004 : 0);
     if (win.sillY > 0.05) {
-      const lowMat = new THREE.MeshStandardMaterial({
-        color: ownerRoom.wallColor,
-        roughness: 0.82,
-        side: THREE.FrontSide,
-      });
-      pbrBindings.push({
-        mat: lowMat,
-        key: ownerRoom.wallPbr,
-        repeatX: Math.max(1, span / 2.6),
-        repeatY: Math.max(0.25, win.sillY / 2.6),
-        tintHex: ownerRoom.wallTint ?? ownerRoom.wallColor,
-      });
-      const lowWall = new THREE.Mesh(new THREE.PlaneGeometry(span, win.sillY), lowMat);
+      const lowMat = getPbrMat(
+        ownerRoom.wallPbr,
+        ownerRoom.wallColor,
+        ownerRoom.wallTint ?? ownerRoom.wallColor,
+        0.82,
+        0,
+      );
+      const lowWall = new THREE.Mesh(
+        scaleGeoUvs(new THREE.PlaneGeometry(span, win.sillY), Math.max(1, span / 2.6), Math.max(0.25, win.sillY / 2.6)),
+        lowMat,
+      );
       lowWall.position.set(0, win.sillY * 0.5, 0);
       const base = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, 0.175, 0.046), baseboardMat);
       base.position.set(0, 0.098 + winAxisY, 0.048 + winAxisZ);
 
-      const extLowMat = new THREE.MeshStandardMaterial({
-        color: extCfg.tint,
-        roughness: 0.72,
-        side: THREE.FrontSide,
-      });
-      pbrBindings.push({
-        mat: extLowMat,
-        key: extCfg.pbr,
-        repeatX: Math.max(1, span / 2.8),
-        repeatY: Math.max(0.25, win.sillY / 2.8),
-        tintHex: extCfg.tint,
-      });
-      const extLowWall = new THREE.Mesh(new THREE.PlaneGeometry(span, win.sillY), extLowMat);
+      const extLowMat = getPbrMat(extCfg.pbr, extCfg.tint, extCfg.tint, 0.72, 0);
+      const extLowWall = new THREE.Mesh(
+        scaleGeoUvs(new THREE.PlaneGeometry(span, win.sillY), Math.max(1, span / 2.8), Math.max(0.25, win.sillY / 2.8)),
+        extLowMat,
+      );
       extLowWall.rotation.y = Math.PI;
       extLowWall.position.set(0, win.sillY * 0.5, winExtZ);
       const botDado = new THREE.Mesh(new THREE.BoxGeometry(span - 0.02, Math.min(0.32, win.sillY), 0.07), extPlinthMat);
@@ -3454,11 +3566,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
       if (ownerRoom.wainscotColor !== undefined && win.sillY >= 0.45) {
         const wH = Math.min(0.85, win.sillY - 0.21);
-        const wainMat = new THREE.MeshStandardMaterial({
-          color: ownerRoom.wainscotColor,
-          roughness: 0.55,
-          metalness: 0.1,
-        });
+        const wainMat = getStdMat(ownerRoom.wainscotColor, 0.55, 0.1);
         const wainPanel = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, wH, 0.028), wainMat);
         wainPanel.position.set(0, 0.2 + wH * 0.5 + winAxisY, 0.032 + winAxisZ);
         winSlotGroup.add(wainPanel);
@@ -3468,28 +3576,22 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     // Upper wall spandrel above the window head (win.topY .. ownerRoom.height inside, win.topY .. storyExtH outside)!
     const topH = ownerRoom.height - win.topY;
     if (topH > 0.05) {
-      const topMat = new THREE.MeshStandardMaterial({
-        color: ownerRoom.wallColor,
-        roughness: 0.82,
-        side: THREE.FrontSide,
-      });
-      pbrBindings.push({
-        mat: topMat,
-        key: ownerRoom.wallPbr,
-        repeatX: Math.max(1, span / 2.6),
-        repeatY: Math.max(0.25, topH / 2.6),
-        tintHex: ownerRoom.wallTint ?? ownerRoom.wallColor,
-      });
-      const topWall = new THREE.Mesh(new THREE.PlaneGeometry(span, topH), topMat);
+      const topMat = getPbrMat(
+        ownerRoom.wallPbr,
+        ownerRoom.wallColor,
+        ownerRoom.wallTint ?? ownerRoom.wallColor,
+        0.82,
+        0,
+      );
+      const topWall = new THREE.Mesh(
+        scaleGeoUvs(new THREE.PlaneGeometry(span, topH), Math.max(1, span / 2.6), Math.max(0.25, topH / 2.6)),
+        topMat,
+      );
       topWall.position.set(0, win.topY + topH * 0.5, 0);
       winSlotGroup.add(topWall);
 
       if (ownerRoom.crownColor !== undefined) {
-        const crownMat = new THREE.MeshStandardMaterial({
-          color: ownerRoom.crownColor,
-          roughness: 0.35,
-          metalness: 0.3,
-        });
+        const crownMat = getStdMat(ownerRoom.crownColor, 0.35, 0.3);
         const crown = new THREE.Mesh(new THREE.BoxGeometry(winTrimLen, 0.135, 0.095), crownMat);
         crown.position.set(0, ownerRoom.height - 0.105 - winAxisY, 0.078 + winAxisZ);
         winSlotGroup.add(crown);
@@ -3498,19 +3600,11 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     const extTopH = storyExtH - win.topY;
     if (extTopH > 0.05) {
-      const extTopMat = new THREE.MeshStandardMaterial({
-        color: extCfg.tint,
-        roughness: 0.72,
-        side: THREE.FrontSide,
-      });
-      pbrBindings.push({
-        mat: extTopMat,
-        key: extCfg.pbr,
-        repeatX: Math.max(1, span / 2.8),
-        repeatY: Math.max(0.25, extTopH / 2.8),
-        tintHex: extCfg.tint,
-      });
-      const extTopWall = new THREE.Mesh(new THREE.PlaneGeometry(span, extTopH), extTopMat);
+      const extTopMat = getPbrMat(extCfg.pbr, extCfg.tint, extCfg.tint, 0.72, 0);
+      const extTopWall = new THREE.Mesh(
+        scaleGeoUvs(new THREE.PlaneGeometry(span, extTopH), Math.max(1, span / 2.8), Math.max(0.25, extTopH / 2.8)),
+        extTopMat,
+      );
       extTopWall.rotation.y = Math.PI;
       extTopWall.position.set(0, win.topY + extTopH * 0.5, winExtZ);
       const topFrieze = new THREE.Mesh(new THREE.BoxGeometry(span - 0.02, 0.22, 0.08), extTrimMat);
@@ -3522,37 +3616,45 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const winH = Math.max(0.2, win.topY - win.sillY);
     const winCY = (win.sillY + win.topY) * 0.5;
     const isClubTint = def.id === 'club-neon' && win.exteriorOpacity !== undefined;
-    const frameMat = new THREE.MeshStandardMaterial({
-      color: isClubTint ? 0x11131c : win.frameColor,
-      roughness: isClubTint ? 0.22 : 0.32,
-      metalness: isClubTint ? 0.85 : 0.55,
-    });
+    const frameMat = getStdMat(
+      isClubTint ? 0x11131c : win.frameColor,
+      isClubTint ? 0.22 : 0.32,
+      isClubTint ? 0.85 : 0.55,
+    );
 
     if (win.exteriorOpacity !== undefined) {
       // Intentionally treated darker exterior-tinted window (e.g. Club Neon mirror-smoked privacy glass or Hotel bath tint):
       // Inward-facing clear/smoked film pane + outward-facing high-gloss mirror-tinted privacy pane at the exact same opening!
-      const inGlassMat = new THREE.MeshPhysicalMaterial({
-        color: win.tintColor ?? 0xd8f0ff,
-        roughness: 0.05,
-        metalness: 0.12,
-        transparent: true,
-        opacity: win.opacity ?? 0.22,
-        clearcoat: 1.0,
-        side: THREE.FrontSide,
-        depthWrite: false,
-      });
-      const outGlassMat = new THREE.MeshPhysicalMaterial({
-        color: win.exteriorTintColor ?? 0x060a14,
-        roughness: isClubTint ? 0.04 : 0.06,
-        metalness: isClubTint ? 0.82 : 0.42,
-        transparent: true,
-        opacity: win.exteriorOpacity,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.03,
-        envMapIntensity: isClubTint ? 2.2 : 1.3,
-        side: THREE.FrontSide,
-        depthWrite: false,
-      });
+      const inCol = win.tintColor ?? 0xd8f0ff;
+      const inOp = win.opacity ?? 0.22;
+      const inGlassMat = getGlassMat(`in|${inCol}|${inOp}`, () =>
+        new THREE.MeshPhysicalMaterial({
+          color: inCol,
+          roughness: 0.05,
+          metalness: 0.12,
+          transparent: true,
+          opacity: inOp,
+          clearcoat: 1.0,
+          side: THREE.FrontSide,
+          depthWrite: false,
+        }),
+      );
+      const outCol = win.exteriorTintColor ?? 0x060a14;
+      const outOp = win.exteriorOpacity;
+      const outGlassMat = getGlassMat(`out|${outCol}|${outOp}|${isClubTint ? 1 : 0}`, () =>
+        new THREE.MeshPhysicalMaterial({
+          color: outCol,
+          roughness: isClubTint ? 0.04 : 0.06,
+          metalness: isClubTint ? 0.82 : 0.42,
+          transparent: true,
+          opacity: outOp,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.03,
+          envMapIntensity: isClubTint ? 2.2 : 1.3,
+          side: THREE.FrontSide,
+          depthWrite: false,
+        }),
+      );
       const paneIn = new THREE.Mesh(new THREE.PlaneGeometry(span, winH), inGlassMat);
       paneIn.position.set(0, winCY, -0.09);
       const paneOut = new THREE.Mesh(new THREE.PlaneGeometry(span, winH), outGlassMat);
@@ -3561,16 +3663,20 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       winSlotGroup.add(paneIn, paneOut);
     } else {
       // Standard crystal-clear window: identical transparency from both inside and outside!
-      const clearGlassMat = new THREE.MeshPhysicalMaterial({
-        color: win.tintColor ?? 0xd8f0ff,
-        roughness: 0.04,
-        metalness: 0.08,
-        transparent: true,
-        opacity: win.opacity ?? 0.18,
-        clearcoat: 1.0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      });
+      const clrCol = win.tintColor ?? 0xd8f0ff;
+      const clrOp = win.opacity ?? 0.18;
+      const clearGlassMat = getGlassMat(`clr|${clrCol}|${clrOp}`, () =>
+        new THREE.MeshPhysicalMaterial({
+          color: clrCol,
+          roughness: 0.04,
+          metalness: 0.08,
+          transparent: true,
+          opacity: clrOp,
+          clearcoat: 1.0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
       const pane = new THREE.Mesh(new THREE.PlaneGeometry(span, winH), clearGlassMat);
       pane.position.set(0, winCY, -0.13);
       winSlotGroup.add(pane);
@@ -3600,21 +3706,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     // Venue-specific exterior window architectural treatments on the outside face (z < -0.26)
     if (def.id === 'hotel-solaire') {
-      const coralEyebrowMat = new THREE.MeshStandardMaterial({ color: 0xf6b8be, roughness: 0.65 });
+      const coralEyebrowMat = getStdMat(0xf6b8be, 0.65);
       const eyebrow = new THREE.Mesh(new THREE.BoxGeometry(span + 0.85, 0.22, 0.78), coralEyebrowMat);
       eyebrow.position.set(0, win.topY + 0.18, EXT_Z - 0.36);
       winSlotGroup.add(eyebrow);
 
       if (winFloor >= 1) {
-        const balcSlabMat = new THREE.MeshStandardMaterial({ color: 0xf7eee4, roughness: 0.68 });
-        const balcGlassMat = new THREE.MeshPhysicalMaterial({
-          color: 0xd8f0ff,
-          roughness: 0.05,
-          transparent: true,
-          opacity: 0.22,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        });
+        const balcSlabMat = getStdMat(0xf7eee4, 0.68);
+        const balcGlassMat = getGlassMat('balc', () =>
+          new THREE.MeshPhysicalMaterial({
+            color: 0xd8f0ff,
+            roughness: 0.05,
+            transparent: true,
+            opacity: 0.22,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          }),
+        );
         const balcSlab = new THREE.Mesh(new THREE.BoxGeometry(span + 0.56, 0.16, 0.85), balcSlabMat);
         balcSlab.position.set(0, 0.08, EXT_Z - 0.42);
         const balcGlass = new THREE.Mesh(new THREE.BoxGeometry(span + 0.44, 0.86, 0.05), balcGlassMat);
@@ -3624,21 +3732,21 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         winSlotGroup.add(balcSlab, balcGlass, balcRail);
       }
     } else if (def.id === 'club-neon') {
-      const neonMat = new THREE.MeshBasicMaterial({ color: win.frameColor });
+      const neonMat = getBasicMat(win.frameColor);
       const neonTop = new THREE.Mesh(new THREE.BoxGeometry(span + 0.28, 0.08, 0.08), neonMat);
       neonTop.position.set(0, win.topY + 0.12, EXT_Z - 0.06);
       const neonBot = new THREE.Mesh(new THREE.BoxGeometry(span + 0.28, 0.06, 0.08), neonMat);
       neonBot.position.set(0, win.sillY - 0.1, EXT_Z - 0.06);
       winSlotGroup.add(neonTop, neonBot);
     } else if (def.id === 'cafe-habana') {
-      const awningMat = new THREE.MeshStandardMaterial({ color: 0xc25435, roughness: 0.7 });
+      const awningMat = getStdMat(0xc25435, 0.7);
       const awning = new THREE.Mesh(new THREE.BoxGeometry(span + 0.48, 0.14, 0.82), awningMat);
       awning.rotation.x = -0.24;
       awning.position.set(0, win.topY + 0.22, EXT_Z - 0.38);
       winSlotGroup.add(awning);
     }
 
-    group.add(winSlotGroup);
+    staticArch.add(winSlotGroup);
   }
 
   // 3. Build architectural Doorway Archways, Frames & Upper Header Transoms (zero gaps to void!)
@@ -3647,11 +3755,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const baseY = getVisualFloorBaseY(dwFloor);
     const span = dw.max - dw.min;
     const mid = (dw.min + dw.max) * 0.5;
-    const frameMat = new THREE.MeshStandardMaterial({
-      color: dw.frameColor,
-      roughness: 0.3,
-      metalness: 0.65,
-    });
+    const frameMat = getStdMat(dw.frameColor, 0.3, 0.65);
 
     const adjacentRooms = def.rooms.filter(
       (r) =>
@@ -3665,7 +3769,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
     const header = new THREE.Mesh(
       new THREE.BoxGeometry(dw.axis === 'z' ? span - 0.04 : 0.08, headerH - 0.04, dw.axis === 'x' ? span - 0.04 : 0.08),
-      new THREE.MeshStandardMaterial({ color: adjacentRooms[0]?.wallColor ?? 0x222530, roughness: 0.78 }),
+      getStdMat(adjacentRooms[0]?.wallColor ?? 0x222530, 0.78),
     );
     const lintel = new THREE.Mesh(
       new THREE.BoxGeometry(dw.axis === 'z' ? span + 0.32 : 0.44, 0.22, dw.axis === 'x' ? span + 0.32 : 0.44),
@@ -3679,7 +3783,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       for (const edgeZ of [dw.min, dw.max]) {
         const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.26, jambH, 0.18), frameMat);
         jamb.position.set(dw.coord, baseY + 0.008 + jambH * 0.5, edgeZ);
-        group.add(jamb);
+        staticArch.add(jamb);
       }
     } else {
       header.position.set(mid, baseY + dw.height + headerH * 0.5, dw.coord);
@@ -3687,19 +3791,19 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       for (const edgeX of [dw.min, dw.max]) {
         const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.18, jambH, 0.26), frameMat);
         jamb.position.set(edgeX, baseY + 0.008 + jambH * 0.5, dw.coord);
-        group.add(jamb);
+        staticArch.add(jamb);
       }
     }
-    group.add(header, lintel);
+    staticArch.add(header, lintel);
 
     if (dw.accentNeon) {
-      const neonMat = new THREE.MeshBasicMaterial({ color: dw.accentNeon });
+      const neonMat = getBasicMat(dw.accentNeon);
       const strip = new THREE.Mesh(
         new THREE.BoxGeometry(dw.axis === 'z' ? span : 0.48, 0.08, dw.axis === 'x' ? span : 0.48),
         neonMat,
       );
       strip.position.set(dw.axis === 'x' ? dw.coord : mid, baseY + dw.height - 0.08, dw.axis === 'x' ? mid : dw.coord);
-      group.add(strip);
+      staticArch.add(strip);
     }
   }
 
@@ -3848,100 +3952,96 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   }
 
   // 4. Illuminated Front Exit Transparent Glass Double Doors + Upper Wall Transom (Interior & Exterior!) + Glowing Exit Ring (Floor 0)
-  const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1e2a, roughness: 0.3, metalness: 0.7 });
+  const doorFrameMat = getStdMat(0x1a1e2a, 0.3, 0.7);
   if (def.id === 'club-neon') {
     // Classic smoked mirror-tinted double entrance doors matching Club Neon's exterior glazing
-    const clubDoorInMat = new THREE.MeshPhysicalMaterial({
-      color: 0x203052,
-      roughness: 0.05,
-      metalness: 0.12,
-      transparent: true,
-      opacity: 0.26,
-      clearcoat: 1.0,
-      side: THREE.FrontSide,
-      depthWrite: false,
-    });
-    const clubDoorOutMat = new THREE.MeshPhysicalMaterial({
-      color: 0x060a14,
-      roughness: 0.04,
-      metalness: 0.82,
-      transparent: true,
-      opacity: 0.78,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.03,
-      envMapIntensity: 2.2,
-      side: THREE.FrontSide,
-      depthWrite: false,
-    });
+    const clubDoorInMat = getGlassMat('clubDoorIn', () =>
+      new THREE.MeshPhysicalMaterial({
+        color: 0x203052,
+        roughness: 0.05,
+        metalness: 0.12,
+        transparent: true,
+        opacity: 0.26,
+        clearcoat: 1.0,
+        side: THREE.FrontSide,
+        depthWrite: false,
+      }),
+    );
+    const clubDoorOutMat = getGlassMat('clubDoorOut', () =>
+      new THREE.MeshPhysicalMaterial({
+        color: 0x060a14,
+        roughness: 0.04,
+        metalness: 0.82,
+        transparent: true,
+        opacity: 0.78,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.03,
+        envMapIntensity: 2.2,
+        side: THREE.FrontSide,
+        depthWrite: false,
+      }),
+    );
     const exitDoorIn = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), clubDoorInMat);
     exitDoorIn.rotation.y = Math.PI;
     exitDoorIn.position.set(def.exitX, 1.4, exitWallZ + 0.09);
     const exitDoorOut = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), clubDoorOutMat);
     exitDoorOut.position.set(def.exitX, 1.4, exitWallZ + 0.17);
-    group.add(exitDoorIn, exitDoorOut);
+    staticArch.add(exitDoorIn, exitDoorOut);
   } else {
-    const exitGlassMat = new THREE.MeshPhysicalMaterial({
-      color: 0xc8ebff,
-      roughness: 0.05,
-      metalness: 0.12,
-      transparent: true,
-      opacity: 0.22,
-      clearcoat: 1.0,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
+    const exitGlassMat = getGlassMat('exitGlass', () =>
+      new THREE.MeshPhysicalMaterial({
+        color: 0xc8ebff,
+        roughness: 0.05,
+        metalness: 0.12,
+        transparent: true,
+        opacity: 0.22,
+        clearcoat: 1.0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
     const exitDoorMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), exitGlassMat);
     exitDoorMesh.position.set(def.exitX, 1.4, exitWallZ + 0.13);
-    group.add(exitDoorMesh);
+    staticArch.add(exitDoorMesh);
   }
   for (const dx of [-1.6, 0, 1.6]) {
     const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.82, 0.36), doorFrameMat);
     stile.position.set(def.exitX + dx, 1.42, exitWallZ + 0.13);
-    group.add(stile);
+    staticArch.add(stile);
   }
   const doorHeaderBar = new THREE.Mesh(new THREE.BoxGeometry(3.36, 0.16, 0.38), doorFrameMat);
   doorHeaderBar.position.set(def.exitX, 2.82, exitWallZ + 0.13);
-  group.add(doorHeaderBar);
+  staticArch.add(doorHeaderBar);
 
   const exitTopH = exitRoom.height - 2.8;
   if (exitTopH > 0.05) {
-    const exitTopMat = new THREE.MeshStandardMaterial({
-      color: exitRoom.wallColor,
-      roughness: 0.82,
-      side: THREE.FrontSide,
-    });
-    pbrBindings.push({
-      mat: exitTopMat,
-      key: exitRoom.wallPbr,
-      repeatX: 3.2 / 2.6,
-      repeatY: Math.max(0.3, exitTopH / 2.6),
-      tintHex: exitRoom.wallTint ?? exitRoom.wallColor,
-    });
-    const exitTopWall = new THREE.Mesh(new THREE.PlaneGeometry(3.2, exitTopH), exitTopMat);
+    const exitTopMat = getPbrMat(
+      exitRoom.wallPbr,
+      exitRoom.wallColor,
+      exitRoom.wallTint ?? exitRoom.wallColor,
+      0.82,
+      0,
+    );
+    const exitTopWall = new THREE.Mesh(
+      scaleGeoUvs(new THREE.PlaneGeometry(3.2, exitTopH), 3.2 / 2.6, Math.max(0.3, exitTopH / 2.6)),
+      exitTopMat,
+    );
     exitTopWall.position.set(def.exitX, 2.8 + exitTopH * 0.5, exitWallZ);
     exitTopWall.rotation.y = Math.PI;
-    group.add(exitTopWall);
+    staticArch.add(exitTopWall);
   }
 
   const exitStoryExtH = getStoryExtH(exitRoom);
   const exitExtTopH = exitStoryExtH - 2.8;
   if (exitExtTopH > 0.05) {
     const exitExtCfg = getRoomExteriorConfig(exitRoom);
-    const exitExtTopMat = new THREE.MeshStandardMaterial({
-      color: exitExtCfg.tint,
-      roughness: 0.72,
-      side: THREE.FrontSide,
-    });
-    pbrBindings.push({
-      mat: exitExtTopMat,
-      key: exitExtCfg.pbr,
-      repeatX: 3.2 / 2.8,
-      repeatY: Math.max(0.3, exitExtTopH / 2.8),
-      tintHex: exitExtCfg.tint,
-    });
-    const exitExtTopWall = new THREE.Mesh(new THREE.PlaneGeometry(3.2, exitExtTopH), exitExtTopMat);
+    const exitExtTopMat = getPbrMat(exitExtCfg.pbr, exitExtCfg.tint, exitExtCfg.tint, 0.72, 0);
+    const exitExtTopWall = new THREE.Mesh(
+      scaleGeoUvs(new THREE.PlaneGeometry(3.2, exitExtTopH), 3.2 / 2.8, Math.max(0.3, exitExtTopH / 2.8)),
+      exitExtTopMat,
+    );
     exitExtTopWall.position.set(def.exitX, 2.8 + exitExtTopH * 0.5, exitWallZ - EXT_Z);
-    group.add(exitExtTopWall);
+    staticArch.add(exitExtTopWall);
   }
 
   const exitSignTex = createSignTexture('EXIT', 'PRESS [E] TO STEP OUTSIDE', '#0c261d', '#46f7b4', '#46f7b4');
@@ -3951,7 +4051,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   );
   exitSign.position.set(def.exitX, 3.22, exitWallZ - 0.08);
   exitSign.rotation.y = Math.PI;
-  group.add(exitSign);
+  staticArch.add(exitSign);
 
   const exitRing = new THREE.Mesh(
     new THREE.RingGeometry(0.85, 1.2, 28),
@@ -3969,22 +4069,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
 
   // 4b. Glowing Cyan Elevator Call Rings on every elevator floor landing!
   const elevatorRings: THREE.Mesh[] = [];
-  for (const elev of def.elevators ?? []) {
-    const eBaseY = getVisualFloorBaseY(elev.floor);
-    const eRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.75, 1.08, 28),
-      new THREE.MeshBasicMaterial({
-        color: 0x2cf3ff,
-        transparent: true,
-        opacity: 0.85,
-        side: THREE.DoubleSide,
-      }),
-    );
-    eRing.rotation.x = -Math.PI * 0.5;
-    eRing.position.set(elev.x, eBaseY + 0.048, elev.z);
-    eRing.visible = false;
-    group.add(eRing);
-    elevatorRings.push(eRing);
+  if ((def.elevators?.length ?? 0) > 0) {
+    const elevRingGeo = new THREE.RingGeometry(0.75, 1.08, 28);
+    const elevRingMat = new THREE.MeshBasicMaterial({
+      color: 0x2cf3ff,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+    });
+    for (const elev of def.elevators ?? []) {
+      const eBaseY = getVisualFloorBaseY(elev.floor);
+      const eRing = new THREE.Mesh(elevRingGeo, elevRingMat);
+      eRing.rotation.x = -Math.PI * 0.5;
+      eRing.position.set(elev.x, eBaseY + 0.048, elev.z);
+      eRing.visible = false;
+      group.add(eRing);
+      elevatorRings.push(eRing);
+    }
   }
 
   // 5. Coherent Room-Specific Architectural Setpieces (windows, rugs, feature walls, bars, kitchen hood!)
@@ -3992,17 +4093,17 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
   let lasers: THREE.Mesh[] | undefined;
   let monolithMats: THREE.MeshStandardMaterial[] | undefined;
 
-  const goldMat = new THREE.MeshStandardMaterial({ color: 0xe6b958, metalness: 0.85, roughness: 0.22 });
-  const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x422619, roughness: 0.42, metalness: 0.12 });
-  const marbleMat = new THREE.MeshStandardMaterial({ color: 0xf4eee6, roughness: 0.22, metalness: 0.08 });
+  const goldMat = getStdMat(0xe6b958, 0.22, 0.85);
+  const darkWoodMat = getStdMat(0x422619, 0.42, 0.12);
+  const marbleMat = getStdMat(0xf4eee6, 0.22, 0.08);
 
   if (def.id === 'hotel-solaire') {
     const f1Y = getVisualFloorBaseY(1);
     const f2Y = getVisualFloorBaseY(2);
 
     // ── EXTERIOR ART DECO GROUNDING PODIUMS, COLONNADE PILLARS & WEDDING-CAKE PENTHOUSE CROWN ──
-    const extDecoStucco = new THREE.MeshStandardMaterial({ color: 0xfbf0e4, roughness: 0.7 });
-    const extCoralTrim = new THREE.MeshStandardMaterial({ color: 0xf59eb2, roughness: 0.5 });
+    const extDecoStucco = getStdMat(0xfbf0e4, 0.7);
+    const extCoralTrim = getStdMat(0xf59eb2, 0.5);
     // Ground-floor podiums under Suite 201 wing & Bath 201/202 wings — inset cleanly below Floor 2 (4.80m)
     // and pulled back 0.30m from 1F Lobby/Lounge interior walls so ZERO faces are coplanar with any room wall or floor!
     const podH = REAL_STORY_HEIGHT - 0.26;
@@ -4012,7 +4113,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     podBathS.position.set(-18.64, podH * 0.5, -7.29);
     const podBathN = new THREE.Mesh(new THREE.BoxGeometry(7.2, podH, 5.9), extDecoStucco);
     podBathN.position.set(18.64, podH * 0.5, -7.29);
-    group.add(podSouth, podBathS, podBathN);
+    staticArch.add(podSouth, podBathS, podBathN);
 
     // Fluted Art Deco colonnade pillars supporting 3F Penthouse front & rear terraces
     for (const [px, pz, y0, y1] of [
@@ -4027,7 +4128,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const colH = y1 - y0;
       const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, colH, 12), extDecoStucco);
       pil.position.set(px, y0 + colH * 0.5, pz);
-      group.add(pil);
+      staticArch.add(pil);
     }
 
     // Art Deco Stepped Rooftop Crown & Glowing Neon Spire atop the 3F Penthouse roof (y = f2Y + 4.8 = 14.4m)
@@ -4040,15 +4141,15 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     spire.position.set(0, roofY + 4.7, -1.0);
     const spireBeacon = new THREE.Mesh(
       new THREE.SphereGeometry(0.24, 12, 10),
-      new THREE.MeshBasicMaterial({ color: 0x2cf3ff }),
+      getBasicMat(0x2cf3ff),
     );
     spireBeacon.position.set(0, roofY + 6.65, -1.0);
-    group.add(crownTier1, crownTier2, spire, spireBeacon);
+    staticArch.add(crownTier1, crownTier2, spire, spireBeacon);
 
     // ── FLOOR 0 (1F GRAND LOBBY & OCEAN LOUNGE) ──
-    addAreaRug(group, -5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
-    addAreaRug(group, 5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
-    addAreaRug(group, 6.4, -0.4, 3.8, 3.8, 0x274c52, 0xd9a84e, 0);
+    addAreaRug(staticArch, -5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
+    addAreaRug(staticArch, 5.8, 7.5, 5.2, 3.8, 0x7b2839, 0xd9a84e, 0);
+    addAreaRug(staticArch, 6.4, -0.4, 3.8, 3.8, 0x274c52, 0xd9a84e, 0);
 
     // Check-In Feature Wall directly behind Concierge Elena with Wood Slats & Brass "HOTEL SOLAIRE" Crest
     const featureWall = new THREE.Mesh(new THREE.BoxGeometry(5.6, 4.2, 0.16), darkWoodMat);
@@ -4060,7 +4161,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     hotelCrest.position.set(-6.2, 3.2, -3.76);
-    group.add(featureWall, hotelCrest);
+    staticArch.add(featureWall, hotelCrest);
 
     // Elevator Directory Sign beside Floor 1 brass elevator doors
     const dir1 = new THREE.Mesh(
@@ -4070,7 +4171,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     dir1.position.set(2.35, 2.05, -3.88);
-    group.add(dir1);
+    staticArch.add(dir1);
 
     // Ocean Cocktail Lounge Mahogany Bar Counter + Glowing Backlit Mirrored Liquor Wall!
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 9.0), darkWoodMat);
@@ -4080,24 +4181,22 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     const barFootRail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 9.0, 8), goldMat);
     barFootRail.rotation.x = Math.PI * 0.5;
     barFootRail.position.set(18.85, 0.22, 2.8);
-    group.add(bar, barTop, barFootRail);
+    staticArch.add(bar, barTop, barFootRail);
 
-    const backMirror = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 2.8, 8.4),
-      new THREE.MeshStandardMaterial({
-        color: 0xffd296,
-        emissive: 0xff9e4a,
-        emissiveIntensity: 0.42,
-        roughness: 0.1,
-        metalness: 0.85,
-      }),
-    );
+    const backMirrorMat = new THREE.MeshStandardMaterial({
+      color: 0xffd296,
+      emissive: 0xff9e4a,
+      emissiveIntensity: 0.42,
+      roughness: 0.1,
+      metalness: 0.85,
+    });
+    const backMirror = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.8, 8.4), backMirrorMat);
     backMirror.position.set(22.88, 2.3, 2.8);
-    group.add(backMirror);
+    staticArch.add(backMirror);
     for (const sy of [1.55, 2.2, 2.85]) {
       const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.06, 8.2), goldMat);
       shelf.position.set(22.66, sy, 2.8);
-      group.add(shelf);
+      staticArch.add(shelf);
     }
 
     // Art Deco Marble Columns in Grand Lobby (cleanly clear of floor & ceiling planes)
@@ -4111,13 +4210,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       col.position.set(px, 2.21, pz);
       const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.36, 0.2, 14), goldMat);
       cap.position.set(px, 4.5, pz);
-      group.add(col, cap);
+      staticArch.add(col, cap);
     }
 
     // ── FLOOR 1 (2F GUEST CORRIDOR + SUITES 201 & 202 + EN-SUITE MARBLE BATHS) ──
-    addAreaRug(group, 0, 1.5, 22.4, 3.2, 0x732031, 0xd9a84e, f1Y); // Full-length hallway carpet runner
-    addAreaRug(group, -18.5, 0.8, 4.8, 4.4, 0xdccbb4, 0x9e7d4b, f1Y); // Suite 201 bedroom rug
-    addAreaRug(group, 18.5, 0.8, 4.8, 4.4, 0x2a5458, 0xd9a84e, f1Y); // Suite 202 bedroom rug
+    addAreaRug(staticArch, 0, 1.5, 22.4, 3.2, 0x732031, 0xd9a84e, f1Y); // Full-length hallway carpet runner
+    addAreaRug(staticArch, -18.5, 0.8, 4.8, 4.4, 0xdccbb4, 0x9e7d4b, f1Y); // Suite 201 bedroom rug
+    addAreaRug(staticArch, 18.5, 0.8, 4.8, 4.4, 0x2a5458, 0xd9a84e, f1Y); // Suite 202 bedroom rug
 
     // Elevator Floor 2 Directory Plaque + Numbered Suite Plaques (201–206) + Ice Machine Alcove!
     const dir2 = new THREE.Mesh(
@@ -4127,14 +4226,14 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     dir2.position.set(2.35, f1Y + 1.95, -1.88);
-    group.add(dir2);
+    staticArch.add(dir2);
 
-    addRoomNumberPlaque(group, -11.9, f1Y + 1.95, 0.15, Math.PI * 0.5, '201', 'KEYCARD SUITE');
-    addRoomNumberPlaque(group, 11.9, f1Y + 1.95, 0.15, -Math.PI * 0.5, '202', 'OCCUPIED');
-    addClosedHotelDoor(group, -8.2, f1Y, 4.92, Math.PI, '203');
-    addClosedHotelDoor(group, -3.2, f1Y, 4.92, Math.PI, '204');
-    addClosedHotelDoor(group, 3.2, f1Y, 4.92, Math.PI, '205');
-    addClosedHotelDoor(group, 8.2, f1Y, 4.92, Math.PI, '206');
+    addRoomNumberPlaque(staticArch, -11.9, f1Y + 1.95, 0.15, Math.PI * 0.5, '201', 'KEYCARD SUITE');
+    addRoomNumberPlaque(staticArch, 11.9, f1Y + 1.95, 0.15, -Math.PI * 0.5, '202', 'OCCUPIED');
+    addClosedHotelDoor(staticArch, -8.2, f1Y, 4.92, Math.PI, '203');
+    addClosedHotelDoor(staticArch, -3.2, f1Y, 4.92, Math.PI, '204');
+    addClosedHotelDoor(staticArch, 3.2, f1Y, 4.92, Math.PI, '205');
+    addClosedHotelDoor(staticArch, 8.2, f1Y, 4.92, Math.PI, '206');
 
     // 2F Corridor Complimentary Ice Service Wall Sign above the bespoke Blender hotel_ice_machine.glb!
     const iceSign = new THREE.Mesh(
@@ -4144,7 +4243,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     iceSign.position.set(-9.6, f1Y + 2.02, -1.94);
-    group.add(iceSign);
+    staticArch.add(iceSign);
 
     // Framed coastal hotel art along 2F Corridor North Wall
     for (const [ax, seed] of [
@@ -4158,16 +4257,16 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(seed) }),
       );
       a.position.set(ax, f1Y + 2.0, -1.86);
-      group.add(f, a);
+      staticArch.add(f, a);
     }
 
     // En-Suite Walk-In Glass Rain Showers in Bath 201 & Bath 202!
-    addGlassShower(group, -16.1, f1Y, -9.1, 2.0, 1.6, 'west');
-    addGlassShower(group, 16.1, f1Y, -9.1, 2.0, 1.6, 'east');
+    addGlassShower(staticArch, -16.1, f1Y, -9.1, 2.0, 1.6, 'west');
+    addGlassShower(staticArch, 16.1, f1Y, -9.1, 2.0, 1.6, 'east');
 
     // ── FLOOR 2 (3F THE OCEAN PENTHOUSE: FOYER, SALON, WET BAR, MASTER & SPA) ──
-    addAreaRug(group, 0, -2.0, 8.2, 6.2, 0x7b2839, 0xe6bd68, f2Y); // Penthouse Grand Salon rug
-    addAreaRug(group, -18.2, -1.8, 5.4, 5.2, 0xe2d2be, 0xb08a4e, f2Y); // Master Bedroom rug
+    addAreaRug(staticArch, 0, -2.0, 8.2, 6.2, 0x7b2839, 0xe6bd68, f2Y); // Penthouse Grand Salon rug
+    addAreaRug(staticArch, -18.2, -1.8, 5.4, 5.2, 0xe2d2be, 0xb08a4e, f2Y); // Master Bedroom rug
 
     // Penthouse Elevator Plaque
     const dir3 = new THREE.Mesh(
@@ -4178,32 +4277,23 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     );
     dir3.position.set(-2.35, f2Y + 1.95, 9.88);
     dir3.rotation.y = Math.PI;
-    group.add(dir3);
+    staticArch.add(dir3);
 
     // Penthouse Private Wet Bar Counter & Glowing Back-Bar Mirror!
     const phBar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 6.6), darkWoodMat);
     phBar.position.set(9.15, f2Y + 0.55, -2.0);
     const phBarTop = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.1, 6.8), marbleMat);
     phBarTop.position.set(9.15, f2Y + 1.14, -2.0);
-    const phMirror = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 2.5, 5.8),
-      new THREE.MeshStandardMaterial({
-        color: 0xffd296,
-        emissive: 0xffa04a,
-        emissiveIntensity: 0.4,
-        roughness: 0.1,
-        metalness: 0.85,
-      }),
-    );
+    const phMirror = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.5, 5.8), backMirrorMat);
     phMirror.position.set(11.88, f2Y + 2.25, -2.0);
-    group.add(phBar, phBarTop, phMirror);
+    staticArch.add(phBar, phBarTop, phMirror);
 
     // Penthouse Spa Walk-In Glass Rain Shower!
-    addGlassShower(group, -15.2, f2Y, 9.0, 2.0, 1.8, 'west');
+    addGlassShower(staticArch, -15.2, f2Y, 9.0, 2.0, 1.8, 'west');
   } else if (def.id === 'club-neon') {
     // Rooftop glowing neon halo crown above Main Dance Hall (y = 7.82m) & After-Hours Lounge (y = 4.82m)
-    const pinkHaloMat = new THREE.MeshBasicMaterial({ color: 0xff2e93 });
-    const cyanHaloMat = new THREE.MeshBasicMaterial({ color: 0x2cf3ff });
+    const pinkHaloMat = getBasicMat(0xff2e93);
+    const cyanHaloMat = getBasicMat(0x2cf3ff);
     for (const [rw, rd, rx, ry, rz, mat] of [
       [24.5, 0.14, 0, 7.9, 10.25, pinkHaloMat],
       [24.5, 0.14, 0, 7.9, -12.25, cyanHaloMat],
@@ -4214,31 +4304,30 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     ] as const) {
       const strip = new THREE.Mesh(new THREE.BoxGeometry(rw, 0.16, rd), mat);
       strip.position.set(rx, ry, rz);
-      group.add(strip);
+      staticArch.add(strip);
     }
 
     // Velvet Entry Tunnel Carpet Runner + VIP Lounge & After-Hours Rugs + Glowing Neon Ribs!
-    addAreaRug(group, 0, 14.4, 2.8, 7.8, 0x5c1138, 0xff2e93);
-    addAreaRug(group, -15.8, -6.2, 4.4, 3.6, 0x26113b, 0x2cf3ff);
-    addAreaRug(group, -15.8, 4.6, 4.4, 3.4, 0x26113b, 0xff2e93);
-    addAreaRug(group, -18.5, -15.8, 8.8, 7.4, 0x1c1238, 0x2cf3ff);
+    addAreaRug(staticArch, 0, 14.4, 2.8, 7.8, 0x5c1138, 0xff2e93);
+    addAreaRug(staticArch, -15.8, -6.2, 4.4, 3.6, 0x26113b, 0x2cf3ff);
+    addAreaRug(staticArch, -15.8, 4.6, 4.4, 3.4, 0x26113b, 0xff2e93);
+    addAreaRug(staticArch, -18.5, -15.8, 8.8, 7.4, 0x1c1238, 0x2cf3ff);
 
     for (let z = 11.5; z <= 17.5; z += 2.0) {
-      const col = z % 4 === 1.5 ? 0xff2e93 : 0x2cf3ff;
-      const ribMat = new THREE.MeshBasicMaterial({ color: col });
+      const ribMat = z % 4 === 1.5 ? pinkHaloMat : cyanHaloMat;
       const topRib = new THREE.Mesh(new THREE.BoxGeometry(7.8, 0.08, 0.1), ribMat);
       topRib.position.set(0, 3.45, z);
       const lRib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.4, 0.1), ribMat);
       lRib.position.set(-3.92, 1.7, z);
       const rRib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.4, 0.1), ribMat);
       rRib.position.set(3.92, 1.7, z);
-      group.add(topRib, lRib, rRib);
+      staticArch.add(topRib, lRib, rRib);
     }
 
     // Elevated DJ Stage + LED Backdrop (DJ console & speaker stacks come from custom Blender dj_booth_rig.glb!)
     const stage = new THREE.Mesh(
       new THREE.BoxGeometry(11.4, 0.9, 4.4),
-      new THREE.MeshStandardMaterial({ color: 0x161426, roughness: 0.4, metalness: 0.4 }),
+      getStdMat(0x161426, 0.4, 0.4),
     );
     stage.position.set(0, 0.45, -9.2);
     const backdrop = new THREE.Mesh(
@@ -4248,9 +4337,9 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     backdrop.position.set(0, 3.6, -11.88);
-    group.add(stage, backdrop);
+    staticArch.add(stage, backdrop);
 
-    // Pulsing Color-Cycling LED Dance Floor
+    // Pulsing Color-Cycling LED Dance Floor (animated — kept outside staticArch)
     danceFloorMat = new THREE.MeshStandardMaterial({
       color: 0x18102c,
       emissive: 0xff2e93,
@@ -4262,12 +4351,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     danceFloor.position.set(0, 0.025, 0.4);
     group.add(danceFloor);
 
-    // Sweeping Volumetric Laser Beams
+    // Sweeping Volumetric Laser Beams (animated — kept outside staticArch)
     lasers = [];
     const laserColors = [0xff2e93, 0x2cf3ff, 0xa855f7, 0x46f7b4, 0xffcf5c, 0xff2e93];
+    const laserGeo = new THREE.ConeGeometry(0.9, 10.5, 12, 1, true);
     for (let i = 0; i < 6; i++) {
       const beam = new THREE.Mesh(
-        new THREE.ConeGeometry(0.9, 10.5, 12, 1, true),
+        laserGeo,
         new THREE.MeshBasicMaterial({
           color: laserColors[i],
           transparent: true,
@@ -4294,16 +4384,16 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     vipBar.position.set(-21.3, 0.55, -1.0);
     const vipBarTop = new THREE.Mesh(
       new THREE.BoxGeometry(1.85, 0.1, 10.4),
-      new THREE.MeshStandardMaterial({ color: 0x0b0d16, roughness: 0.12, metalness: 0.5 }),
+      getStdMat(0x0b0d16, 0.12, 0.5),
     );
     vipBarTop.position.set(-21.3, 1.14, -1.0);
     const vipBackGlow = new THREE.Mesh(
       new THREE.PlaneGeometry(9.2, 2.4),
-      new THREE.MeshBasicMaterial({ color: 0x221044 }),
+      getBasicMat(0x221044),
     );
     vipBackGlow.rotation.y = Math.PI * 0.5;
     vipBackGlow.position.set(-24.88, 2.3, -1.0);
-    group.add(vipBar, vipBarTop, vipBackGlow);
+    staticArch.add(vipBar, vipBarTop, vipBackGlow);
   } else if (def.id === 'cafe-habana') {
     // Warm Espresso & Bakery Counter with Brass Trim + Wall-Mounted Menu Board Behind Barista!
     const counter = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.08, 1.8), darkWoodMat);
@@ -4312,7 +4402,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     counterTop.position.set(-4.1, 1.12, 3.2);
     const counterTrim = new THREE.Mesh(new THREE.BoxGeometry(5.26, 0.1, 1.86), goldMat);
     counterTrim.position.set(-4.1, 0.92, 3.2);
-    group.add(counter, counterTop, counterTrim);
+    staticArch.add(counter, counterTop, counterTrim);
 
     // Wall-mounted CAFÉ HABANA Menu Board directly behind Barista Sofia!
     const menuSign = new THREE.Mesh(
@@ -4322,7 +4412,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       }),
     );
     menuSign.position.set(-4.1, 2.65, 0.12);
-    group.add(menuSign);
+    staticArch.add(menuSign);
 
     // Conservatory Overhead Skylight Panels
     const skyLightMat = new THREE.MeshBasicMaterial({ color: 0xe6f8ff, transparent: true, opacity: 0.45 });
@@ -4330,18 +4420,18 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 9.5), skyLightMat);
       panel.rotation.x = Math.PI * 0.5;
       panel.position.set(sx, 4.74, 4.5);
-      group.add(panel);
+      staticArch.add(panel);
     }
 
     // Kitchen Stainless Prep Island + Overhead Commercial Stainless Range Hood!
-    const steelMat = new THREE.MeshStandardMaterial({ color: 0xcfd6de, metalness: 0.85, roughness: 0.22 });
+    const steelMat = getStdMat(0xcfd6de, 0.22, 0.85);
     const island = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.02, 1.6), steelMat);
     island.position.set(-0.9, 0.51, -5.3);
     const hoodCanopy = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.55, 1.7), steelMat);
     hoodCanopy.position.set(-0.9, 2.95, -5.3);
     const hoodDuct = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.9), steelMat);
     hoodDuct.position.set(-0.9, 3.5, -5.3);
-    group.add(island, hoodCanopy, hoodDuct);
+    staticArch.add(island, hoodCanopy, hoodDuct);
 
     // Framed Vintage Havana Art on Conservatory North Wall (4 cm proud of frame to prevent Z-fighting)
     for (let i = 0; i < 3; i++) {
@@ -4352,16 +4442,16 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         new THREE.MeshBasicMaterial({ map: createGalleryArtworkTexture(i + 1) }),
       );
       art.position.set(10.8 + i * 4.0, 2.4, -1.84);
-      group.add(frame, art);
+      staticArch.add(frame, art);
     }
   } else {
     // Wynwood Art Gallery — Main Atrium Dual Sculpture Pedestal
     const plinth = new THREE.Mesh(
       new THREE.BoxGeometry(4.6, 1.15, 3.2),
-      new THREE.MeshStandardMaterial({ color: 0xf0f2f7, roughness: 0.35 }),
+      getStdMat(0xf0f2f7, 0.35),
     );
     plinth.position.set(0, 0.575, 1.1);
-    group.add(plinth);
+    staticArch.add(plinth);
 
     // Framed Miami Pop-Art Canvases with Dark Museum Frames & White Wall Title Placards!
     const canvasSpots: [number, number, number, number][] = [
@@ -4372,7 +4462,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       [-10.88, 2.8, -4.0, Math.PI * 0.5],
       [-10.88, 2.8, 6.2, Math.PI * 0.5],
     ];
-    const placardMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const placardMat = getBasicMat(0xffffff);
     canvasSpots.forEach(([x, y, z, ry], idx) => {
       const frameGroup = new THREE.Group();
       frameGroup.position.set(x, y, z);
@@ -4387,11 +4477,11 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       const placard = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.22, 0.03), placardMat);
       placard.position.set(1.55, -1.48, -0.02);
       frameGroup.add(frame, art, placard);
-      group.add(frameGroup);
+      staticArch.add(frameGroup);
     });
 
     // Artist Studio Loft area rug
-    addAreaRug(group, 6.2, -14.2, 4.8, 4.6, 0x3b2f45, 0xffcf5c);
+    addAreaRug(staticArch, 6.2, -14.2, 4.8, 4.6, 0x3b2f45, 0xffcf5c);
 
     // Darkroom Wing: 4 Flanking Animated Neon Light Monoliths around the custom Blender kinetic sculpture!
     monolithMats = [];
@@ -4401,6 +4491,7 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       [-14.8, 4.6, 0xffcf5c],
       [-20.8, 4.4, 0x46f7b4],
     ];
+    const monolithGeo = new THREE.BoxGeometry(0.45, 4.2, 0.45);
     for (const [mx, mz, col] of monoCoords) {
       const mMat = new THREE.MeshStandardMaterial({
         color: col,
@@ -4409,15 +4500,16 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
         roughness: 0.1,
       });
       monolithMats.push(mMat);
-      const monolith = new THREE.Mesh(new THREE.BoxGeometry(0.45, 4.2, 0.45), mMat);
+      const monolith = new THREE.Mesh(monolithGeo, mMat);
       monolith.position.set(mx, 2.1, mz);
+      group.add(monolith);
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(1.0, 1.18, 28),
-        new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide }),
+        getBasicMat(col, THREE.DoubleSide),
       );
       ring.rotation.x = -Math.PI * 0.5;
       ring.position.set(mx, 0.04, mz);
-      group.add(monolith, ring);
+      staticArch.add(ring);
     }
 
     // Artist Studio Loft: Oversized Works-In-Progress Canvases Leaning on Brick Wall!
@@ -4428,16 +4520,32 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
       );
       wip.position.set(-5.8 + i * 4.2, 1.15, -17.6);
       wip.rotation.x = -0.14;
-      group.add(wip);
+      staticArch.add(wip);
     }
   }
 
-  // Container for real 3D GLB furniture & prop models (attached asynchronously!)
+  // Merge all opaque static architecture meshes by material (~1200 meshes/venue -> ~30 merged meshes/venue!)
+  mergeStaticArchitectureGroup(staticArch, group);
+
+  // Container for real 3D GLB furniture & prop models (grouped by floor for interior floor culling!)
   const propsRoot = new THREE.Group();
+  const propsByFloor = new Map<number, THREE.Group>();
   group.add(propsRoot);
+
+  // Pre-bucket room lights by floor so update() never allocates a filtered array each frame
+  const roomLightsByFloor = new Map<number, RoomLightSpec[]>();
+  for (const ls of roomLights) {
+    let list = roomLightsByFloor.get(ls.floor);
+    if (!list) {
+      list = [];
+      roomLightsByFloor.set(ls.floor, list);
+    }
+    list.push(ls);
+  }
 
   // Live animated water jets & ripples for every indoor fountain prop!
   const fountainEffects: AnimatedFountainWater[] = [];
+  const fountainFloors: number[] = [];
   for (const p of def.props) {
     const fStyle =
       p.kind === 'art_deco_fountain'
@@ -4450,11 +4558,13 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
               ? 'plaza-grand'
               : null;
     if (!fStyle) continue;
+    const fFloor = p.floor ?? 0;
     const fx = createFountainWaterEffect(fStyle, p.scale ?? 1.0);
-    fx.group.position.set(p.x, getVisualFloorBaseY(p.floor ?? 0) + (p.y ?? 0), p.z);
+    fx.group.position.set(p.x, getVisualFloorBaseY(fFloor) + (p.y ?? 0), p.z);
     if (p.rotY) fx.group.rotation.y = p.rotY;
     group.add(fx.group);
     fountainEffects.push(fx);
+    fountainFloors.push(fFloor);
   }
 
   // Indoor NPC mount points
@@ -4464,18 +4574,21 @@ function buildVenueGeometry(def: InteriorDef): BuiltVenue {
     npcRoot.position.set(nDef.x, getVisualFloorBaseY(nDef.floor ?? 0), nDef.z);
     npcRoot.rotation.y = -nDef.yaw;
     group.add(npcRoot);
-    npcs.push({ def: nDef, root: npcRoot, rig: null });
+    npcs.push({ def: nDef, root: npcRoot, rig: null, prevX: nDef.x, prevZ: nDef.z });
   }
 
   return {
     def,
     group,
     propsRoot,
+    propsByFloor,
     pbrBindings,
     fountainEffects,
+    fountainFloors,
     npcs,
     doors,
     roomLights,
+    roomLightsByFloor,
     danceFloorMat,
     lasers,
     monolithMats,
@@ -4551,17 +4664,25 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
     },
 
     attachGltfProps(propsMap) {
-      // Populate every indoor room across all floors with photorealistic CC0 & Blender 3D furniture & prop GLBs!
+      // Populate every indoor room across all floors with photorealistic CC0 & Blender 3D furniture & prop GLBs,
+      // bucketed into per-floor groups so non-active floors can be culled while indoors!
       for (const venue of venues.values()) {
         for (const p of venue.def.props) {
           const src = propsMap.get(p.kind);
           if (!src) continue;
+          const f = p.floor ?? 0;
+          let floorGroup = venue.propsByFloor.get(f);
+          if (!floorGroup) {
+            floorGroup = new THREE.Group();
+            venue.propsByFloor.set(f, floorGroup);
+            venue.propsRoot.add(floorGroup);
+          }
           const instance = src.clone(true);
-          instance.position.set(p.x, getVisualFloorBaseY(p.floor ?? 0) + (p.y ?? 0), p.z);
+          instance.position.set(p.x, getVisualFloorBaseY(f) + (p.y ?? 0), p.z);
           instance.rotation.y = p.rotY ?? 0;
           const sc = p.scale ?? 1.0;
           instance.scale.setScalar(sc);
-          venue.propsRoot.add(instance);
+          floorGroup.add(instance);
         }
       }
 
@@ -4580,22 +4701,30 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
     },
 
     applyPbrTextures(texMap) {
-      const cloneWithRepeat = (base: THREE.Texture, rx: number, ry: number): THREE.Texture => {
-        const t = base.clone();
-        t.wrapS = THREE.RepeatWrapping;
-        t.wrapT = THREE.RepeatWrapping;
-        t.repeat.set(rx, ry);
-        t.needsUpdate = true;
-        return t;
-      };
+      // UVs are pre-scaled per surface geometry, so every material shares the base PBR textures directly
+      // with zero texture cloning (~750 cloned textures -> 24 shared GPU textures)!
+      for (const pbr of Object.values(texMap)) {
+        if (!pbr) continue;
+        pbr.map.wrapS = THREE.RepeatWrapping;
+        pbr.map.wrapT = THREE.RepeatWrapping;
+        pbr.normalMap.wrapS = THREE.RepeatWrapping;
+        pbr.normalMap.wrapT = THREE.RepeatWrapping;
+        pbr.roughnessMap.wrapS = THREE.RepeatWrapping;
+        pbr.roughnessMap.wrapT = THREE.RepeatWrapping;
+      }
 
+      const disposedFallbackMaps = new Set<THREE.Texture>();
       for (const venue of venues.values()) {
         for (const b of venue.pbrBindings) {
           const pbr = texMap[b.key];
           if (!pbr) continue;
-          b.mat.map = cloneWithRepeat(pbr.map, b.repeatX, b.repeatY);
-          b.mat.normalMap = cloneWithRepeat(pbr.normalMap, b.repeatX, b.repeatY);
-          b.mat.roughnessMap = cloneWithRepeat(pbr.roughnessMap, b.repeatX, b.repeatY);
+          if (b.mat.map && b.mat.map !== pbr.map && !disposedFallbackMaps.has(b.mat.map)) {
+            disposedFallbackMaps.add(b.mat.map);
+            b.mat.map.dispose();
+          }
+          b.mat.map = pbr.map;
+          b.mat.normalMap = pbr.normalMap;
+          b.mat.roughnessMap = pbr.roughnessMap;
           b.mat.color.setHex(b.tintHex);
           b.mat.needsUpdate = true;
         }
@@ -4657,23 +4786,41 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
 
       for (const [vid, venue] of venues) {
         const isActive = vid === activeId;
-        const distToEntrance = Math.hypot(pWorldX - venue.def.entranceX, pWorldZ - venue.def.entranceZ);
+        const edx = pWorldX - venue.def.entranceX;
+        const edz = pWorldZ - venue.def.entranceZ;
+        const distSq = edx * edx + edz * edz;
 
         // Keep architectural exterior shells visible up to 460m, while culling dense indoor GLB props,
         // rigged staff NPCs, and animated fountains beyond 75m outdoors!
-        const showShell = isActive || distToEntrance < 460;
-        const showInside = isActive || distToEntrance < 75;
+        const showShell = isActive || distSq < 460 * 460;
+        const showInside = isActive || distSq < 75 * 75;
         venue.group.visible = showShell;
         venue.propsRoot.visible = showInside;
-        for (const h of venue.npcs) {
-          h.root.visible = showInside;
-        }
-        for (const fx of venue.fountainEffects) {
-          fx.group.visible = showInside;
+
+        if (showInside) {
+          // When indoors in a multi-story venue (Hotel Solaire), cull non-active floors' dense furniture & NPCs;
+          // when outdoors within 75m, show all floors so windows look furnished from Ocean Drive!
+          for (const [fl, fGroup] of venue.propsByFloor) {
+            fGroup.visible = !isActive || fl === activeFloor;
+          }
+          for (let i = 0; i < venue.npcs.length; i++) {
+            const h = venue.npcs[i];
+            h.root.visible = !isActive || (h.def.floor ?? 0) === activeFloor;
+          }
+          for (let i = 0; i < venue.fountainEffects.length; i++) {
+            venue.fountainEffects[i].group.visible = !isActive || venue.fountainFloors[i] === activeFloor;
+          }
+        } else {
+          for (let i = 0; i < venue.npcs.length; i++) {
+            venue.npcs[i].root.visible = false;
+          }
+          for (let i = 0; i < venue.fountainEffects.length; i++) {
+            venue.fountainEffects[i].group.visible = false;
+          }
         }
 
-        if (activeId === null && distToEntrance < closestOutdoorDist) {
-          closestOutdoorDist = distToEntrance;
+        if (activeId === null && distSq < closestOutdoorDist * closestOutdoorDist) {
+          closestOutdoorDist = Math.sqrt(distSq);
           closestOutdoorVenue = venue;
         }
 
@@ -4701,7 +4848,11 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
             const unlocked =
               !dh.def.occupied &&
               (!dh.def.requiredKeycard || Boolean(ownedKeycards?.has(dh.def.requiredKeycard)));
-            dh.readerLedMat.color.setHex(unlocked ? 0x46f7b4 : 0xff3b5c);
+            const ledHex = unlocked ? 0x46f7b4 : 0xff3b5c;
+            if (dh.lastLedHex !== ledHex) {
+              dh.lastLedHex = ledHex;
+              dh.readerLedMat.color.setHex(ledHex);
+            }
           }
         }
 
@@ -4712,40 +4863,45 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
           venue.danceFloorMat.emissiveIntensity = 1.1 + Math.sin(elapsed * 6.4) * 0.45;
         }
         if (venue.lasers) {
-          venue.lasers.forEach((beam, idx) => {
+          for (let idx = 0; idx < venue.lasers.length; idx++) {
+            const beam = venue.lasers[idx];
             beam.rotation.z = Math.sin(elapsed * (1.4 + idx * 0.3) + idx * 1.2) * 0.55;
             beam.rotation.x = Math.cos(elapsed * (1.1 + idx * 0.25) + idx) * 0.35;
-          });
+          }
         }
 
         // Animate Wynwood Gallery Neon Light Installation monoliths!
         if (venue.monolithMats) {
-          venue.monolithMats.forEach((mat, idx) => {
+          for (let idx = 0; idx < venue.monolithMats.length; idx++) {
+            const mat = venue.monolithMats[idx];
             const hue = (elapsed * 0.08 + idx * 0.19) % 1;
             mat.emissive.setHSL(hue, 0.95, 0.58);
             mat.emissiveIntensity = 1.5 + Math.sin(elapsed * 2.5 + idx) * 0.5;
-          });
+          }
         }
 
-        // Animate indoor fountain water jets & ripples!
-        for (const fx of venue.fountainEffects) {
-          fx.update(elapsed);
+        // Animate visible indoor fountain water jets & ripples!
+        for (let i = 0; i < venue.fountainEffects.length; i++) {
+          const fx = venue.fountainEffects[i];
+          if (fx.group.visible) fx.update(elapsed);
         }
 
-        const playerFloor = isActive ? getFloorFromPlayerY(playerY, venue.def) : -1;
+        const playerFloor = isActive ? activeFloor : -1;
         const localPlayerX = isActive ? playerX : 9999;
         const localPlayerZ = isActive ? playerZ : 9999;
 
         // Step living hotel staff patrols (bellhops, maids, room service) & drive real mocap Walk/Idle!
-        const prevCoords = venue.npcs.map((h) => ({ x: h.def.x, z: h.def.z }));
+        for (let i = 0; i < venue.npcs.length; i++) {
+          const h = venue.npcs[i];
+          h.prevX = h.def.x;
+          h.prevZ = h.def.z;
+        }
         stepInteriorPatrols(venue.def, dt, localPlayerX, localPlayerZ, playerFloor);
 
         for (let i = 0; i < venue.npcs.length; i++) {
           const handle = venue.npcs[i];
           const npcFloor = handle.def.floor ?? 0;
           const npcBaseY = getVisualFloorBaseY(npcFloor);
-          const moved = Math.hypot(handle.def.x - prevCoords[i].x, handle.def.z - prevCoords[i].z);
-          const speedMps = dt > 0.001 ? moved / dt : 0;
 
           handle.root.position.x = handle.def.x;
           handle.root.position.z = handle.def.z;
@@ -4753,15 +4909,18 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
             handle.root.position.y = npcBaseY;
           }
 
-          if (!handle.rig) continue;
+          if (!handle.rig || !handle.root.visible) continue;
+
+          const moved = Math.hypot(handle.def.x - handle.prevX, handle.def.z - handle.prevZ);
+          const speedMps = dt > 0.001 ? moved / dt : 0;
 
           const dx = localPlayerX - handle.def.x;
           const dz = localPlayerZ - handle.def.z;
-          const d = Math.hypot(dx, dz);
+          const dSq = dx * dx + dz * dz;
           const targetYaw =
             speedMps > 0.2
               ? handle.def.yaw
-              : npcFloor === playerFloor && d < 4.2
+              : npcFloor === playerFloor && dSq < 4.2 * 4.2
                 ? yawFromDir(dx, dz)
                 : handle.def.yaw;
           const curYaw = -handle.root.rotation.y;
@@ -4778,13 +4937,13 @@ export function createInteriorSystem(scene: THREE.Scene): InteriorSystemHandles 
         }
       }
 
-      // Assign the fixed 8-light pool in deterministic floor-locked order (zero per-frame sorting or flashing!)
-      let assignedSpecs: RoomLightSpec[] = [];
+      // Assign the fixed 8-light pool in deterministic floor-locked order (zero per-frame sorting or allocations!)
+      let assignedSpecs: RoomLightSpec[] = EMPTY_ROOM_LIGHTS;
       let lightFade = 1.0;
       if (activeVenue) {
-        assignedSpecs = activeVenue.roomLights.filter((ls) => ls.floor === activeFloor);
+        assignedSpecs = activeVenue.roomLightsByFloor.get(activeFloor) ?? EMPTY_ROOM_LIGHTS;
       } else if (closestOutdoorVenue) {
-        assignedSpecs = closestOutdoorVenue.roomLights.filter((ls) => ls.floor === 0);
+        assignedSpecs = closestOutdoorVenue.roomLightsByFloor.get(0) ?? EMPTY_ROOM_LIGHTS;
         // Smooth distance fade (1.0 within 28m -> 0.0 at 48m) so approaching storefronts never snaps
         const t = clamp((48 - closestOutdoorDist) / 20, 0, 1);
         lightFade = t * t * (3 - 2 * t);

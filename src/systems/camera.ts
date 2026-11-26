@@ -22,6 +22,8 @@ export class CameraController {
   private shakePhase = 0;
   private readonly currentPos = new THREE.Vector3(144, 6, 40);
   private readonly currentLook = new THREE.Vector3(144, 2, 24);
+  private readonly tmpDesiredPos = new THREE.Vector3();
+  private readonly tmpDesiredLook = new THREE.Vector3();
   private initialized = false;
 
   public addImpactShake(strength: number): void {
@@ -62,8 +64,8 @@ export class CameraController {
       this.orbitCooldown = Math.max(0, this.orbitCooldown - safeDt);
     }
 
-    let desiredPos: THREE.Vector3;
-    let desiredLook: THREE.Vector3;
+    const desiredPos = this.tmpDesiredPos;
+    const desiredLook = this.tmpDesiredLook;
     let targetFov = 62;
 
     if (activeVehicle) {
@@ -77,12 +79,12 @@ export class CameraController {
 
       const fwd = forwardFromYaw(activeVehicle.yaw);
       if (this.mode === 'hood') {
-        desiredPos = new THREE.Vector3(
+        desiredPos.set(
           activeVehicle.x + fwd.x * 0.45,
           activeVehicle.y + 1.55,
           activeVehicle.z + fwd.z * 0.45,
         );
-        desiredLook = new THREE.Vector3(
+        desiredLook.set(
           activeVehicle.x + fwd.x * 24,
           activeVehicle.y + 1.1,
           activeVehicle.z + fwd.z * 24,
@@ -96,12 +98,12 @@ export class CameraController {
         const height = Math.sin(this.pitch) * dist + 1.85;
         const camFwd = forwardFromYaw(this.yaw);
 
-        desiredPos = new THREE.Vector3(
+        desiredPos.set(
           activeVehicle.x - camFwd.x * horiz,
           Math.max(activeVehicle.y + height, activeVehicle.y + 1.2),
           activeVehicle.z - camFwd.z * horiz,
         );
-        desiredLook = new THREE.Vector3(
+        desiredLook.set(
           activeVehicle.x + fwd.x * 4.2,
           activeVehicle.y + 1.35,
           activeVehicle.z + fwd.z * 4.2,
@@ -138,8 +140,8 @@ export class CameraController {
         py = clamp(py, player.y + 0.9, player.y + ceilH - 0.5);
       }
 
-      desiredPos = new THREE.Vector3(px, py, pz);
-      desiredLook = new THREE.Vector3(
+      desiredPos.set(px, py, pz);
+      desiredLook.set(
         player.x + camFwd.x * (activeInterior ? 1.8 : 2.2),
         player.y + 1.45,
         player.z + camFwd.z * (activeInterior ? 1.8 : 2.2),

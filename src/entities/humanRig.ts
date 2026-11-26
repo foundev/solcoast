@@ -10,12 +10,17 @@ export interface MocapClipSet {
   jump: THREE.AnimationClip | null;
 }
 
+const inPlaceClipCache = new WeakMap<THREE.AnimationClip, THREE.AnimationClip>();
+
 /**
  * Converts a root-motion optical mocap AnimationClip into a clean in-place game clip
  * by removing horizontal (X, Z) translation drift from the Hips position track while
  * preserving natural vertical hip bounce (Y) and all 52 bone rotation tracks untouched.
+ * Cached per source clip so 170+ avatars share 7 clips instead of cloning ~700 times!
  */
 export function makeInPlaceClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+  const cached = inPlaceClipCache.get(clip);
+  if (cached) return cached;
   const cloned = clip.clone();
   for (const track of cloned.tracks) {
     if (/hips\.position$/i.test(track.name)) {
@@ -26,6 +31,7 @@ export function makeInPlaceClip(clip: THREE.AnimationClip): THREE.AnimationClip 
       }
     }
   }
+  inPlaceClipCache.set(clip, cloned);
   return cloned;
 }
 

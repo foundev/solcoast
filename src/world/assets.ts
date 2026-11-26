@@ -411,6 +411,30 @@ function equipProtagonistStreetGear(avatarRoot: THREE.Object3D): void {
   }
 }
 
+// Cached tinted materials for civilian crowds (turns ~500 cloned materials into ~50!)
+const civilianTintCache = new Map<string, THREE.MeshStandardMaterial>();
+const capMatCache = new Map<number, THREE.MeshStandardMaterial>();
+
+function getTintedStandardMat(src: THREE.MeshStandardMaterial, tintHex: number): THREE.MeshStandardMaterial {
+  const key = `${src.uuid}:${tintHex}`;
+  let mat = civilianTintCache.get(key);
+  if (!mat) {
+    mat = src.clone();
+    mat.color.setHex(tintHex);
+    civilianTintCache.set(key, mat);
+  }
+  return mat;
+}
+
+function getCapMat(colorHex: number): THREE.MeshStandardMaterial {
+  let mat = capMatCache.get(colorHex);
+  if (!mat) {
+    mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.72 });
+    capMatCache.set(colorHex, mat);
+  }
+  return mat;
+}
+
 /**
  * Deterministically styles a civilian pedestrian so 50+ locals across Sol Coast
  * look distinct in outfit color, height/build, and beach/streetwear accessories.
@@ -433,21 +457,13 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
     avatarRoot.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh) || !(obj.material instanceof THREE.MeshStandardMaterial)) return;
       if (/outfit_top|wolf3d_outfit_top/i.test(obj.name)) {
-        const m = obj.material.clone();
-        m.color.setHex(style.topTint);
-        obj.material = m;
+        obj.material = getTintedStandardMat(obj.material, style.topTint);
       } else if (/outfit_bottom|wolf3d_outfit_bottom/i.test(obj.name)) {
-        const m = obj.material.clone();
-        m.color.setHex(style.bottomTint);
-        obj.material = m;
+        obj.material = getTintedStandardMat(obj.material, style.bottomTint);
       } else if (/footwear/i.test(obj.name)) {
-        const m = obj.material.clone();
-        m.color.setHex(style.shoeTint);
-        obj.material = m;
+        obj.material = getTintedStandardMat(obj.material, style.shoeTint);
       } else if (/hair/i.test(obj.name) && hairTint !== 0xffffff) {
-        const m = obj.material.clone();
-        m.color.setHex(hairTint);
-        obj.material = m;
+        obj.material = getTintedStandardMat(obj.material, hairTint);
       }
     });
   }
@@ -465,7 +481,7 @@ function styleCivilianPedestrian(avatarRoot: THREE.Object3D, variantIndex: numbe
       shades.add(lens, bridge);
       headBone.add(shades);
     } else if (style.accessory === 'cap' || style.accessory === 'visor') {
-      const capMat = new THREE.MeshStandardMaterial({ color: style.capColor, roughness: 0.72 });
+      const capMat = getCapMat(style.capColor);
       const hat = new THREE.Group();
       hat.position.set(0, 0.125, -0.005);
       if (style.accessory === 'cap') {
@@ -767,13 +783,21 @@ export const DRACO_DECODER_PATH = '/draco/';
 
 export type AssetProgressCallback = (label?: string) => void;
 
+export function createSharedDracoLoader(): DRACOLoader {
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+  dracoLoader.setWorkerLimit(4);
+  return dracoLoader;
+}
+
 export async function loadGameAssets(
   renderer: THREE.WebGLRenderer,
   onItemLoaded?: AssetProgressCallback,
+  sharedDracoLoader?: DRACOLoader,
 ): Promise<LoadedGameAssets> {
   const gltfLoader = new GLTFLoader();
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+  const ownsDraco = !sharedDracoLoader;
+  const dracoLoader = sharedDracoLoader ?? createSharedDracoLoader();
   gltfLoader.setDRACOLoader(dracoLoader);
 
   const rgbeLoader = new RGBELoader();
@@ -891,7 +915,7 @@ export async function loadGameAssets(
   ]);
 
   pmrem.dispose();
-  dracoLoader.dispose();
+  if (ownsDraco) dracoLoader.dispose();
 
   const carGltfs: Partial<Record<CarModelKind, GLTF>> = {};
   if (ferrariGltf) carGltfs.ferrari = ferrariGltf;
@@ -1092,10 +1116,11 @@ export async function loadInteriorTextures(
  */
 export async function loadInteriorPropAssets(
   onItemLoaded?: AssetProgressCallback,
+  sharedDracoLoader?: DRACOLoader,
 ): Promise<Map<InteriorPropKind, THREE.Group>> {
   const gltfLoader = new GLTFLoader();
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+  const ownsDraco = !sharedDracoLoader;
+  const dracoLoader = sharedDracoLoader ?? createSharedDracoLoader();
   gltfLoader.setDRACOLoader(dracoLoader);
 
   const loadOne = (kind: InteriorPropKind): Promise<[InteriorPropKind, THREE.Group | null]> =>
@@ -1122,7 +1147,7 @@ export async function loadInteriorPropAssets(
     });
 
   const entries = await Promise.all(INTERIOR_PROP_KINDS.map(loadOne));
-  dracoLoader.dispose();
+  if (ownsDraco) dracoLoader.dispose();
 
   const map = new Map<InteriorPropKind, THREE.Group>();
   for (const [kind, scene] of entries) {

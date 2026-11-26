@@ -56,6 +56,21 @@ export class HudController {
 
   private bannerTimer: number | null = null;
   private saveTimer: number | null = null;
+  private readonly textCache = new Map<HTMLElement, string>();
+  private readonly hiddenCache = new Map<HTMLElement, boolean>();
+  private lastRpmPct = -1;
+
+  private setText(el: HTMLElement, text: string): void {
+    if (this.textCache.get(el) === text) return;
+    this.textCache.set(el, text);
+    el.textContent = text;
+  }
+
+  private setHidden(el: HTMLElement, hidden: boolean): void {
+    if (this.hiddenCache.get(el) === hidden) return;
+    this.hiddenCache.set(el, hidden);
+    el.classList.toggle('hidden', hidden);
+  }
 
   public showToast(message: string, tone: 'info' | 'success' | 'warn' = 'info'): void {
     while (this.toastContainer.childElementCount >= 6) {
@@ -151,81 +166,92 @@ export class HudController {
       drawCalls,
     } = params;
 
-    this.clockEl.textContent = timeLabel;
-    this.districtEl.textContent = district.name.toUpperCase();
-    this.cashEl.textContent = `$${cash.toLocaleString()}`;
-    this.rankEl.textContent = computePlayerRank(cash, missions.completedIds.size);
-    this.modeEl.textContent = activeVehicle ? 'DRIVING' : 'ON FOOT';
+    this.setText(this.clockEl, timeLabel);
+    this.setText(this.districtEl, district.name.toUpperCase());
+    this.setText(this.cashEl, `$${cash.toLocaleString()}`);
+    this.setText(this.rankEl, computePlayerRank(cash, missions.completedIds.size));
+    this.setText(this.modeEl, activeVehicle ? 'DRIVING' : 'ON FOOT');
     const perfStr = fps !== undefined ? ` · ${fps} FPS (${drawCalls ?? 0} draws)` : '';
-    this.progressEl.textContent = `Missions ${missions.completedIds.size}/${MISSIONS.length} · Districts ${discoveredCount}/${ALL_DISTRICT_IDS.length}${perfStr}`;
+    this.setText(
+      this.progressEl,
+      `Missions ${missions.completedIds.size}/${MISSIONS.length} · Districts ${discoveredCount}/${ALL_DISTRICT_IDS.length}${perfStr}`,
+    );
 
     // Mission panel
     if (missions.active) {
       const m = missions.active;
       const step = m.def.steps[m.stepIndex];
       const dist = Math.round(distXZ(player.x, player.z, step.x, step.z));
-      this.missionPanel.classList.remove('hidden');
-      this.missionCatEl.textContent = m.def.category;
-      this.missionTitleEl.textContent = m.def.title.toUpperCase();
-      this.missionObjEl.textContent = step.label;
-      this.missionStepEl.textContent = `Objective ${m.stepIndex + 1} / ${m.def.steps.length}`;
-      this.missionDistEl.textContent = `${dist}m`;
+      this.setHidden(this.missionPanel, false);
+      this.setText(this.missionCatEl, m.def.category);
+      this.setText(this.missionTitleEl, m.def.title.toUpperCase());
+      this.setText(this.missionObjEl, step.label);
+      this.setText(this.missionStepEl, `Objective ${m.stepIndex + 1} / ${m.def.steps.length}`);
+      this.setText(this.missionDistEl, `${dist}m`);
       if (m.def.timeLimitSec > 0) {
         const secs = Math.max(0, Math.ceil(m.remainingSec));
         const mm = Math.floor(secs / 60);
         const ss = secs % 60;
-        this.missionTimerEl.textContent = `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-        this.missionTimerEl.classList.remove('hidden');
+        this.setText(this.missionTimerEl, `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`);
+        this.setHidden(this.missionTimerEl, false);
       } else {
-        this.missionTimerEl.classList.add('hidden');
+        this.setHidden(this.missionTimerEl, true);
       }
     } else {
-      this.missionPanel.classList.add('hidden');
+      this.setHidden(this.missionPanel, true);
     }
 
     // Context interact prompt
     if (promptText) {
-      this.interactPrompt.classList.remove('hidden');
-      this.interactText.textContent = promptText;
+      this.setHidden(this.interactPrompt, false);
+      this.setText(this.interactText, promptText);
     } else {
-      this.interactPrompt.classList.add('hidden');
+      this.setHidden(this.interactPrompt, true);
     }
 
     // Speedometer vs On-Foot panel
     if (activeVehicle) {
-      this.speedoPanel.classList.remove('hidden');
-      this.onFootPanel.classList.add('hidden');
+      this.setHidden(this.speedoPanel, false);
+      this.setHidden(this.onFootPanel, true);
       const mph = speedToMph(activeVehicle.speed);
-      this.vehicleNameEl.textContent = activeVehicle.name.toUpperCase();
-      this.speedValEl.textContent = String(mph);
-      this.gearValEl.textContent = formatVehicleGear(activeVehicle);
-      this.vehicleBadgeEl.classList.toggle('hidden', !activeVehicle.drifting);
+      this.setText(this.vehicleNameEl, activeVehicle.name.toUpperCase());
+      this.setText(this.speedValEl, String(mph));
+      this.setText(this.gearValEl, formatVehicleGear(activeVehicle));
+      this.setHidden(this.vehicleBadgeEl, !activeVehicle.drifting);
       const rpmPct = Math.round(6 + Math.min(1, Math.max(0, activeVehicle.rpm)) * 94);
-      this.rpmFillEl.style.width = `${rpmPct}%`;
+      if (rpmPct !== this.lastRpmPct) {
+        this.lastRpmPct = rpmPct;
+        this.rpmFillEl.style.transform = `scaleX(${(rpmPct / 100).toFixed(2)})`;
+      }
       const safePaintIdx =
         ((Math.trunc(activeVehicle.paintIndex) % PAINT_FINISHES.length) + PAINT_FINISHES.length) %
         PAINT_FINISHES.length;
       const finish = PAINT_FINISHES[safePaintIdx];
-      this.paintNameEl.textContent = finish.name;
-      this.odoValEl.textContent = `${(activeVehicle.odometerMeters / 1609.34).toFixed(1)} mi`;
+      this.setText(this.paintNameEl, finish.name);
+      this.setText(this.odoValEl, `${(activeVehicle.odometerMeters / 1609.34).toFixed(1)} mi`);
     } else {
-      this.speedoPanel.classList.add('hidden');
-      this.onFootPanel.classList.remove('hidden');
-      this.onFootStatusEl.textContent = player.sprinting
-        ? `Sprinting in ${district.name}`
-        : player.speed > 0.4
-          ? `Walking in ${district.name}`
-          : `Exploring ${district.name}`;
-      let minDist = Infinity;
+      this.setHidden(this.speedoPanel, true);
+      this.setHidden(this.onFootPanel, false);
+      this.setText(
+        this.onFootStatusEl,
+        player.sprinting
+          ? `Sprinting in ${district.name}`
+          : player.speed > 0.4
+            ? `Walking in ${district.name}`
+            : `Exploring ${district.name}`,
+      );
+      let minDistSq = Infinity;
       let nearestName = '';
       for (const v of vehicles) {
-        const d = distXZ(player.x, player.z, v.x, v.z);
-        if (d < minDist) {
-          minDist = d;
+        const dx = player.x - v.x;
+        const dz = player.z - v.z;
+        const dSq = dx * dx + dz * dz;
+        if (dSq < minDistSq) {
+          minDistSq = dSq;
           nearestName = v.name;
         }
       }
-      this.nearestCarDistEl.textContent = `Nearest: ${nearestName} (${Math.round(minDist)}m)`;
+      this.setText(this.nearestCarDistEl, `Nearest: ${nearestName} (${Math.round(Math.sqrt(minDistSq))}m)`);
     }
   }
 }

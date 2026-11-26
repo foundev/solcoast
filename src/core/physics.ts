@@ -1,4 +1,5 @@
-import { clamp, forwardFromYaw, resolveCircleAABB, rightFromYaw, type AABB, type OBB2D } from './math';
+import { clamp, resolveCircleAABB, rightFromYaw, type AABB, type OBB2D } from './math';
+import { forEachNearbyAABB } from './spatialGrid';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 
 export type HumanRagdollMode = 'normal' | 'stumble' | 'airborne' | 'downed' | 'recovering';
@@ -77,6 +78,50 @@ function getObbCorners(cx: number, cz: number, rightX: number, rightZ: number, f
   ];
 }
 
+const NO_CAR_HIT: CarCollisionContact = Object.freeze({
+  hit: false,
+  nx: 0,
+  nz: 0,
+  penetration: 0,
+  contactX: 0,
+  contactZ: 0,
+  closingSpeed: 0,
+});
+
+const NO_OBB_HIT: ObbHitResult = Object.freeze({
+  hit: false,
+  dx: 0,
+  dz: 0,
+  nx: 0,
+  nz: 0,
+  localX: 0,
+  localZ: 0,
+});
+
+const _staticWallBody: RigidCarBody = {
+  x: 0,
+  z: 0,
+  vx: 0,
+  vz: 0,
+  yaw: 0,
+  yawRate: 0,
+  mass: 0,
+  halfWidth: 0,
+  halfLength: 0,
+};
+
+const _staticPropBody: RigidCarBody = {
+  x: 0,
+  z: 0,
+  vx: 0,
+  vz: 0,
+  yaw: 0,
+  yawRate: 0,
+  mass: 0,
+  halfWidth: 0,
+  halfLength: 0,
+};
+
 /**
  * Exact 2D Separating Axis Theorem (SAT) Oriented-Box vs. Oriented-Box collision solver
  * with true rigid-body mass, moment of inertia, lever-arm yaw torque (PIT maneuvers & T-bones!),
@@ -88,25 +133,35 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
   const hwB = b.halfWidth ?? 1.06;
   const hlB = b.halfLength ?? 2.28;
 
-  // Quick broadphase circle reject
-  const maxR = Math.hypot(hwA, hlA) + Math.hypot(hwB, hlB);
+  // Ultra-fast scalar broadphase reject (zero Math.hypot, zero heap allocations on misses!)
   const dxCenter = a.x - b.x;
   const dzCenter = a.z - b.z;
-  if (dxCenter * dxCenter + dzCenter * dzCenter > maxR * maxR) {
-    return { hit: false, nx: 0, nz: 0, penetration: 0, contactX: 0, contactZ: 0, closingSpeed: 0 };
+  const maxBound = hwA + hlA + hwB + hlB;
+  if (
+    dxCenter > maxBound ||
+    dxCenter < -maxBound ||
+    dzCenter > maxBound ||
+    dzCenter < -maxBound
+  ) {
+    return NO_CAR_HIT;
+  }
+  const distSq = dxCenter * dxCenter + dzCenter * dzCenter;
+  const rA = Math.sqrt(hwA * hwA + hlA * hlA);
+  const rB = Math.sqrt(hwB * hwB + hlB * hlB);
+  const maxR = rA + rB;
+  if (distSq > maxR * maxR) {
+    return NO_CAR_HIT;
   }
 
-  const fwdA = forwardFromYaw(a.yaw);
-  const rightA = rightFromYaw(a.yaw);
-  const fwdB = forwardFromYaw(b.yaw);
-  const rightB = rightFromYaw(b.yaw);
+  const fAx = Math.sin(a.yaw);
+  const fAz = -Math.cos(a.yaw);
+  const rAxDir = -fAz;
+  const rAzDir = fAx;
 
-  const axes: [number, number][] = [
-    [rightA.x, rightA.z],
-    [fwdA.x, fwdA.z],
-    [rightB.x, rightB.z],
-    [fwdB.x, fwdB.z],
-  ];
+  const fBx = b.yaw === 0 ? 0 : Math.sin(b.yaw);
+  const fBz = b.yaw === 0 ? -1 : -Math.cos(b.yaw);
+  const rBxDir = -fBz;
+  const rBzDir = fBx;
 
   let minOverlap = Infinity;
   let bestAxisX = 0;
@@ -114,17 +169,31 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
   let bestAxisIdx = 0;
 
   for (let i = 0; i < 4; i++) {
-    const [ax, az] = axes[i];
+    let ax: number;
+    let az: number;
+    if (i === 0) {
+      ax = rAxDir;
+      az = rAzDir;
+    } else if (i === 1) {
+      ax = fAx;
+      az = fAz;
+    } else if (i === 2) {
+      ax = rBxDir;
+      az = rBzDir;
+    } else {
+      ax = fBx;
+      az = fBz;
+    }
     const projA =
-      hwA * Math.abs(rightA.x * ax + rightA.z * az) +
-      hlA * Math.abs(fwdA.x * ax + fwdA.z * az);
+      hwA * Math.abs(rAxDir * ax + rAzDir * az) +
+      hlA * Math.abs(fAx * ax + fAz * az);
     const projB =
-      hwB * Math.abs(rightB.x * ax + rightB.z * az) +
-      hlB * Math.abs(fwdB.x * ax + fwdB.z * az);
+      hwB * Math.abs(rBxDir * ax + rBzDir * az) +
+      hlB * Math.abs(fBx * ax + fBz * az);
     const dist = Math.abs(dxCenter * ax + dzCenter * az);
     const overlap = projA + projB - dist;
     if (overlap <= 0) {
-      return { hit: false, nx: 0, nz: 0, penetration: 0, contactX: 0, contactZ: 0, closingSpeed: 0 };
+      return NO_CAR_HIT;
     }
     if (overlap < minOverlap) {
       minOverlap = overlap;
@@ -141,8 +210,8 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
   }
 
   // Estimate contact point: deepest vertex of the incident box along the collision normal
-  const cornersA = getObbCorners(a.x, a.z, rightA.x, rightA.z, fwdA.x, fwdA.z, hwA, hlA);
-  const cornersB = getObbCorners(b.x, b.z, rightB.x, rightB.z, fwdB.x, fwdB.z, hwB, hlB);
+  const cornersA = getObbCorners(a.x, a.z, rAxDir, rAzDir, fAx, fAz, hwA, hlA);
+  const cornersB = getObbCorners(b.x, b.z, rBxDir, rBzDir, fBx, fBz, hwB, hlB);
 
   let contactX = (a.x + b.x) * 0.5;
   let contactZ = (a.z + b.z) * 0.5;
@@ -276,18 +345,20 @@ export function resolveCarVsCarSAT(a: RigidCarBody, b: RigidCarBody): CarCollisi
  * Connects crisply at bumper/fender corners and applies authentic glancing corner-spin torque!
  */
 export function resolveCarVsBuildingSAT(car: RigidCarBody, box: AABB): CarCollisionContact {
-  const staticWall: RigidCarBody = {
-    x: (box.minX + box.maxX) * 0.5,
-    z: (box.minZ + box.maxZ) * 0.5,
-    vx: 0,
-    vz: 0,
-    yaw: 0,
-    yawRate: 0,
-    mass: 0, // Infinite mass static wall
-    halfWidth: (box.maxX - box.minX) * 0.5,
-    halfLength: (box.maxZ - box.minZ) * 0.5,
-  };
-  return resolveCarVsCarSAT(car, staticWall);
+  const carPad = (car.halfWidth ?? 1.06) + (car.halfLength ?? 2.28);
+  if (
+    car.x < box.minX - carPad ||
+    car.x > box.maxX + carPad ||
+    car.z < box.minZ - carPad ||
+    car.z > box.maxZ + carPad
+  ) {
+    return NO_CAR_HIT;
+  }
+  _staticWallBody.x = (box.minX + box.maxX) * 0.5;
+  _staticWallBody.z = (box.minZ + box.maxZ) * 0.5;
+  _staticWallBody.halfWidth = (box.maxX - box.minX) * 0.5;
+  _staticWallBody.halfLength = (box.maxZ - box.minZ) * 0.5;
+  return resolveCarVsCarSAT(car, _staticWallBody);
 }
 
 /**
@@ -295,18 +366,18 @@ export function resolveCarVsBuildingSAT(car: RigidCarBody, box: AABB): CarCollis
  * (palms, streetlamps, benches, planters, lifeguard towers, hydrants, bollards, cafés!).
  */
 export function resolveCarVsObbSAT(car: RigidCarBody, obb: OBB2D): CarCollisionContact {
-  const staticProp: RigidCarBody = {
-    x: obb.cx,
-    z: obb.cz,
-    vx: 0,
-    vz: 0,
-    yaw: -obb.rotY,
-    yawRate: 0,
-    mass: 0, // Infinite mass static obstacle
-    halfWidth: obb.halfW,
-    halfLength: obb.halfD,
-  };
-  return resolveCarVsCarSAT(car, staticProp);
+  const maxBound = (car.halfWidth ?? 1.06) + (car.halfLength ?? 2.28) + obb.halfW + obb.halfD;
+  const dx = car.x - obb.cx;
+  const dz = car.z - obb.cz;
+  if (dx > maxBound || dx < -maxBound || dz > maxBound || dz < -maxBound) {
+    return NO_CAR_HIT;
+  }
+  _staticPropBody.x = obb.cx;
+  _staticPropBody.z = obb.cz;
+  _staticPropBody.yaw = -obb.rotY;
+  _staticPropBody.halfWidth = obb.halfW;
+  _staticPropBody.halfLength = obb.halfD;
+  return resolveCarVsCarSAT(car, _staticPropBody);
 }
 
 export interface ObbHitResult {
@@ -336,15 +407,21 @@ export function resolveCircleOrientedCar(
   const halfW = car.halfWidth ?? 1.06;
   const halfL = car.halfLength ?? 2.28;
 
-  const fwd = forwardFromYaw(car.yaw);
-  const right = rightFromYaw(car.yaw);
-
   const relX = cx - car.x;
   const relZ = cz - car.z;
+  const maxBound = halfW + halfL + radius;
+  if (relX > maxBound || relX < -maxBound || relZ > maxBound || relZ < -maxBound) {
+    return NO_OBB_HIT;
+  }
+
+  const fwdX = Math.sin(car.yaw);
+  const fwdZ = -Math.cos(car.yaw);
+  const rightX = -fwdZ;
+  const rightZ = fwdX;
 
   // Express circle center in car's local frame (localX = right, localZ = -forward so front is -halfL)
-  const localX = relX * right.x + relZ * right.z;
-  const localZ = -(relX * fwd.x + relZ * fwd.z);
+  const localX = relX * rightX + relZ * rightZ;
+  const localZ = -(relX * fwdX + relZ * fwdZ);
 
   const clampedX = clamp(localX, -halfW, halfW);
   const clampedZ = clamp(localZ, -halfL, halfL);
@@ -354,7 +431,7 @@ export function resolveCircleOrientedCar(
   const distSq = diffX * diffX + diffZ * diffZ;
 
   if (distSq >= radius * radius) {
-    return { hit: false, dx: 0, dz: 0, nx: 0, nz: 0, localX, localZ };
+    return NO_OBB_HIT;
   }
 
   let pushLocalX = 0;
@@ -383,10 +460,10 @@ export function resolveCircleOrientedCar(
   }
 
   // Transform separation & normal back to world XZ
-  const dx = right.x * pushLocalX - fwd.x * pushLocalZ;
-  const dz = right.z * pushLocalX - fwd.z * pushLocalZ;
-  const nx = right.x * nLocalX - fwd.x * nLocalZ;
-  const nz = right.z * nLocalX - fwd.z * nLocalZ;
+  const dx = rightX * pushLocalX - fwdX * pushLocalZ;
+  const dz = rightZ * pushLocalX - fwdZ * pushLocalZ;
+  const nx = rightX * nLocalX - fwdX * nLocalZ;
+  const nz = rightZ * nLocalX - fwdZ * nLocalZ;
 
   return { hit: true, dx, dz, nx, nz, localX, localZ };
 }
@@ -496,7 +573,7 @@ export function stepHumanRagdollPhysics(
     let nextX = body.x + body.vx * safeDt;
     let nextZ = body.z + body.vz * safeDt;
 
-    for (const box of colliders) {
+    forEachNearbyAABB(colliders, nextX, nextZ, 1.0, (box) => {
       const res = resolveCircleAABB(nextX, nextZ, 0.45, box);
       if (res.hit) {
         nextX += res.dx;
@@ -504,7 +581,7 @@ export function stepHumanRagdollPhysics(
         body.vx *= -0.25;
         body.vz *= -0.25;
       }
-    }
+    });
     if (!isDeepWater(nextX, nextZ)) {
       body.x = nextX;
       body.z = nextZ;
@@ -537,7 +614,7 @@ export function stepHumanRagdollPhysics(
     let nextY = body.y + body.vy * safeDt;
 
     // Realistic bounce off building walls (never fly inside buildings!)
-    for (const box of colliders) {
+    forEachNearbyAABB(colliders, nextX, nextZ, 1.0, (box) => {
       const res = resolveCircleAABB(nextX, nextZ, 0.48, box);
       if (res.hit) {
         nextX += res.dx;
@@ -556,7 +633,7 @@ export function stepHumanRagdollPhysics(
           body.lastImpactKind = 'bump';
         }
       }
-    }
+    });
 
     if (isDeepWater(nextX, nextZ)) {
       nextX = prevX;
@@ -609,7 +686,7 @@ export function stepHumanRagdollPhysics(
     let nextX = body.x + body.vx * safeDt;
     let nextZ = body.z + body.vz * safeDt;
 
-    for (const box of colliders) {
+    forEachNearbyAABB(colliders, nextX, nextZ, 1.0, (box) => {
       const res = resolveCircleAABB(nextX, nextZ, 0.48, box);
       if (res.hit) {
         nextX += res.dx;
@@ -617,7 +694,7 @@ export function stepHumanRagdollPhysics(
         body.vx *= -0.2;
         body.vz *= -0.2;
       }
-    }
+    });
     if (!isDeepWater(nextX, nextZ)) {
       body.x = nextX;
       body.z = nextZ;

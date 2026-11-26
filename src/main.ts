@@ -59,6 +59,7 @@ import { MinimapRenderer } from './ui/minimap';
 import {
   INTERIOR_PROP_KINDS,
   INTERIOR_TEXTURE_KEYS,
+  createSharedDracoLoader,
   loadGameAssets,
   loadInteriorPropAssets,
   loadInteriorTextures,
@@ -234,13 +235,15 @@ async function bootstrap(): Promise<void> {
   const coastalBoats = createCoastalBoatFleet();
   const boatMeshes = createCoastalBoatMeshes(coastalBoats, scene, () => cityHandles.hideFallbackYachts());
 
-  // Wait for ALL real 3D GLB models, Blender props, HDRI skies, PBR textures & Rapier3D physics behind the
-  // loading screen so the player NEVER sees low-poly fallback models pop in on startup!
+  // Wait for ALL real 3D GLB models, Blender props, HDRI skies & PBR textures behind the loading screen
+  // using ONE shared Draco WASM worker pool (avoids 2 competing worker pools during startup)!
+  const sharedDraco = createSharedDracoLoader();
   const [assets, propsMap, interiorTexMap] = await Promise.all([
-    loadGameAssets(renderer, (label) => advanceLoading(label)),
-    loadInteriorPropAssets((label) => advanceLoading(label)),
+    loadGameAssets(renderer, (label) => advanceLoading(label), sharedDraco),
+    loadInteriorPropAssets((label) => advanceLoading(label), sharedDraco),
     loadInteriorTextures((label) => advanceLoading(label)),
   ]);
+  sharedDraco.dispose();
 
   // Rapier3D lives in its own ~4.3 MB lazy chunk, fetched only when a ragdoll
   // is actually needed (first player/pedestrian impact), not on the critical
@@ -398,8 +401,10 @@ async function bootstrap(): Promise<void> {
   window.addEventListener('keydown', unlockAudioOnce);
   window.addEventListener('mousedown', unlockAudioOnce);
 
+  let pausedRenderedOnce = false;
   const setPaused = (next: boolean) => {
     paused = next;
+    pausedRenderedOnce = false;
     hud.setPauseMenu(paused, missions);
     input.clearAll();
     if (paused) {
@@ -453,6 +458,7 @@ async function bootstrap(): Promise<void> {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    if (paused) pausedRenderedOnce = false;
   });
 
   if (restoredSave) {
@@ -496,7 +502,11 @@ async function bootstrap(): Promise<void> {
     }
 
     if (paused) {
-      renderer.render(scene, camera);
+      // Avoid burning GPU/battery at 60-120 FPS while frozen on the pause menu
+      if (!pausedRenderedOnce) {
+        renderer.render(scene, camera);
+        pausedRenderedOnce = true;
+      }
       return;
     }
 
@@ -801,7 +811,7 @@ async function bootstrap(): Promise<void> {
         );
         streetProps.update(elapsed, skyRes.nightFactor, pWorld.x, pWorld.z);
         for (const v of vehicles) {
-          vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, false);
+          vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, false, pWorld.x, pWorld.z);
         }
         activeHeadlights.sync(null, skyRes.nightFactor);
         trafficMeshes.syncFromState(trafficCars, skyRes.nightFactor, pWorld.x, pWorld.z);
@@ -1341,7 +1351,7 @@ async function bootstrap(): Promise<void> {
 
     for (const v of vehicles) {
       const occupied = activeVehicle !== null && activeVehicle.id === v.id;
-      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied);
+      vehicleMeshes.get(v.id)?.syncFromState(v, skyRes.nightFactor, dt, occupied, player.x, player.z);
     }
     activeHeadlights.sync(activeVehicle, skyRes.nightFactor);
     const activeBodyGroup = activeVehicle ? (vehicleMeshes.get(activeVehicle.id)?.bodyGroup ?? null) : null;
@@ -1470,7 +1480,9 @@ async function bootstrap(): Promise<void> {
   );
   streetProps.update(0, initSky.nightFactor, player.x, player.z);
   for (const v of vehicles) {
-    vehicleMeshes.get(v.id)?.syncFromState(v, initSky.nightFactor, 0.016, initVehicle !== null && initVehicle.id === v.id);
+    vehicleMeshes
+      .get(v.id)
+      ?.syncFromState(v, initSky.nightFactor, 0.016, initVehicle !== null && initVehicle.id === v.id, player.x, player.z);
   }
   activeHeadlights.sync(initVehicle, initSky.nightFactor);
   const initBodyGroup = initVehicle ? (vehicleMeshes.get(initVehicle.id)?.bodyGroup ?? null) : null;

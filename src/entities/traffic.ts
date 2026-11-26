@@ -11,6 +11,7 @@ import {
   type OBB2D,
 } from '../core/math';
 import { resolveCarVsBuildingSAT, resolveCarVsCarSAT, resolveCarVsObbSAT } from '../core/physics';
+import { DynamicPointGrid, forEachNearbyAABB, forEachNearbyOBB } from '../core/spatialGrid';
 import type { CarModelKind } from '../world/assets';
 import { getGroundHeight, isDeepWater } from '../world/cityData';
 import { createLightGlowTexture } from '../world/postfx';
@@ -377,6 +378,9 @@ function reattachTrafficToNearestLane(car: TrafficCarState, nodes: TrafficNode[]
   car.yawRate = 0;
 }
 
+const trafficGrid = new DynamicPointGrid(20, 128, 512);
+const trafficPedGrid = new DynamicPointGrid(14, 256, 512);
+
 export function stepTraffic(
   cars: TrafficCarState[],
   nodes: TrafficNode[],
@@ -390,7 +394,14 @@ export function stepTraffic(
 ): void {
   const safeDt = clamp(dt, 0.001, 0.05);
   const recycleSq = TRAFFIC_RECYCLE_DIST * TRAFFIC_RECYCLE_DIST;
+  const renderDistSq = TRAFFIC_RENDER_DIST * TRAFFIC_RENDER_DIST;
   let recycledThisStep = 0;
+
+  // Build O(N) spatial hashes once per tick for fast neighbor/pedestrian/SAT lookups!
+  trafficGrid.rebuild(cars);
+  if (pedestrians && pedestrians.length > 0) {
+    trafficPedGrid.rebuild(pedestrians);
+  }
 
   // 1. Advance either lane-following AI or free-skidding post-crash rigid-body physics!
   for (let i = 0; i < cars.length; i++) {
@@ -398,17 +409,17 @@ export function stepTraffic(
     car.lastImpactSpeed = 0;
 
     // GTA-style invisible horizon recycling keeps bustling traffic around the player across all 14 districts
-    if (
-      focusX !== undefined &&
-      focusZ !== undefined &&
-      car.stunnedTimer <= 0 &&
-      recycledThisStep < 2
-    ) {
+    let distFocusSq = 0;
+    if (focusX !== undefined && focusZ !== undefined) {
       const dfx = car.x - focusX;
       const dfz = car.z - focusZ;
-      if (dfx * dfx + dfz * dfz > recycleSq) {
+      distFocusSq = dfx * dfx + dfz * dfz;
+      if (car.stunnedTimer <= 0 && recycledThisStep < 2 && distFocusSq > recycleSq) {
         recycleTrafficNearFocus(car, cars, nodes, playerVehicles, focusX, focusZ);
         recycledThisStep++;
+        const nfx = car.x - focusX;
+        const nfz = car.z - focusZ;
+        distFocusSq = nfx * nfx + nfz * nfz;
       }
     }
 
@@ -431,8 +442,8 @@ export function stepTraffic(
       car.z += car.vz * safeDt;
       car.yaw = wrapAngle(car.yaw + car.yawRate * safeDt);
 
-      // Bounce solidly off building walls & outdoor street props & stay out of deep water
-      for (const box of colliders) {
+      // Bounce solidly off nearby building walls & outdoor street props & stay out of deep water
+      forEachNearbyAABB(colliders, car.x, car.z, 4.0, (box) => {
         const hit = resolveCarVsBuildingSAT(car, box);
         if (hit.hit && hit.closingSpeed > 1.2) {
           car.lastImpactSpeed = Math.max(car.lastImpactSpeed, hit.closingSpeed);
@@ -442,8 +453,8 @@ export function stepTraffic(
           car.lastImpactNz = hit.nz;
           car.suspOffset = -0.09;
         }
-      }
-      for (const obb of propObbs) {
+      });
+      forEachNearbyOBB(propObbs, car.x, car.z, 4.0, (obb) => {
         const hit = resolveCarVsObbSAT(car, obb);
         if (hit.hit && hit.closingSpeed > 1.2) {
           car.lastImpactSpeed = Math.max(car.lastImpactSpeed, hit.closingSpeed);
@@ -453,7 +464,7 @@ export function stepTraffic(
           car.lastImpactNz = hit.nz;
           car.suspOffset = -0.08;
         }
-      }
+      });
       if (isDeepWater(car.x, car.z)) {
         car.x = prevX;
         car.z = prevZ;
@@ -485,12 +496,13 @@ export function stepTraffic(
 
     const fx = Math.sin(car.yaw);
     const fz = -Math.cos(car.yaw);
-    const rx = Math.cos(car.yaw);
-    const rz = Math.sin(car.yaw);
+    const rx = -fz;
+    const rz = fx;
     let targetSpeed = car.cruiseSpeed;
 
     // 1a. Brake cleanly for player vehicles (parked or moving) ahead in our lane
-    for (const pv of playerVehicles) {
+    for (let pvi = 0; pvi < playerVehicles.length; pvi++) {
+      const pv = playerVehicles[pvi];
       const dx = pv.x - car.x;
       const dz = pv.z - car.z;
       const dSq = dx * dx + dz * dz;
@@ -507,17 +519,17 @@ export function stepTraffic(
       }
     }
 
-    // 1b. Smooth following distance & deadlock-free intersection yielding with other AI traffic
+    // 1b. Smooth following distance & deadlock-free intersection yielding via spatial hash!
     if (targetSpeed > 0) {
-      for (let j = 0; j < cars.length; j++) {
-        if (i === j) continue;
+      trafficGrid.forEachIndexInRadius(car.x, car.z, 18.5, (j) => {
+        if (i === j) return;
         const other = cars[j];
         const dx = other.x - car.x;
         const dz = other.z - car.z;
         const dSq = dx * dx + dz * dz;
-        if (dSq > 18 * 18) continue;
+        if (dSq > 18 * 18) return;
         const fwdProj = dx * fx + dz * fz;
-        if (fwdProj <= 0.5) continue;
+        if (fwdProj <= 0.5) return;
         const dist = Math.sqrt(dSq) || 0.001;
         const latProj = Math.abs(dx * rx + dz * rz);
         const oFx = Math.sin(other.yaw);
@@ -528,42 +540,42 @@ export function stepTraffic(
           // Same-lane following: maintain clean 9.5m center-to-center spacing (~5m bumper gap)
           if (dist < 9.5 || other.stunnedTimer > 0) {
             targetSpeed = 0;
-            break;
+            return false;
           }
           const followFactor = clamp((dist - 9.5) / 8.5, 0, 1);
           targetSpeed = Math.min(targetSpeed, other.speed + (car.cruiseSpeed - other.speed) * followFactor * 0.65);
         } else if (headingDot < -0.65 && latProj < 2.3 && dist < 11) {
           // Head-on obstacle blocking our lane (e.g. spun-out car)
           targetSpeed = 0;
-          break;
+          return false;
         } else if (Math.abs(headingDot) <= 0.45 && dist < 16 && fwdProj > dist * 0.52) {
           // Cross-traffic approaching intersection: yield cleanly if other car is crossing in front of our lane
           const otherHeadingTowardMe = (car.x - other.x) * oFx + (car.z - other.z) * oFz;
           const otherAlreadyInPath = latProj < 4.5 && fwdProj < 12;
           if (otherAlreadyInPath || (otherHeadingTowardMe > -2 && (other.speed > car.speed + 0.5 || other.id < car.id))) {
             targetSpeed = 0;
-            break;
+            return false;
           }
         }
-      }
+      });
     }
 
-    // 1c. Yield calmly for pedestrians crossing directly in front of our bumper
-    if (targetSpeed > 0 && pedestrians) {
-      for (let pIdx = 0; pIdx < pedestrians.length; pIdx++) {
+    // 1c. Yield calmly for pedestrians crossing directly in front of our bumper (spatial hash!)
+    if (targetSpeed > 0 && pedestrians && pedestrians.length > 0) {
+      trafficPedGrid.forEachIndexInRadius(car.x, car.z, 11.0, (pIdx) => {
         const ped = pedestrians[pIdx];
-        if (ped.ragdollMode !== 'normal') continue;
+        if (ped.ragdollMode !== 'normal') return;
         const dx = ped.x - car.x;
         const dz = ped.z - car.z;
         const dSq = dx * dx + dz * dz;
-        if (dSq > 10.5 * 10.5) continue;
+        if (dSq > 10.5 * 10.5) return;
         const fwdProj = dx * fx + dz * fz;
         const latProj = Math.abs(dx * rx + dz * rz);
         if (fwdProj > 1.5 && fwdProj < 10.5 && latProj < 2.1) {
           targetSpeed = 0;
-          break;
+          return false;
         }
-      }
+      });
     }
 
     // Crisp braking vs smooth city acceleration so cars stop well before bumpers touch!
@@ -574,11 +586,28 @@ export function stepTraffic(
     if (car.progress >= 1) {
       const prevId = car.fromNode;
       const nextNode = nodes[car.toNode];
-      const candidates = nextNode.neighbors.filter((n) => n !== prevId);
-      const pool = candidates.length > 0 ? candidates : nextNode.neighbors;
+      const neighbors = nextNode.neighbors;
+      // Pick next node without allocating a filtered array!
+      let candCount = 0;
+      for (let k = 0; k < neighbors.length; k++) {
+        if (neighbors[k] !== prevId) candCount++;
+      }
       const rawIdx = car.id + Math.floor(car.x + car.z);
-      const pickIdx = ((rawIdx % pool.length) + pool.length) % pool.length;
-      const pick = pool[pickIdx];
+      let pick = neighbors[0];
+      if (candCount > 0) {
+        let targetK = ((rawIdx % candCount) + candCount) % candCount;
+        for (let k = 0; k < neighbors.length; k++) {
+          if (neighbors[k] !== prevId) {
+            if (targetK === 0) {
+              pick = neighbors[k];
+              break;
+            }
+            targetK--;
+          }
+        }
+      } else if (neighbors.length > 0) {
+        pick = neighbors[((rawIdx % neighbors.length) + neighbors.length) % neighbors.length];
+      }
       car.fromNode = car.toNode;
       car.toNode = pick;
       car.progress -= 1;
@@ -614,38 +643,53 @@ export function stepTraffic(
     const desiredYaw = errDist > 1.2 ? yawFromDir(errX, errZ) : pos.yaw;
     car.yaw = lerpAngle(car.yaw, desiredYaw, clamp(safeDt * 6.5, 0, 1));
     car.yawRate = 0;
-    const tFx = Math.sin(car.yaw);
-    const tFz = -Math.cos(car.yaw);
-    const tRx = Math.cos(car.yaw);
-    const tRz = Math.sin(car.yaw);
-    const tPitch = clamp(
-      Math.atan2(
-        getGroundHeight(car.x + tFx * 1.8, car.z + tFz * 1.8) -
-          getGroundHeight(car.x - tFx * 1.8, car.z - tFz * 1.8),
-        3.6,
-      ),
-      -0.24,
-      0.24,
-    );
-    const tRoll = clamp(
-      Math.atan2(
-        getGroundHeight(car.x + tRx * 0.9, car.z + tRz * 0.9) -
-          getGroundHeight(car.x - tRx * 0.9, car.z - tRz * 0.9),
-        1.8,
-      ),
-      -0.2,
-      0.2,
-    );
-    car.pitchTilt = lerp(car.pitchTilt, tPitch, clamp(safeDt * 8, 0, 1));
-    car.rollTilt = lerp(car.rollTilt, tRoll, clamp(safeDt * 8, 0, 1));
-    car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 10, 0, 1));
+
+    // Only compute 4-point terrain slope pitch/roll for visible cars on sloped inland/bridge terrain!
+    const isVisibleCar = focusX === undefined || distFocusSq <= renderDistSq;
+    if (isVisibleCar) {
+      const isFlatCoastal = car.x >= 106 && car.x <= 148 && car.z > -190 && car.z < 154;
+      let tPitch = 0;
+      let tRoll = 0;
+      if (!isFlatCoastal) {
+        const tFx = Math.sin(car.yaw);
+        const tFz = -Math.cos(car.yaw);
+        const tRx = -tFz;
+        const tRz = tFx;
+        tPitch = clamp(
+          Math.atan2(
+            getGroundHeight(car.x + tFx * 1.8, car.z + tFz * 1.8) -
+              getGroundHeight(car.x - tFx * 1.8, car.z - tFz * 1.8),
+            3.6,
+          ),
+          -0.24,
+          0.24,
+        );
+        tRoll = clamp(
+          Math.atan2(
+            getGroundHeight(car.x + tRx * 0.9, car.z + tRz * 0.9) -
+              getGroundHeight(car.x - tRx * 0.9, car.z - tRz * 0.9),
+            1.8,
+          ),
+          -0.2,
+          0.2,
+        );
+      }
+      car.pitchTilt = lerp(car.pitchTilt, tPitch, clamp(safeDt * 8, 0, 1));
+      car.rollTilt = lerp(car.rollTilt, tRoll, clamp(safeDt * 8, 0, 1));
+      car.suspOffset = lerp(car.suspOffset, 0, clamp(safeDt * 10, 0, 1));
+    }
   }
 
-  // 2. Exact 2D SAT rigid-body collisions: ALL player vehicles (active & parked!) <-> ALL AI traffic cars!
-  for (const pv of playerVehicles) {
-    for (const car of cars) {
+  // Rebuild grid after motion so SAT collision queries see current-frame car positions
+  trafficGrid.rebuild(cars);
+
+  // 2. Exact 2D SAT rigid-body collisions: ALL player vehicles (active & parked!) <-> nearby AI traffic cars!
+  for (let pvi = 0; pvi < playerVehicles.length; pvi++) {
+    const pv = playerVehicles[pvi];
+    trafficGrid.forEachIndexInRadius(pv.x, pv.z, 6.5, (ci) => {
+      const car = cars[ci];
       const contact = resolveCarVsCarSAT(pv, car);
-      if (!contact.hit) continue;
+      if (!contact.hit) return;
 
       if (contact.closingSpeed > 0.35) {
         const impact = contact.closingSpeed;
@@ -676,16 +720,17 @@ export function stepTraffic(
           car.speed *= 0.2;
         }
       }
-    }
+    });
   }
 
-  // 3. Controlled SAT collisions between AI traffic cars (prevents overlapping without runaway pinball!)
+  // 3. Controlled SAT collisions between nearby AI traffic cars via spatial hash!
   for (let i = 0; i < cars.length; i++) {
-    for (let j = i + 1; j < cars.length; j++) {
-      const a = cars[i];
+    const a = cars[i];
+    trafficGrid.forEachIndexInRadius(a.x, a.z, 6.2, (j) => {
+      if (j <= i) return;
       const b = cars[j];
       const contact = resolveCarVsCarSAT(a, b);
-      if (!contact.hit) continue;
+      if (!contact.hit) return;
 
       const impact = contact.closingSpeed;
       const eitherStunned = a.stunnedTimer > 0 || b.stunnedTimer > 0;
@@ -699,21 +744,28 @@ export function stepTraffic(
         b.vz *= 0.25;
         a.yawRate = 0;
         b.yawRate = 0;
-        continue;
+        return;
       }
-      if (impact < 2.2) continue;
+      if (impact < 2.2) return;
 
-      for (const c of [a, b]) {
-        // Only propagate crash skids from hard impacts — cap stun duration so pileups settle quickly!
-        c.stunnedTimer = Math.max(c.stunnedTimer, clamp(0.85 + impact * 0.055, 0.9, 1.75));
-        c.suspOffset = -clamp(impact * 0.01, 0.03, 0.12);
-        c.lastImpactSpeed = Math.max(c.lastImpactSpeed, impact);
-        c.lastImpactX = contact.contactX;
-        c.lastImpactZ = contact.contactZ;
-        c.lastImpactNx = contact.nx;
-        c.lastImpactNz = contact.nz;
-      }
-    }
+      const stunDur = clamp(0.85 + impact * 0.055, 0.9, 1.75);
+      const suspDrop = -clamp(impact * 0.01, 0.03, 0.12);
+      a.stunnedTimer = Math.max(a.stunnedTimer, stunDur);
+      a.suspOffset = suspDrop;
+      a.lastImpactSpeed = Math.max(a.lastImpactSpeed, impact);
+      a.lastImpactX = contact.contactX;
+      a.lastImpactZ = contact.contactZ;
+      a.lastImpactNx = contact.nx;
+      a.lastImpactNz = contact.nz;
+
+      b.stunnedTimer = Math.max(b.stunnedTimer, stunDur);
+      b.suspOffset = suspDrop;
+      b.lastImpactSpeed = Math.max(b.lastImpactSpeed, impact);
+      b.lastImpactX = contact.contactX;
+      b.lastImpactZ = contact.contactZ;
+      b.lastImpactNx = contact.nx;
+      b.lastImpactNz = contact.nz;
+    });
   }
 }
 
@@ -743,6 +795,15 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     opacity: 0.76,
   });
   const glowTex = createLightGlowTexture();
+  // Single shared SpriteMaterial across all 68 traffic headlight halos (instead of 68 duplicate materials!)
+  const sharedHeadGlowMat = new THREE.SpriteMaterial({
+    map: glowTex,
+    color: 0xffeeb8,
+    transparent: true,
+    opacity: 0.25,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
 
   const sedanGeos = createSculptedTrafficBodyGeometry('sedan');
   const suvGeos = createSculptedTrafficBodyGeometry('suv');
@@ -750,27 +811,34 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
   wheelGeo.rotateZ(Math.PI * 0.5);
   const hubGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.26, 12);
   hubGeo.rotateZ(Math.PI * 0.5);
+  const headBarGeo = new THREE.BoxGeometry(1.42, 0.11, 0.08);
+  const tailBarGeo = new THREE.BoxGeometry(1.46, 0.11, 0.08);
   const shadowGeo = new THREE.PlaneGeometry(2.7, 5.2);
   shadowGeo.rotateX(-Math.PI * 0.5);
 
   const groups: THREE.Group[] = [];
-  const proceduralShells: THREE.Group[] = [];
+  const proceduralShells: (THREE.Group | null)[] = [];
   const paintMats: THREE.MeshPhysicalMaterial[] = [];
-  const headGlows: THREE.Sprite[] = [];
+  // Cache traffic clearcoat paint materials by hex color (68 -> 15 materials!)
+  const paintMatByColor = new Map<number, THREE.MeshPhysicalMaterial>();
 
   for (const c of cars) {
     const isSuv = c.modelKind === 'suv';
     const geos = isSuv ? suvGeos : sedanGeos;
 
     const g = new THREE.Group();
-    const paint = new THREE.MeshPhysicalMaterial({
-      color: c.color,
-      metalness: 0.58,
-      roughness: 0.18,
-      clearcoat: 0.95,
-      clearcoatRoughness: 0.06,
-      envMapIntensity: 1.65,
-    });
+    let paint = paintMatByColor.get(c.color);
+    if (!paint) {
+      paint = new THREE.MeshPhysicalMaterial({
+        color: c.color,
+        metalness: 0.58,
+        roughness: 0.18,
+        clearcoat: 0.95,
+        clearcoatRoughness: 0.06,
+        envMapIntensity: 1.65,
+      });
+      paintMatByColor.set(c.color, paint);
+    }
     paintMats.push(paint);
 
     const shadow = new THREE.Mesh(shadowGeo, shadowMat);
@@ -786,11 +854,11 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     const cabin = new THREE.Mesh(geos.cabin, glassMat);
     proc.add(cabin);
 
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.11, 0.08), headMat);
+    const hl = new THREE.Mesh(headBarGeo, headMat);
     hl.position.set(0, isSuv ? 0.68 : 0.56, -2.18);
     proc.add(hl);
 
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.11, 0.08), tailMat);
+    const tl = new THREE.Mesh(tailBarGeo, tailMat);
     tl.position.set(0, isSuv ? 0.76 : 0.66, 2.16);
     proc.add(tl);
 
@@ -808,20 +876,10 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
     proceduralShells.push(proc);
 
     // Subtle additive headlight glare halo at night
-    const hGlow = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: glowTex,
-        color: 0xffeeb8,
-        transparent: true,
-        opacity: 0.25,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
+    const hGlow = new THREE.Sprite(sharedHeadGlowMat);
     hGlow.position.set(0, isSuv ? 0.68 : 0.56, -2.35);
     hGlow.scale.set(2.0, 0.9, 1);
     g.add(hGlow);
-    headGlows.push(hGlow);
 
     g.position.set(c.x, c.y, c.z);
     g.rotation.order = 'YXZ';
@@ -835,10 +893,14 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
   return {
     root,
     attachGltfCars(cloneCar) {
+      let replacedAll = true;
       for (let i = 0; i < cars.length && i < groups.length; i++) {
         const c = cars[i];
         const model = cloneCar(c.modelKind);
-        if (!model) continue;
+        if (!model) {
+          replacedAll = false;
+          continue;
+        }
 
         const paint = paintMats[i];
         model.traverse((obj) => {
@@ -861,22 +923,37 @@ export function createTrafficMeshes(cars: TrafficCarState[], scene: THREE.Scene)
           }
         });
 
-        proceduralShells[i].visible = false;
+        const oldShell = proceduralShells[i];
+        if (oldShell) {
+          groups[i].remove(oldShell);
+          proceduralShells[i] = null;
+        }
         groups[i].add(model);
+      }
+      if (replacedAll) {
+        sedanGeos.body.dispose();
+        sedanGeos.cabin.dispose();
+        suvGeos.body.dispose();
+        suvGeos.cabin.dispose();
+        wheelGeo.dispose();
+        hubGeo.dispose();
+        headBarGeo.dispose();
+        tailBarGeo.dispose();
+        tireMat.dispose();
+        rimMat.dispose();
       }
     },
 
     syncFromState(stateCars: TrafficCarState[], nightFactor: number, focusX?: number, focusZ?: number) {
       headMat.emissiveIntensity = 0.6 + nightFactor * 2.5;
       tailMat.emissiveIntensity = 0.7 + nightFactor * 2.1;
-      for (const sp of headGlows) {
-        sp.material.opacity = 0.08 + nightFactor * 0.45;
-      }
+      sharedHeadGlowMat.opacity = 0.08 + nightFactor * 0.45;
+      const renderSq = TRAFFIC_RENDER_DIST * TRAFFIC_RENDER_DIST;
       for (let i = 0; i < stateCars.length && i < groups.length; i++) {
         const c = stateCars[i];
         if (focusX !== undefined && focusZ !== undefined) {
           const dSq = (c.x - focusX) * (c.x - focusX) + (c.z - focusZ) * (c.z - focusZ);
-          groups[i].visible = dSq <= TRAFFIC_RENDER_DIST * TRAFFIC_RENDER_DIST;
+          groups[i].visible = dSq <= renderSq;
           if (!groups[i].visible) continue;
         }
         groups[i].position.set(c.x, c.y + c.suspOffset, c.z);

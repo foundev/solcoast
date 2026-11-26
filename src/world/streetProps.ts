@@ -856,9 +856,57 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
 
   scene.add(root);
 
+  const disposeSubtree = (obj: THREE.Object3D) => {
+    if (obj.parent) obj.parent.remove(obj);
+    obj.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.geometry.dispose();
+    });
+  };
+
+  const instanceGltfProp = (
+    src: THREE.Group,
+    transforms: { x: number; y: number; z: number; yaw?: number }[],
+  ): number => {
+    if (transforms.length === 0) return 0;
+    src.updateMatrixWorld(true);
+    let count = 0;
+    src.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const geo = obj.geometry.clone();
+      geo.applyMatrix4(obj.matrixWorld);
+      const inst = new THREE.InstancedMesh(geo, obj.material, transforms.length);
+      inst.castShadow = false;
+      inst.receiveShadow = true;
+      for (let i = 0; i < transforms.length; i++) {
+        const t = transforms[i];
+        dummy.position.set(t.x, t.y, t.z);
+        dummy.rotation.set(0, t.yaw ?? 0, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      gltfStreetPropsRoot.add(inst);
+      count++;
+    });
+    return count;
+  };
+
   return {
     root,
     attachGltfProps(propsMap: Map<InteriorPropKind, THREE.Group>) {
+      const tintCache = new Map<string, THREE.MeshStandardMaterial>();
+      const getTinted = (m: THREE.MeshStandardMaterial, colorHex: number): THREE.MeshStandardMaterial => {
+        const key = `${m.uuid}:${colorHex}`;
+        let cached = tintCache.get(key);
+        if (!cached) {
+          cached = m.clone();
+          cached.color.setHex(colorHex);
+          tintCache.set(key, cached);
+        }
+        return cached;
+      };
+
       const loungerSrc = propsMap.get('prop_beach_lounger');
       if (loungerSrc) {
         for (const lg of blueprint.loungers) {
@@ -870,68 +918,30 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           inst.traverse((obj) => {
             if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
               if (/TintTowel/i.test(obj.material.name)) {
-                const m = obj.material.clone();
-                m.color.setHex(lg.color);
-                obj.material = m;
+                obj.material = getTinted(obj.material, lg.color);
               }
             }
           });
           gltfStreetPropsRoot.add(inst);
           culledProps.push({ obj: inst, x: lg.x, z: lg.z, maxDistSq: 135 * 135 });
         }
-        fallbackLoungersRoot.visible = false;
+        disposeSubtree(fallbackLoungersRoot);
       }
 
+      // Batch all untinted street furniture (benches, fire hydrants, planters) into InstancedMeshes!
       const benchSrc = propsMap.get('prop_park_bench');
-      if (benchSrc) {
-        for (const bc of blueprint.benches) {
-          const inst = benchSrc.clone(true);
-          inst.position.set(bc.x, bc.y, bc.z);
-          inst.rotation.y = bc.yaw;
-          inst.traverse((obj) => {
-            if (obj instanceof THREE.Mesh) {
-              obj.castShadow = false;
-              obj.receiveShadow = true;
-            }
-          });
-          gltfStreetPropsRoot.add(inst);
-          culledProps.push({ obj: inst, x: bc.x, z: bc.z, maxDistSq: 120 * 120 });
-        }
-        fallbackBenchesRoot.visible = false;
+      if (benchSrc && instanceGltfProp(benchSrc, blueprint.benches) > 0) {
+        disposeSubtree(fallbackBenchesRoot);
       }
 
       const hydrantSrc = propsMap.get('prop_fire_hydrant');
-      if (hydrantSrc) {
-        for (const hy of blueprint.hydrants) {
-          const inst = hydrantSrc.clone(true);
-          inst.position.set(hy.x, hy.y, hy.z);
-          inst.traverse((obj) => {
-            if (obj instanceof THREE.Mesh) {
-              obj.castShadow = false;
-              obj.receiveShadow = true;
-            }
-          });
-          gltfStreetPropsRoot.add(inst);
-          culledProps.push({ obj: inst, x: hy.x, z: hy.z, maxDistSq: 105 * 105 });
-        }
-        fallbackHydrantsRoot.visible = false;
+      if (hydrantSrc && instanceGltfProp(hydrantSrc, blueprint.hydrants) > 0) {
+        disposeSubtree(fallbackHydrantsRoot);
       }
 
       const planterSrc = propsMap.get('prop_bougainvillea_planter');
-      if (planterSrc) {
-        for (const pl of blueprint.planters) {
-          const inst = planterSrc.clone(true);
-          inst.position.set(pl.x, pl.y, pl.z);
-          inst.traverse((obj) => {
-            if (obj instanceof THREE.Mesh) {
-              obj.castShadow = false;
-              obj.receiveShadow = true;
-            }
-          });
-          gltfStreetPropsRoot.add(inst);
-          culledProps.push({ obj: inst, x: pl.x, z: pl.z, maxDistSq: 145 * 145 });
-        }
-        fallbackPlantersRoot.visible = false;
+      if (planterSrc && instanceGltfProp(planterSrc, blueprint.planters) > 0) {
+        disposeSubtree(fallbackPlantersRoot);
       }
 
       const cafeSrc = propsMap.get('prop_sidewalk_cafe');
@@ -944,20 +954,17 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
             obj.castShadow = false;
             obj.receiveShadow = true;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-            const cloned = mats.map((m) => {
-              if (m instanceof THREE.MeshStandardMaterial && /TintCanopy/i.test(m.name)) {
-                const c = m.clone();
-                c.color.setHex(sc.color);
-                return c;
-              }
-              return m;
-            });
+            const cloned = mats.map((m) =>
+              m instanceof THREE.MeshStandardMaterial && /TintCanopy/i.test(m.name)
+                ? getTinted(m, sc.color)
+                : m,
+            );
             obj.material = Array.isArray(obj.material) ? cloned : cloned[0];
           });
           gltfStreetPropsRoot.add(inst);
           culledProps.push({ obj: inst, x: sc.x, z: sc.z, maxDistSq: 145 * 145 });
         }
-        fallbackCafesRoot.visible = false;
+        disposeSubtree(fallbackCafesRoot);
       }
 
       const bollardSrc = propsMap.get('prop_bollard');
@@ -977,13 +984,19 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           attachedBollards++;
         });
         if (attachedBollards > 0) {
-          bollardInst.visible = false;
+          disposeSubtree(bollardInst);
         }
       }
 
       const signalSrc = propsMap.get('prop_traffic_signal');
       if (signalSrc && blueprint.trafficSignals.length > 0) {
         signals.length = 0;
+        // Remove old fallback signal entries from culledProps before disposing fallbackSignalsRoot
+        for (let i = culledProps.length - 1; i >= 0; i--) {
+          if (culledProps[i].obj.parent === fallbackSignalsRoot) {
+            culledProps.splice(i, 1);
+          }
+        }
         for (const sigSpec of blueprint.trafficSignals) {
           const inst = signalSrc.clone(true);
           inst.position.set(sigSpec.x, sigSpec.y, sigSpec.z);
@@ -1019,7 +1032,7 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
           gltfStreetPropsRoot.add(inst);
           culledProps.push({ obj: inst, x: sigSpec.x, z: sigSpec.z, maxDistSq: 175 * 175 });
         }
-        fallbackSignalsRoot.visible = false;
+        disposeSubtree(fallbackSignalsRoot);
       }
     },
     update(elapsed: number, nightFactor: number, focusX = 0, focusZ = 0) {
@@ -1052,8 +1065,14 @@ export function buildStreetProps(scene: THREE.Scene, blueprint: CityBlueprint): 
       haloPointsMat.opacity = 0.14 + nightFactor * 0.65;
       haloPointsMat.size = 4.2 + nightFactor * 4.8;
 
-      // Animate circling seagulls with gentle wing flaps & banked turns
+      // Animate nearby circling coastal seagulls (distance-culled beyond 280m!)
+      const GULL_DIST_SQ = 280 * 280;
       for (const gull of seagulls) {
+        const dx = gull.centerX - focusX;
+        const dz = gull.centerZ - focusZ;
+        const vis = dx * dx + dz * dz < GULL_DIST_SQ;
+        gull.group.visible = vis;
+        if (!vis) continue;
         const ang = elapsed * gull.speed + gull.phase;
         const x = gull.centerX + Math.cos(ang) * gull.radius;
         const z = gull.centerZ + Math.sin(ang) * gull.radius;
